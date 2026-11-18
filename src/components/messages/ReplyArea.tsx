@@ -1,6 +1,7 @@
 import { useTranslate } from '../../i18n/index.js'
 import clsx from 'clsx'
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useIsMobile } from '../../app/viewport.js'
 import {
   IconBrowseOutline16,
   IconBrowseWarningOutline16,
@@ -48,6 +49,18 @@ const useTicker = (active: boolean, interval: number) => {
   return tick
 }
 
+/** 查找最近的可纵向滚动祖先容器，供滚动定位与吸顶检测共用 */
+const findScrollContainer = (element: HTMLElement | null): HTMLElement | null => {
+  let current = element?.parentElement ?? null
+  while (current && current !== document.body) {
+    if (/auto|scroll/.test(getComputedStyle(current).overflowY)) {
+      return current
+    }
+    current = current.parentElement
+  }
+  return null
+}
+
 /**
  * 思考与工具步骤的时间线：
  * 开启深度思考时带可折叠的标题（正在思考 / 正在搜索 / 正在浏览网页 / 已思考（用时 N 秒））；
@@ -65,28 +78,55 @@ export const ReplyArea = memo(function ReplyArea({
   hasResponse: boolean
 }) {
   useTranslate()
+  const isMobile = useIsMobile()
   const [open, setOpen] = useState(true)
+  const [stuck, setStuck] = useState(false)
   const areaRef = useRef<HTMLDivElement>(null)
+  const sentinelRef = useRef<HTMLDivElement>(null)
   const titleActive = streaming && !hasResponse
   useTicker(titleActive, 1000)
-  if (view.steps.length === 0 && !(message.thinking && streaming)) {
-    return null
-  }
+
+  const hasContent = view.steps.length > 0 || Boolean(message.thinking && streaming)
   // 未记录请求开关时，按是否有思考内容显示标题。
   const thinking = message.thinking ?? view.steps.some((step) => step.type === 'thinking')
-  const title = thinking ? getAreaTitle(view, streaming, Date.now(), hasResponse) : null
+  const title =
+    hasContent && thinking ? getAreaTitle(view, streaming, Date.now(), hasResponse) : null
+  const activeSticky = hasContent && Boolean(title) && open
+
+  useEffect(() => {
+    if (!activeSticky) {
+      setStuck(false)
+      return
+    }
+    const sentinel = sentinelRef.current
+    const scroller = findScrollContainer(areaRef.current)
+    if (!sentinel || !scroller) {
+      setStuck(false)
+      return
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry) {
+          return
+        }
+        const rootTop = entry.rootBounds?.top ?? 0
+        setStuck(!entry.isIntersecting && entry.boundingClientRect.top <= rootTop)
+      },
+      { root: scroller, threshold: [0, 1] }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [activeSticky, isMobile])
+
+  if (!hasContent) {
+    return null
+  }
   const stopped = !streaming && !hasResponse
 
   const toggleOpen = () => {
     if (open && areaRef.current) {
-      let scroller: HTMLElement | null = areaRef.current.parentElement
-      while (scroller && scroller !== document.body) {
-        if (/auto|scroll/.test(getComputedStyle(scroller).overflowY)) {
-          break
-        }
-        scroller = scroller.parentElement
-      }
-      if (scroller && scroller !== document.body) {
+      const scroller = findScrollContainer(areaRef.current)
+      if (scroller) {
         const areaTop = areaRef.current.getBoundingClientRect().top
         const scrollerTop = scroller.getBoundingClientRect().top
         if (areaTop < scrollerTop + 8) {
@@ -100,7 +140,17 @@ export const ReplyArea = memo(function ReplyArea({
   return (
     <div ref={areaRef} className={styles.area}>
       {title ? (
-        <div className={clsx(styles.title, open && styles.titleSticky)} onClick={toggleOpen}>
+        <div ref={sentinelRef} className={styles.stickySentinel} aria-hidden="true" />
+      ) : null}
+      {title ? (
+        <div
+          className={clsx(
+            styles.title,
+            open && styles.titleSticky,
+            open && stuck && styles.titleStuck
+          )}
+          onClick={toggleOpen}
+        >
           <span className={clsx(styles.titleIcon, stopped && styles.stoppedIcon)}>
             <IconThinkOutline16 />
           </span>
