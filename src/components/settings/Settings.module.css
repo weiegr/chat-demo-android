@@ -415,8 +415,69 @@
   .mobileDataContent {
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 10px;
     padding-top: 12px;
+  }
+
+  .mobileActionCard {
+    position: relative;
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 44px;
+    padding: 11px 16px;
+    border-radius: 16px;
+    background-color: var(--dsw-alias-bg-base);
+    overflow: hidden;
+  }
+
+  .mobileActionHit {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    outline: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: background-color var(--ds-transition-duration) var(--ds-ease-in-out);
+
+    &:active:not(:disabled) {
+      background-color: var(--dsw-alias-interactive-bg-hover);
+    }
+
+    &:focus-visible {
+      box-shadow: inset 0 0 0 2px var(--dsw-alias-button-primary-fill);
+    }
+
+    &:disabled {
+      cursor: default;
+    }
+  }
+
+  .mobileActionBody {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    pointer-events: none;
+
+    .infoButton {
+      pointer-events: auto;
+    }
+  }
+
+  .mobileActionDangerLabel {
+    color: var(--dsw-alias-state-error-primary);
+  }
+
+  .mobileActionLabelDisabled {
+    opacity: 0.45;
   }
 
   .mobileGroupTitle {
@@ -467,29 +528,6 @@
     font-size: 14px;
     line-height: 22px;
     color: var(--dsw-alias-label-tertiary);
-  }
-
-  .mobileDangerCard {
-    display: flex;
-    align-items: center;
-    box-sizing: border-box;
-    width: 100%;
-    min-height: 56px;
-    padding: 16px;
-    border: none;
-    border-radius: 16px;
-    background-color: var(--dsw-alias-bg-base);
-    color: var(--dsw-alias-state-error-primary);
-    font: inherit;
-    font-size: 15px;
-    line-height: 22px;
-    text-align: left;
-    cursor: pointer;
-
-    &:disabled {
-      opacity: 0.45;
-      cursor: default;
-    }
   }
 
   .text {

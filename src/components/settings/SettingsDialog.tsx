@@ -28,6 +28,7 @@ import {
   setThemePreference,
   setTtsVoice,
   useSettings,
+  type Locale,
   type ThemePreference,
 } from '../../services/settings.js'
 import type { TtsVoice } from '../../services/api/speech.js'
@@ -116,20 +117,15 @@ const SettingsContent = () => {
         {isMobile ? (
           inMobileDataPage ? (
             <div className={clsx(styles.content, styles.mobileDataContent)}>
-              <div className={styles.mobileCard}>
-                <ImportHistory historyImport={historyImport} disabled={historyBusy} />
-              </div>
-              <div className={styles.mobileCard}>
-                <ExportHistory disabled={historyBusy} />
-              </div>
-              <button
-                type="button"
-                className={styles.mobileDangerCard}
+              <ImportHistory historyImport={historyImport} disabled={historyBusy} />
+              <ExportHistory disabled={historyBusy} />
+              <MobileActionCard
+                danger
+                label={t('deleteAllSessions')}
+                status={null}
                 disabled={historyBusy}
-                onClick={historyDelete.open}
-              >
-                {t('deleteAllSessions')}
-              </button>
+                onAction={historyDelete.open}
+              />
             </div>
           ) : (
             <div className={styles.content}>
@@ -152,7 +148,7 @@ const SettingsContent = () => {
               </div>
               <div className={styles.mobileGroupTitle}>{t('settingGroupApp')}</div>
               <div className={styles.mobileCard}>
-                <LocaleSetting />
+                <MobileLocaleSetting />
                 <MobileThemeSetting />
                 <LocationSetting />
               </div>
@@ -426,8 +422,7 @@ const MobileTtsVoiceSetting = () => {
   const [sheetOpen, setSheetOpen] = useState(false)
   const [draftVoice, setDraftVoice] = useState<TtsVoice>(ttsVoice)
   const touchStartX = useRef<number | null>(null)
-  const currentVoice =
-    mobileTtsVoices.find((item) => item.value === ttsVoice) ?? mobileTtsVoices[0]
+  const currentVoice = mobileTtsVoices.find((item) => item.value === ttsVoice) ?? mobileTtsVoices[0]
   const draftIndex = Math.max(
     0,
     mobileTtsVoices.findIndex((item) => item.value === draftVoice)
@@ -612,20 +607,33 @@ const themeOptions: { value: ThemePreference; label: TranslationKey; icon: React
   },
 ]
 
+const mobileLocaleOptions: { value: Locale; label: TranslationKey; lang: string }[] = [
+  { value: 'zh-CN', label: 'settingsLocaleZhCN', lang: 'zh-CN' },
+  { value: 'en-US', label: 'settingsLocaleEnUS', lang: 'en' },
+]
+
 const mobileThemeOptions: { value: ThemePreference; label: TranslationKey }[] = [
   { value: 'system', label: 'avatarMenuSettingsDialogThemeSelectSystemOption' },
   { value: 'light', label: 'avatarMenuSettingsDialogThemeSelectLightOption' },
   { value: 'dark', label: 'avatarMenuSettingsDialogThemeSelectDarkOption' },
 ]
 
-/** 移动端外观设置：左侧标题，右侧当前值 + 箭头，点击弹出单选确认框 */
-const MobileThemeSetting = () => {
+/** 移动端单选设置项：点击行弹出居中单选确认框，供语言与主题共用 */
+function MobileRadioSetting<T extends string>({
+  title,
+  value,
+  options,
+  onConfirm,
+}: {
+  title: string
+  value: T
+  options: { value: T; label: TranslationKey; lang?: string }[]
+  onConfirm: (next: T) => void
+}) {
   const t = useTranslate()
-  const themePreference = useSettings((state) => state.themePreference)
   const [modalOpen, setModalOpen] = useState(false)
-  const [draftTheme, setDraftTheme] = useState<ThemePreference>(themePreference)
-  const currentOption =
-    mobileThemeOptions.find((item) => item.value === themePreference) ?? mobileThemeOptions[0]
+  const [draft, setDraft] = useState<T>(value)
+  const currentOption = options.find((item) => item.value === value) ?? options[0]
 
   return (
     <>
@@ -633,39 +641,36 @@ const MobileThemeSetting = () => {
         type="button"
         className={styles.mobileNavRow}
         onClick={() => {
-          setDraftTheme(themePreference)
+          setDraft(value)
           setModalOpen(true)
         }}
       >
-        <span className={styles.label}>{t('avatarMenuSettingsDialogThemeItemLabel')}</span>
+        <span className={styles.label}>{title}</span>
         <span className={styles.mobileNavRight}>
-          <span className={styles.mobileNavValue}>{t(currentOption.label)}</span>
+          <span className={styles.mobileNavValue} lang={currentOption?.lang}>
+            {currentOption ? t(currentOption.label) : ''}
+          </span>
           <IconChevronRightOutline14 />
         </span>
       </button>
       {modalOpen ? (
-        <Modal
-          title={t('avatarMenuSettingsDialogThemeItemLabel')}
-          className={styles.themeModal}
-          onClose={() => setModalOpen(false)}
-        >
-          <div
-            role="radiogroup"
-            aria-label={t('avatarMenuSettingsDialogThemeItemLabel')}
-            className={styles.themeRadioList}
-          >
-            {mobileThemeOptions.map((option) => {
-              const checked = draftTheme === option.value
+        <Modal title={title} className={styles.themeModal} onClose={() => setModalOpen(false)}>
+          <div role="radiogroup" aria-label={title} className={styles.themeRadioList}>
+            {options.map((option) => {
+              const checked = draft === option.value
               return (
                 <button
                   key={option.value}
                   type="button"
                   role="radio"
                   aria-checked={checked}
+                  lang={option.lang}
                   className={styles.themeRadioRow}
-                  onClick={() => setDraftTheme(option.value)}
+                  onClick={() => setDraft(option.value)}
                 >
-                  <span className={clsx(styles.radioCircle, checked && styles.radioCircleChecked)} />
+                  <span
+                    className={clsx(styles.radioCircle, checked && styles.radioCircleChecked)}
+                  />
                   <span className={styles.themeRadioLabel}>{t(option.label)}</span>
                 </button>
               )
@@ -675,7 +680,7 @@ const MobileThemeSetting = () => {
             type="button"
             className={styles.themeModalConfirm}
             onClick={() => {
-              setThemePreference(draftTheme)
+              onConfirm(draft)
               setModalOpen(false)
             }}
           >
@@ -684,6 +689,34 @@ const MobileThemeSetting = () => {
         </Modal>
       ) : null}
     </>
+  )
+}
+
+/** 移动端语言设置：左侧标题，右侧当前语言 + 箭头，点击弹出单选确认框 */
+const MobileLocaleSetting = () => {
+  const t = useTranslate()
+  const locale = useSettings((state) => state.locale)
+  return (
+    <MobileRadioSetting
+      title={t('settingsLocalePreference')}
+      value={locale}
+      options={mobileLocaleOptions}
+      onConfirm={setLocale}
+    />
+  )
+}
+
+/** 移动端外观设置：左侧标题，右侧当前值 + 箭头，点击弹出单选确认框 */
+const MobileThemeSetting = () => {
+  const t = useTranslate()
+  const themePreference = useSettings((state) => state.themePreference)
+  return (
+    <MobileRadioSetting
+      title={t('avatarMenuSettingsDialogThemeItemLabel')}
+      value={themePreference}
+      options={mobileThemeOptions}
+      onConfirm={setThemePreference}
+    />
   )
 }
 
@@ -793,6 +826,83 @@ const SettingCell = ({
   )
 }
 
+/** 移动端数据管理单卡：整卡可点击触发动作，说明图标独立点击弹窗，避免交互按钮嵌套 */
+const MobileActionCard = ({
+  label,
+  description,
+  status,
+  disabled,
+  danger = false,
+  onAction,
+  children,
+}: {
+  label: string
+  description?: string
+  status: Status
+  disabled: boolean
+  danger?: boolean
+  onAction: () => void
+  children?: ReactNode
+}) => {
+  const t = useTranslate()
+  const [infoOpen, setInfoOpen] = useState(false)
+
+  return (
+    <>
+      <div className={styles.mobileActionCard}>
+        <button
+          type="button"
+          className={styles.mobileActionHit}
+          aria-label={label}
+          disabled={disabled}
+          onClick={onAction}
+        />
+        <div className={styles.mobileActionBody}>
+          <div className={styles.labelRow}>
+            <span
+              className={clsx(
+                styles.label,
+                danger && styles.mobileActionDangerLabel,
+                disabled && styles.mobileActionLabelDisabled
+              )}
+            >
+              {label}
+            </span>
+            {description ? (
+              <button
+                type="button"
+                className={styles.infoButton}
+                aria-label={label}
+                onClick={() => setInfoOpen(true)}
+              >
+                <IconWarningOutline16 />
+              </button>
+            ) : null}
+          </div>
+          {status ? (
+            <div className={clsx(styles.description, status.error && styles.error)}>
+              {t(status.key, status.reason ? { message: t(status.reason) } : status.params)}
+            </div>
+          ) : null}
+        </div>
+        {children}
+      </div>
+      {infoOpen && description ? (
+        <Modal title="" className={styles.infoModal} onClose={() => setInfoOpen(false)}>
+          <div className={styles.infoModalText}>{description}</div>
+          <button
+            type="button"
+            className={styles.themeModalConfirm}
+            onClick={() => setInfoOpen(false)}
+          >
+            {t('confirm')}
+          </button>
+        </Modal>
+      ) : null}
+    </>
+  )
+}
+
 /** 选文件后先提示覆盖；确认后才检查文件并执行导入，任何错误都提示导入失败。 */
 const useHistoryImport = () => {
   const [file, setFile] = useState<File | null>(null)
@@ -831,7 +941,37 @@ const ImportHistory = ({
   disabled: boolean
 }) => {
   const t = useTranslate()
+  const isMobile = useIsMobile()
   const inputRef = useRef<HTMLInputElement>(null)
+  const fileInput = (
+    <input
+      ref={inputRef}
+      type="file"
+      accept=".zip,application/zip,application/x-zip-compressed"
+      hidden
+      onChange={(event) => {
+        const file = event.target.files?.[0]
+        event.target.value = ''
+        if (file) {
+          historyImport.select(file)
+        }
+      }}
+    />
+  )
+
+  if (isMobile) {
+    return (
+      <MobileActionCard
+        label={t('historyImport')}
+        description={t('historyImportDescription')}
+        status={historyImport.status}
+        disabled={disabled}
+        onAction={() => inputRef.current?.click()}
+      >
+        {fileInput}
+      </MobileActionCard>
+    )
+  }
 
   return (
     <SettingCell
@@ -851,19 +991,7 @@ const ImportHistory = ({
             <IconUploadOutline14 />
             {t('upload')}
           </Button>
-          <input
-            ref={inputRef}
-            type="file"
-            accept=".zip,application/zip,application/x-zip-compressed"
-            hidden
-            onChange={(event) => {
-              const file = event.target.files?.[0]
-              event.target.value = ''
-              if (file) {
-                historyImport.select(file)
-              }
-            }}
-          />
+          {fileInput}
         </>
       }
     />
@@ -873,9 +1001,11 @@ const ImportHistory = ({
 /** 将全部会话及图片导出为 ZIP 文件并下载 */
 const ExportHistory = ({ disabled }: { disabled: boolean }) => {
   const t = useTranslate()
+  const isMobile = useIsMobile()
   const empty = useChatStore((state) => state.sessions.length === 0)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<Status>(null)
+  const actionDisabled = disabled || busy || empty
 
   const onExport = async () => {
     setBusy(true)
@@ -895,6 +1025,18 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
     }
   }
 
+  if (isMobile) {
+    return (
+      <MobileActionCard
+        label={t('exportAllLabel')}
+        description={t('historyExportDescription')}
+        status={status}
+        disabled={actionDisabled}
+        onAction={() => void onExport()}
+      />
+    )
+  }
+
   return (
     <SettingCell
       label={t('exportAllLabel')}
@@ -906,7 +1048,7 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
           variant="outlined"
           size="m"
           className={styles.cellButton}
-          disabled={disabled || busy || empty}
+          disabled={actionDisabled}
           onClick={() => void onExport()}
         >
           <IconDownloadOutline16 />

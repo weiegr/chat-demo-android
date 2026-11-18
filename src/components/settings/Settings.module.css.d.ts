@@ -8,12 +8,16 @@ declare const styles: {
   readonly mobileSubHeader: string
   readonly mobileBackButton: string
   readonly mobileDataContent: string
+  readonly mobileActionCard: string
+  readonly mobileActionHit: string
+  readonly mobileActionBody: string
+  readonly mobileActionDangerLabel: string
+  readonly mobileActionLabelDisabled: string
   readonly mobileGroupTitle: string
   readonly mobileCard: string
   readonly mobileNavRow: string
   readonly mobileNavRight: string
   readonly mobileNavValue: string
-  readonly mobileDangerCard: string
   readonly themeModal: string
   readonly themeRadioList: string
   readonly themeRadioRow: string
