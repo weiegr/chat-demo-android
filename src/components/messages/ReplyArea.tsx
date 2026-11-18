@@ -10,6 +10,8 @@ import {
   IconCheckedOutline14,
   IconCloseFill14,
   IconLinkOutline16,
+  IconLocationOutline16,
+  IconLocationWarningOutline16,
   IconRightUpOutline14,
   IconSearchOutline16,
   IconSearchWarningOutline16,
@@ -21,6 +23,7 @@ import {
   isDeepSearchKind,
   isImageSearchKind,
   type FindStep,
+  type LocationStep,
   type OpenStep,
   type PageItem,
   type ReadLinkStep,
@@ -182,7 +185,9 @@ export const ReplyArea = memo(function ReplyArea({
 const stepKey = (step: Step, index: number) =>
   step.type === 'thinking' || step.type === 'text' || step.type === 'search'
     ? step.key
-    : `${step.type}-${index}`
+    : step.type === 'location'
+      ? `location-${step.id}`
+      : `${step.type}-${index}`
 
 const StepItem = ({
   step,
@@ -233,6 +238,8 @@ const StepItem = ({
       return <FindRow step={step} isLast={isLast} />
     case 'read_link':
       return <ReadLinkRow step={step} isLast={isLast} />
+    case 'location':
+      return <LocationRow step={step} message={message} streaming={streaming} isLast={isLast} />
     default:
       return null
   }
@@ -461,6 +468,73 @@ const ReadLinkRow = ({ step, isLast }: { step: ReadLinkStep; isLast: boolean }) 
       {step.links.map((link) => (
         <PageLink key={link.id} page={link} />
       ))}
+    </ToolRow>
+  )
+}
+
+const locationErrorKey = (code?: string) => {
+  switch (code) {
+    case 'permission_denied':
+      return 'toolLocationPermissionDenied'
+    case 'precise_location_required':
+      return 'toolLocationPreciseRequired'
+    case 'location_disabled':
+      return 'toolLocationServiceDisabled'
+    case 'timeout':
+      return 'toolLocationTimeout'
+    default:
+      return 'toolLocationUnavailable'
+  }
+}
+
+/** 真实位置工具行：对齐搜索/网页步骤时间线风格 */
+const LocationRow = ({
+  step,
+  message,
+  streaming,
+  isLast,
+}: {
+  step: LocationStep
+  message: AssistantMessage
+  streaming: boolean
+  isLast: boolean
+}) => {
+  const t = useTranslate()
+  const wip = step.status === 'wip'
+  const failed = step.status === 'failed'
+  const interrupted = failed && !streaming && message.status === 'stopped'
+
+  if (wip) {
+    return (
+      <ToolRow icon={<IconLocationOutline16 />} isLast={isLast}>
+        <span className={clsx(styles.intro, styles.shimmer)}>{t('toolLocationPending')}</span>
+      </ToolRow>
+    )
+  }
+  if (interrupted) {
+    return (
+      <ToolRow icon={<IconLocationOutline16 />} isLast={isLast}>
+        <span className={styles.intro}>{t('toolLocationStopped')}</span>
+      </ToolRow>
+    )
+  }
+  if (failed) {
+    return (
+      <ToolRow icon={<IconLocationWarningOutline16 />} isLast={isLast}>
+        <span className={styles.intro}>
+          {t('toolLocationFail')} · {t(locationErrorKey(step.errorCode))}
+        </span>
+      </ToolRow>
+    )
+  }
+  return (
+    <ToolRow icon={<IconLocationOutline16 />} isLast={isLast}>
+      <span className={styles.intro}>{t('toolLocationDone')}</span>
+      {step.summary ? (
+        <span className={styles.chip}>
+          <span className={styles.chipText}>{step.summary}</span>
+        </span>
+      ) : null}
     </ToolRow>
   )
 }

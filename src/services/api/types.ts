@@ -146,18 +146,47 @@ export type WebSearchToolResultBlockParam = WebSearchToolResultBlock
 /** 只回传 read_link 结果；成功时原样保留 signature，供服务端解密恢复网页上下文 */
 export type WebFetchToolResultBlockParam = WebFetchToolResultBlock
 
+/** 客户端工具调用声明：由客户端本地执行后再通过 tool_result 回传给模型 */
+export type ClientToolDefinition = {
+  name: string
+  description: string
+  input_schema: {
+    type: 'object'
+    properties: Record<string, { type: string; description: string }>
+    required?: string[]
+  }
+}
+
+export type ClientToolUseBlockParam = {
+  type: 'tool_use'
+  id: string
+  name: string
+  input: Record<string, unknown>
+}
+
+export type ToolResultBlockParam = {
+  type: 'tool_result'
+  tool_use_id: string
+  content: string
+  is_error?: boolean
+}
+
 export type AssistantBlockParam =
   | TextBlockParam
   | ThinkingBlock
   | ServerToolUseBlockParam
   | WebSearchToolResultBlockParam
   | WebFetchToolResultBlockParam
+  | ClientToolUseBlockParam
 
 /** 末尾 assistant 自动触发继续生成，无需 prefix 字段 */
 export type MessageParam =
   /** Chat Engine 扩展角色，位于对应 user 前；需服务端支持 latest_reminder。 */
   | { role: 'latest_reminder'; content: string }
-  | { role: 'user'; content: string | (FileBlockParam | TextBlockParam)[] }
+  | {
+      role: 'user'
+      content: string | (FileBlockParam | TextBlockParam | ToolResultBlockParam)[]
+    }
   | { role: 'assistant'; content: AssistantBlockParam[] }
 
 /** 开启联网搜索与边想边搜 */
@@ -177,7 +206,7 @@ export type CreateMessageRequest = {
   system: string
   messages: MessageParam[]
   thinking: { type: 'enabled' | 'disabled' }
-  tools: (DeepseekWebSearchTool | DeepseekReadUrlTool)[]
+  tools: (DeepseekWebSearchTool | DeepseekReadUrlTool | ClientToolDefinition)[]
   safety_check: { level: 'high' }
   title?: { enabled: boolean }
 }

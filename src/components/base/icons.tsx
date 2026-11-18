@@ -703,3 +703,28 @@ export const IconPlusCircleOutline24 = ({ open = false }: { open?: boolean }) =>
     />
   </svg>
 )
+
+export const IconLocationOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M8 1.5C5.1 1.5 2.75 3.85 2.75 6.75C2.75 10.35 7.15 13.95 7.6 14.31C7.83 14.5 8.17 14.5 8.4 14.31C8.85 13.95 13.25 10.35 13.25 6.75C13.25 3.85 10.9 1.5 8 1.5Z"
+      stroke="currentColor"
+      strokeWidth={1.35}
+      strokeLinejoin="round"
+    />
+    <circle cx={8} cy={6.6} r={2} stroke="currentColor" strokeWidth={1.35} />
+  </svg>
+)
+
+export const IconLocationWarningOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M8 1.5C5.1 1.5 2.75 3.85 2.75 6.75C2.75 10.35 7.15 13.95 7.6 14.31C7.83 14.5 8.17 14.5 8.4 14.31C8.85 13.95 13.25 10.35 13.25 6.75C13.25 3.85 10.9 1.5 8 1.5Z"
+      stroke="currentColor"
+      strokeWidth={1.35}
+      strokeLinejoin="round"
+    />
+    <path d="M8 4.4V7.3" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" />
+    <circle cx={8} cy={9.3} r={0.85} fill="currentColor" />
+  </svg>
+)

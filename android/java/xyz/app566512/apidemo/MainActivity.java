@@ -5,24 +5,35 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ContentUris;
 import android.content.ContentValues;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.location.Address;
+import android.location.Geocoder;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.CancellationSignal;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Message;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.util.Base64;
 import android.util.Size;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
+import android.webkit.GeolocationPermissions;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
@@ -43,11 +54,18 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class MainActivity extends Activity {
     private static final String APP_HOST = "appassets.androidplatform.net";
@@ -56,13 +74,22 @@ public class MainActivity extends Activity {
     private static final int REQ_FILE_CHOOSER = 1001;
     private static final int REQ_AUDIO_PERMISSION = 1002;
     private static final int REQ_GALLERY_PERMISSION = 1003;
+    private static final int REQ_LOCATION_PERMISSION = 1004;
+    private static final int REQ_GEOLOCATION_PROMPT = 1005;
 
     private final ExecutorService mediaExecutor = Executors.newSingleThreadExecutor();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<String, Uri> recentMediaUris = new ConcurrentHashMap<>();
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
     private PermissionRequest pendingPermissionRequest;
+    private GeolocationPermissions.Callback pendingGeolocationCallback;
+    private String pendingGeolocationOrigin;
+    private Integer pendingLocationRequestId;
+    private Runnable cancelActiveLocation;
+    private long lastLocationPermissionRequestAt = 0L;
+    private boolean lastLocationPermissionHadCoarse = false;
     private Uri pendingCameraUri;
     private String nextPickerMode = "file";
     private int safeTopCss = 24;
@@ -85,6 +112,7 @@ public class MainActivity extends Activity {
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
+        settings.setGeolocationEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(true);
@@ -211,13 +239,50 @@ public class MainActivity extends Activity {
                 resultMsg.sendToTarget();
                 return true;
             }
+
+            @Override
+            public void onGeolocationPermissionsShowPrompt(final String origin, final GeolocationPermissions.Callback callback) {
+                runOnUiThread(() -> {
+                    if (origin == null || !origin.startsWith(APP_ORIGIN)) {
+                        callback.invoke(origin, false, false);
+                        return;
+                    }
+                    if (checkLocationPermission()) {
+                        callback.invoke(origin, true, false);
+                        return;
+                    }
+                    pendingGeolocationCallback = callback;
+                    pendingGeolocationOrigin = origin;
+                    requestPermissions(
+                            new String[]{
+                                    Manifest.permission.ACCESS_FINE_LOCATION,
+                                    Manifest.permission.ACCESS_COARSE_LOCATION
+                            },
+                            REQ_GEOLOCATION_PROMPT
+                    );
+                });
+            }
         });
 
         webView.loadUrl(APP_ORIGIN + "/index.html");
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        // 从系统设置修改权限切回应用时，主动同步最新定位授权级别给设置页
+        if (webView != null) {
+            dispatchLocationPermissionState(false);
+        }
+    }
+
+    @Override
     protected void onDestroy() {
+        if (cancelActiveLocation != null) {
+            cancelActiveLocation.run();
+            cancelActiveLocation = null;
+        }
+        mainHandler.removeCallbacksAndMessages(null);
         mediaExecutor.shutdownNow();
         super.onDestroy();
     }
@@ -680,7 +745,341 @@ public class MainActivity extends Activity {
             }
             return;
         }
+        if (requestCode == REQ_LOCATION_PERMISSION) {
+            boolean granted = checkLocationPermission();
+            boolean fineGranted = checkFineLocationPermission();
+            long elapsed = lastLocationPermissionRequestAt > 0L
+                    ? System.currentTimeMillis() - lastLocationPermissionRequestAt
+                    : Long.MAX_VALUE;
+            boolean hadCoarse = lastLocationPermissionHadCoarse;
+            lastLocationPermissionRequestAt = 0L;
+            lastLocationPermissionHadCoarse = false;
+            boolean blockedUpgrade = !fineGranted && elapsed < 250L && (
+                    hadCoarse || !shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION)
+            );
+            dispatchLocationPermissionState(blockedUpgrade);
+            Integer reqId = pendingLocationRequestId;
+            pendingLocationRequestId = null;
+            if (reqId != null) {
+                if (granted) {
+                    fetchCurrentLocationAsync(reqId);
+                } else {
+                    dispatchLocationError(reqId, "permission_denied", "Location permission denied");
+                }
+            }
+            return;
+        }
+        if (requestCode == REQ_GEOLOCATION_PROMPT) {
+            boolean granted = checkLocationPermission();
+            if (pendingGeolocationCallback != null) {
+                pendingGeolocationCallback.invoke(pendingGeolocationOrigin, granted, false);
+                pendingGeolocationCallback = null;
+                pendingGeolocationOrigin = null;
+            }
+            return;
+        }
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+    }
+
+    private boolean checkFineLocationPermission() {
+        return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean checkLocationPermission() {
+        return checkFineLocationPermission()
+                || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private String getLocationPermissionLevelInternal() {
+        if (checkFineLocationPermission()) {
+            return "fine";
+        }
+        if (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            return "coarse";
+        }
+        return "none";
+    }
+
+    private void dispatchLocationPermissionState(final boolean blockedUpgrade) {
+        final boolean granted = checkLocationPermission();
+        final boolean fineGranted = checkFineLocationPermission();
+        final String level = getLocationPermissionLevelInternal();
+        runOnUiThread(() -> {
+            if (webView != null) {
+                webView.evaluateJavascript(
+                        "window.dispatchEvent(new CustomEvent('android-location-permission',{detail:{granted:"
+                                + granted
+                                + ",fineGranted:"
+                                + fineGranted
+                                + ",level:'"
+                                + level
+                                + "',blockedUpgrade:"
+                                + blockedUpgrade
+                                + "}}));",
+                        null
+                );
+            }
+        });
+    }
+
+    private boolean isSystemLocationEnabled(LocationManager manager) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            return manager.isLocationEnabled();
+        }
+        return manager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+                || manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER);
+    }
+
+    @SuppressWarnings("MissingPermission")
+    private void fetchCurrentLocationAsync(final int requestId) {
+        if (cancelActiveLocation != null) {
+            cancelActiveLocation.run();
+            cancelActiveLocation = null;
+        }
+        LocationManager manager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        if (manager == null) {
+            dispatchLocationError(requestId, "unavailable", "Location service unavailable");
+            return;
+        }
+
+        final boolean hasFine = checkFineLocationPermission();
+        if (!hasFine && !checkLocationPermission()) {
+            dispatchLocationError(requestId, "permission_denied", "Location permission denied");
+            return;
+        }
+        if (!isSystemLocationEnabled(manager)) {
+            dispatchLocationError(requestId, "location_disabled", "System location services are disabled");
+            return;
+        }
+
+        List<String> providers = new ArrayList<>();
+        // 仅在授予精确位置时使用 GPS_PROVIDER；仅大致位置时若强行注册 GPS 会被系统静默挂起并拖到超时
+        if (hasFine && manager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            providers.add(LocationManager.GPS_PROVIDER);
+        }
+        if (manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+            providers.add(LocationManager.NETWORK_PROVIDER);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && manager.isProviderEnabled(LocationManager.FUSED_PROVIDER)) {
+            providers.add(LocationManager.FUSED_PROVIDER);
+        }
+        if (providers.isEmpty()) {
+            Location fallback = pickBestLastKnownLocation(manager, hasFine);
+            if (fallback != null) {
+                resolveAndDispatchLocation(requestId, fallback, !hasFine);
+                return;
+            }
+            if (!hasFine) {
+                dispatchLocationError(
+                        requestId,
+                        "precise_location_required",
+                        "Only approximate location permission is granted and no network fix is available"
+                );
+            } else {
+                dispatchLocationError(requestId, "location_disabled", "System location services are disabled");
+            }
+            return;
+        }
+
+        final AtomicBoolean finished = new AtomicBoolean(false);
+        final List<Runnable> cleanups = new ArrayList<>();
+        final Runnable cleanupAll = () -> {
+            List<Runnable> snapshot = new ArrayList<>(cleanups);
+            cleanups.clear();
+            for (Runnable cleanup : snapshot) {
+                try {
+                    cleanup.run();
+                } catch (Exception ignored) {
+                }
+            }
+        };
+
+        final Runnable finishWithTimeout = () -> {
+            if (!finished.compareAndSet(false, true)) {
+                return;
+            }
+            cleanupAll.run();
+            cancelActiveLocation = null;
+            Location fallback = pickBestLastKnownLocation(manager, hasFine);
+            if (fallback != null) {
+                resolveAndDispatchLocation(requestId, fallback, !hasFine);
+            } else if (!hasFine) {
+                dispatchLocationError(
+                        requestId,
+                        "precise_location_required",
+                        "Approximate location timed out; precise location permission is required"
+                );
+            } else {
+                dispatchLocationError(requestId, "timeout", "Location request timed out");
+            }
+        };
+
+        cancelActiveLocation = () -> {
+            if (finished.compareAndSet(false, true)) {
+                mainHandler.removeCallbacks(finishWithTimeout);
+                cleanupAll.run();
+            }
+        };
+
+        mainHandler.postDelayed(finishWithTimeout, hasFine ? 6500 : 2500);
+
+        for (String provider : providers) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                CancellationSignal signal = new CancellationSignal();
+                cleanups.add(signal::cancel);
+                try {
+                    manager.getCurrentLocation(provider, signal, mainHandler::post, location -> {
+                        if (location != null && finished.compareAndSet(false, true)) {
+                            mainHandler.removeCallbacks(finishWithTimeout);
+                            cleanupAll.run();
+                            cancelActiveLocation = null;
+                            resolveAndDispatchLocation(requestId, location, !hasFine);
+                        }
+                    });
+                } catch (Exception ignored) {
+                }
+            } else {
+                LocationListener listener = new LocationListener() {
+                    @Override
+                    public void onLocationChanged(Location location) {
+                        if (location != null && finished.compareAndSet(false, true)) {
+                            mainHandler.removeCallbacks(finishWithTimeout);
+                            cleanupAll.run();
+                            cancelActiveLocation = null;
+                            resolveAndDispatchLocation(requestId, location, !hasFine);
+                        }
+                    }
+
+                    @Override
+                    public void onStatusChanged(String p, int status, Bundle extras) {}
+
+                    @Override
+                    public void onProviderEnabled(String p) {}
+
+                    @Override
+                    public void onProviderDisabled(String p) {}
+                };
+                cleanups.add(() -> manager.removeUpdates(listener));
+                try {
+                    requestSingleUpdateLegacy(manager, provider, listener);
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
+    @SuppressWarnings({"deprecation", "MissingPermission"})
+    private void requestSingleUpdateLegacy(LocationManager manager, String provider, LocationListener listener) {
+        manager.requestSingleUpdate(provider, listener, Looper.getMainLooper());
+    }
+
+    @SuppressWarnings("MissingPermission")
+    private Location pickBestLastKnownLocation(LocationManager manager, boolean hasFine) {
+        Location best = null;
+        for (String provider : manager.getAllProviders()) {
+            if (!hasFine && LocationManager.GPS_PROVIDER.equals(provider)) {
+                continue;
+            }
+            try {
+                Location candidate = manager.getLastKnownLocation(provider);
+                if (candidate == null) {
+                    continue;
+                }
+                if (best == null || candidate.getTime() > best.getTime()) {
+                    best = candidate;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return best;
+    }
+
+    private void resolveAndDispatchLocation(final int requestId, final Location location, final boolean approximate) {
+        mediaExecutor.execute(() -> {
+            JSONObject payload = new JSONObject();
+            try {
+                payload.put("requestId", requestId);
+                payload.put("ok", true);
+                payload.put("latitude", location.getLatitude());
+                payload.put("longitude", location.getLongitude());
+                if (approximate) {
+                    payload.put("approximate", true);
+                }
+                if (location.hasAccuracy() && location.getAccuracy() > 0) {
+                    payload.put("accuracy", location.getAccuracy());
+                }
+                long rawTs = location.getTime();
+                payload.put("timestamp", rawTs >= 1500000000000L ? rawTs : System.currentTimeMillis());
+
+                Address addr = reverseGeocode(location.getLatitude(), location.getLongitude());
+                if (addr != null) {
+                    if (addr.getCountryName() != null) payload.put("country", addr.getCountryName());
+                    if (addr.getAdminArea() != null) payload.put("province", addr.getAdminArea());
+                    String city = addr.getLocality() != null ? addr.getLocality() : addr.getSubAdminArea();
+                    if (city != null) payload.put("city", city);
+                    if (addr.getSubLocality() != null) payload.put("district", addr.getSubLocality());
+                    if (addr.getMaxAddressLineIndex() >= 0) {
+                        payload.put("address", addr.getAddressLine(0));
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+            dispatchLocationJson(payload);
+        });
+    }
+
+    @SuppressWarnings("deprecation")
+    private Address reverseGeocode(double lat, double lon) {
+        if (!Geocoder.isPresent()) {
+            return null;
+        }
+        // 在无谷歌服务的环境下原生 Geocoder.getFromLocation 可能长时间阻塞，限时 1.5s 防拖慢工具响应
+        final AtomicReference<Address> resolved = new AtomicReference<>();
+        final CountDownLatch latch = new CountDownLatch(1);
+        Thread worker = new Thread(() -> {
+            try {
+                Geocoder geocoder = new Geocoder(this, Locale.getDefault());
+                List<Address> results = geocoder.getFromLocation(lat, lon, 1);
+                if (results != null && !results.isEmpty()) {
+                    resolved.set(results.get(0));
+                }
+            } catch (Exception ignored) {
+            } finally {
+                latch.countDown();
+            }
+        }, "reverse-geocode");
+        worker.setDaemon(true);
+        worker.start();
+        try {
+            latch.await(1500, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+        return resolved.get();
+    }
+
+    private void dispatchLocationError(int requestId, String errorCode, String message) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("requestId", requestId);
+            payload.put("ok", false);
+            payload.put("errorCode", errorCode);
+            payload.put("message", message);
+        } catch (Exception ignored) {
+        }
+        dispatchLocationJson(payload);
+    }
+
+    private void dispatchLocationJson(final JSONObject payload) {
+        final String json = payload.toString();
+        runOnUiThread(() -> {
+            if (webView != null) {
+                webView.evaluateJavascript(
+                        "window.dispatchEvent(new CustomEvent('android-location-result',{detail:" + json + "}));",
+                        null
+                );
+            }
+        });
     }
 
     private class AndroidBridge {
@@ -746,6 +1145,66 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void requestRecentPhotos(int limit) {
             loadRecentPhotosAsync(Math.max(1, Math.min(limit, 20)));
+        }
+
+        @JavascriptInterface
+        public boolean hasLocationPermission() {
+            return checkLocationPermission();
+        }
+
+        @JavascriptInterface
+        public String getLocationPermissionLevel() {
+            return getLocationPermissionLevelInternal();
+        }
+
+        @JavascriptInterface
+        public void openAppLocationSettings() {
+            runOnUiThread(() -> {
+                Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                intent.setData(Uri.fromParts("package", getPackageName(), null));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+            });
+        }
+
+        @JavascriptInterface
+        public void requestLocationPermission() {
+            runOnUiThread(() -> {
+                // 仅在已经获得精确位置时直接确认；如果此前只给了大致位置，继续向系统申请升级
+                if (checkFineLocationPermission()) {
+                    dispatchLocationPermissionState(false);
+                    return;
+                }
+                lastLocationPermissionHadCoarse = checkLocationPermission();
+                lastLocationPermissionRequestAt = System.currentTimeMillis();
+                requestPermissions(
+                        new String[]{
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
+                        },
+                        REQ_LOCATION_PERMISSION
+                );
+            });
+        }
+
+        @JavascriptInterface
+        public void requestCurrentLocation(final int requestId) {
+            runOnUiThread(() -> {
+                if (!checkLocationPermission()) {
+                    pendingLocationRequestId = requestId;
+                    lastLocationPermissionHadCoarse = false;
+                    lastLocationPermissionRequestAt = System.currentTimeMillis();
+                    requestPermissions(
+                            new String[]{
+                                    Manifest.permission.ACCESS_FINE_LOCATION,
+                                    Manifest.permission.ACCESS_COARSE_LOCATION
+                            },
+                            REQ_LOCATION_PERMISSION
+                    );
+                    return;
+                }
+                fetchCurrentLocationAsync(requestId);
+            });
         }
 
         @JavascriptInterface

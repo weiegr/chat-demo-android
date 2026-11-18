@@ -1,9 +1,10 @@
 import { create } from 'zustand'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
-import type { ChatModel, CreateMessageRequest } from '../api/types.js'
+import type { ChatModel, ClientToolDefinition, CreateMessageRequest } from '../api/types.js'
 import { extractFileIds, getFileErrorCode, isRetryableApiError } from '../api/errors.js'
 import { cancelUpload, describeUploadError, uploadAttachment, useUploads } from '../attachments.js'
+import { GeolocationError, getCurrentPosition } from '../geolocation.js'
 import { useSettings } from '../settings.js'
 import { appendBranch, getVisibleMessages, normalizeSession, selectVersion } from './branches.js'
 import * as db from './db.js'
@@ -25,6 +26,8 @@ import {
 import {
   toSessionSummary,
   type AssistantMessage,
+  type ClientToolResultBlock,
+  type ClientToolUseBlock,
   type FileAttachment,
   type Message,
   type Session,
@@ -42,14 +45,34 @@ const SAFETY_CHECK = { level: 'high' } as const
 const FILE_RETRY_LIMIT = 2
 /** 退避基数，第 n 次重试等待 2^n 倍；连续失败达到上限就放弃，把原始报错展示出来 */
 const FILE_RETRY_BASE_DELAY = 1000
+/** 单次提问内客户端工具（如真实定位）连续调用次数上限 */
+const MAX_TOOL_ROUNDS = 5
 
-/** 阅读链接始终开启，智能搜索开关控制是否另行声明搜索工具（含边想边搜）。 */
-const serverTools = (search: boolean): CreateMessageRequest['tools'] => {
+const GET_LOCATION_TOOL: ClientToolDefinition = {
+  name: 'get_location',
+  description:
+    "Get the user's real-time physical geographic location (latitude, longitude, and resolved address when available). Call this tool only when the user's request depends on their actual current location (such as local weather, nearby places, current city, or directions).",
+  input_schema: {
+    type: 'object',
+    properties: {
+      reason: {
+        type: 'string',
+        description: 'Brief reason why the current physical location is needed',
+      },
+    },
+  },
+}
+
+/** 阅读链接始终开启，智能搜索与允许 AI 定位开关控制额外声明的工具。 */
+const requestTools = (search: boolean, allowAiLocation: boolean): CreateMessageRequest['tools'] => {
   const tools: CreateMessageRequest['tools'] = [
     { type: 'deepseek_read_url', name: 'deepseek_read_url' },
   ]
   if (search) {
     tools.push({ type: 'deepseek_web_search', name: 'deepseek_web_search' })
+  }
+  if (allowAiLocation) {
+    tools.push(GET_LOCATION_TOOL)
   }
   return tools
 }
@@ -1013,10 +1036,84 @@ const waitForRetry = (attempt: number, signal: AbortSignal) =>
     signal.addEventListener('abort', onAbort, { once: true })
   })
 
+const executeClientTool = async (
+  block: ClientToolUseBlock,
+  signal: AbortSignal
+): Promise<ClientToolResultBlock> => {
+  if (block.name !== GET_LOCATION_TOOL.name) {
+    return {
+      type: 'client_tool_result',
+      tool_use_id: block.id,
+      name: block.name,
+      status: 'failed',
+      is_error: true,
+      content: JSON.stringify({
+        error: 'unsupported_tool',
+        message: `Unknown tool: ${block.name}`,
+      }),
+    }
+  }
+  try {
+    const location = await getCurrentPosition(signal)
+    const normalizedTs = location.timestamp >= 1_500_000_000_000 ? location.timestamp : Date.now()
+    const accuracyMeters =
+      location.accuracy !== undefined && location.accuracy > 0
+        ? Math.max(1, Math.round(location.accuracy))
+        : undefined
+    return {
+      type: 'client_tool_result',
+      tool_use_id: block.id,
+      name: block.name,
+      status: 'done',
+      summary: location.summary,
+      content: JSON.stringify({
+        latitude: location.latitude,
+        longitude: location.longitude,
+        ...(accuracyMeters !== undefined ? { accuracy_meters: accuracyMeters } : {}),
+        ...(location.approximate ? { approximate: true } : {}),
+        ...(location.country ? { country: location.country } : {}),
+        ...(location.province ? { province: location.province } : {}),
+        ...(location.city ? { city: location.city } : {}),
+        ...(location.district ? { district: location.district } : {}),
+        ...(location.address ? { address: location.address } : {}),
+        timestamp: normalizedTs,
+        fetched_at: new Date(normalizedTs).toISOString(),
+      }),
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw error
+    }
+    const code = error instanceof GeolocationError ? error.code : 'unavailable'
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      type: 'client_tool_result',
+      tool_use_id: block.id,
+      name: block.name,
+      status: 'failed',
+      is_error: true,
+      errorCode: code,
+      content: JSON.stringify({ error: code, message }),
+    }
+  }
+}
+
+const getPendingClientToolUses = (reply: AssistantMessage): ClientToolUseBlock[] => {
+  const completedIds = new Set(
+    reply.blocks.flatMap((block) =>
+      block.type === 'client_tool_result' ? [block.tool_use_id] : []
+    )
+  )
+  return reply.blocks.filter(
+    (block): block is ClientToolUseBlock => block.type === 'tool_use' && !completedIds.has(block.id)
+  )
+}
+
 /**
  * 请求并消费流：先补齐附件的 serverId，再发请求；流式增量按动画帧刷新内存，完成、失败或停止后落盘。
  * 补传失败时回复记为 upload 错误，可重试。
  * 服务端判定 file_id 失效时重新补传后重发，退避重试且次数有上限，超过则按原始报错收尾。
+ * 服务端返回客户端 tool_use（如请求真实位置）时执行本地工具，并将 tool_result 回传继续流式生成。
  */
 const streamReply = async (sessionId: string, initial: AssistantMessage, request: Request) => {
   const controller = new AbortController()
@@ -1024,7 +1121,10 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
     titleRequests.add(controller)
   }
   set((state) => ({ streaming: { ...state.streaming, [sessionId]: controller } }))
+  const settingsSnapshot = useSettings.getState()
+  const allowAiLocation = settingsSnapshot.allowAiLocation
   let reply = initial
+  let prepared = request
   let frame = 0
   const flush = () => {
     cancelAnimationFrame(frame)
@@ -1034,26 +1134,33 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
   streamFlushes.set(sessionId, flush)
 
   try {
+    let toolRound = 0
     for (let attempt = 0; ; attempt += 1) {
       /** 附件补齐前出错属于上传失败，请求还没有发出 */
-      let preparing = true
+      let preparing = toolRound === 0
       let receivedContent = false
       try {
-        const prepared = await prepareFiles(sessionId, request, controller.signal)
-        preparing = false
-        // 附件就绪后获取本轮信息；续写沿用原回答快照，重新生成的快照独立保存。
-        const latestReminder = prepared.prefix
-          ? prepared.prefix.latestReminder
-          : createLatestReminder(useSettings.getState())
-        reply = { ...reply, latestReminder }
-        // 只进草稿槽，收尾时随整段回复一起落盘；这里再写一次是整段会话的重复克隆。
-        updateReply(sessionId, reply)
+        if (toolRound === 0) {
+          prepared = await prepareFiles(sessionId, request, controller.signal)
+          preparing = false
+          // 附件就绪后获取本轮信息；续写沿用原回答快照，重新生成的快照独立保存。
+          const latestReminder = prepared.prefix
+            ? prepared.prefix.latestReminder
+            : createLatestReminder({
+                locale: settingsSnapshot.locale,
+                location: settingsSnapshot.locationEnabled ? settingsSnapshot.location : null,
+              })
+          reply = { ...reply, latestReminder }
+          // 只进草稿槽，收尾时随整段回复一起落盘；这里再写一次是整段会话的重复克隆。
+          updateReply(sessionId, reply)
+        }
         const messages = toRequestMessages(
           prepared.history,
           prepared.question,
           prepared.prefix,
           initial.thinking ?? false,
-          latestReminder
+          reply.latestReminder,
+          toolRound > 0 ? reply : undefined
         )
         const events = streamMessage(
           useSettings.getState().apiKey ?? '',
@@ -1063,7 +1170,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             messages,
             thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
             safety_check: SAFETY_CHECK,
-            tools: serverTools(initial.search ?? false),
+            tools: requestTools(initial.search ?? false, allowAiLocation),
             ...(titleRequests.has(controller) ? { title: { enabled: true } } : {}),
           },
           controller.signal
@@ -1090,6 +1197,22 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             frame ||= requestAnimationFrame(flush)
           }
         }
+        flush()
+        const pendingToolUses = getPendingClientToolUses(reply)
+        if (
+          !controller.signal.aborted &&
+          pendingToolUses.length > 0 &&
+          toolRound < MAX_TOOL_ROUNDS
+        ) {
+          for (const toolUse of pendingToolUses) {
+            const resultBlock = await executeClientTool(toolUse, controller.signal)
+            reply = { ...reply, blocks: [...reply.blocks, resultBlock] }
+            flush()
+          }
+          toolRound += 1
+          attempt = -1
+          continue
+        }
         reply = settleReply(reply, 'done', Date.now())
         break
       } catch (error) {
@@ -1106,8 +1229,9 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           })
           break
         }
-        // 附件失效：重新补传后重发。收到过内容块（含丢弃的客户端工具）后不自动重发。
+        // 附件失效：重新补传后重发。收到过内容块或已进入工具轮次后不自动重发。
         if (
+          toolRound === 0 &&
           attempt < FILE_RETRY_LIMIT &&
           !receivedContent &&
           reuploadInvalidatedFiles(sessionId, request, error)

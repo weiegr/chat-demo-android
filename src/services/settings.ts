@@ -10,12 +10,14 @@ export type ThemePreference = 'light' | 'dark' | 'system'
 /** 系统提示词默认值；可在设置中修改或清空（清空后请求不带 system 内容） */
 export const DEFAULT_SYSTEM_PROMPT = '该助手为DeepSeek，由深度求索公司创造。'
 
-/** 本机设置，存 localStorage：API Key、语言、主题、位置、朗读音色、系统提示词、深度思考与智能搜索开关、侧边栏收起状态 */
+/** 本机设置，存 localStorage：API Key、语言、主题、位置与 AI 定位权限、朗读音色、系统提示词、深度思考与智能搜索开关、侧边栏收起状态 */
 type Settings = {
   apiKey: string | null
   locale: Locale
   themePreference: ThemePreference
   location: UserLocation | null
+  locationEnabled: boolean
+  allowAiLocation: boolean
   ttsVoice: TtsVoice
   systemPrompt: string
   thinking: boolean
@@ -27,6 +29,8 @@ const KEYS = {
   apiKey: 'chat-demo:api-key',
   locale: 'chat-demo:locale',
   location: 'chat-demo:location',
+  locationEnabled: 'chat-demo:location-enabled',
+  allowAiLocation: 'chat-demo:allow-ai-location',
   themePreference: 'chat-demo:theme-preference',
   ttsVoice: 'chat-demo:tts-voice',
   systemPrompt: 'chat-demo:system-prompt',
@@ -95,10 +99,22 @@ const initialTtsVoice = (): TtsVoice => (read(KEYS.ttsVoice) === 'tide' ? 'tide'
 /** 自定义系统提示词，未保存过时使用默认身份说明；保存过空串则请求不带 system 内容 */
 const initialSystemPrompt = (): string => read(KEYS.systemPrompt) ?? DEFAULT_SYSTEM_PROMPT
 
+/** 已设置过手动位置的老版本升级时默认保持开启，未配置过或显式关闭时为 false */
+const initialLocationValue = initialLocation()
+const initialLocationEnabled = (): boolean => {
+  const saved = read(KEYS.locationEnabled)
+  if (saved === 'true' || saved === 'false') {
+    return saved === 'true'
+  }
+  return initialLocationValue !== null
+}
+
 export const useSettings = create<Settings>(() => ({
   apiKey: read(KEYS.apiKey),
   locale: initialLocale(),
-  location: initialLocation(),
+  location: initialLocationValue,
+  locationEnabled: initialLocationEnabled(),
+  allowAiLocation: read(KEYS.allowAiLocation) === 'true',
   themePreference: initialThemePreference(),
   ttsVoice: initialTtsVoice(),
   systemPrompt: initialSystemPrompt(),
@@ -116,6 +132,16 @@ export const setLocation = (value: UserLocation | null) => {
   const location = normalizeLocation(value)
   write(KEYS.location, location ? JSON.stringify(location) : null)
   useSettings.setState({ location })
+}
+
+export const setLocationEnabled = (locationEnabled: boolean) => {
+  write(KEYS.locationEnabled, String(locationEnabled))
+  useSettings.setState({ locationEnabled })
+}
+
+export const setAllowAiLocation = (allowAiLocation: boolean) => {
+  write(KEYS.allowAiLocation, String(allowAiLocation))
+  useSettings.setState({ allowAiLocation })
 }
 
 export const setThemePreference = (themePreference: ThemePreference) => {

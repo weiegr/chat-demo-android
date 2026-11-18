@@ -62,8 +62,34 @@ export type TextPart = {
   isTemplate?: boolean
 }
 
-/** 服务端工具调用与结果块按协议原样保存；历史请求只回传 read_link 调用与结果 */
-export type ReplyBlock = ThinkingPart | TextPart | ServerToolBlock
+/** 客户端工具调用块（如实时定位），含流式拼装 input 用的临时 JSON 缓存 */
+export type ClientToolUseBlock = {
+  type: 'tool_use'
+  id: string
+  name: string
+  input: Record<string, unknown>
+  partialJson?: string
+}
+
+/** 客户端工具本地执行结果：用于回传 API 的 tool_result 与展示时间线状态 */
+export type ClientToolResultBlock = {
+  type: 'client_tool_result'
+  tool_use_id: string
+  name: string
+  status: 'done' | 'failed'
+  content: string
+  is_error?: boolean
+  summary?: string
+  errorCode?: string
+}
+
+/** 服务端与客户端工具调用及结果块：read_link 与配对客户端工具会进入多轮上下文 */
+export type ReplyBlock =
+  | ThinkingPart
+  | TextPart
+  | ServerToolBlock
+  | ClientToolUseBlock
+  | ClientToolResultBlock
 
 /**
  * pending：已发出请求，还没收到事件；streaming：正在接收；

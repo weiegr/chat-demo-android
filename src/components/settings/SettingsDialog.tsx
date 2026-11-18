@@ -9,7 +9,6 @@ import {
   IconLightOutline16,
   IconSettingsOutline16,
   IconUploadOutline14,
-  IconWarningOutline16,
 } from '../base/icons.js'
 import {
   BackupError,
@@ -19,11 +18,8 @@ import {
 } from '../../services/chat/backup.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { useChatStore } from '../../services/chat/store.js'
-import { regionCodes, getRegionName, provinces } from '../../services/location.js'
 import {
-  isChineseBrowser,
   setLocale,
-  setLocation,
   setSystemPrompt,
   setThemePreference,
   setTtsVoice,
@@ -38,6 +34,13 @@ import { Modal } from '../base/Modal.js'
 import { Select } from '../base/Select.js'
 import { showToast } from '../base/toastState.js'
 import { ApiKeyConfirm, ApiKeyField, useApiKeyEditor } from './ApiKeyField.js'
+import { InfoModalButton } from './InfoModalButton.js'
+import {
+  AiLocationSetting,
+  LocationSetting,
+  MobileLocationNavRow,
+  MobileLocationPage,
+} from './LocationSettings.js'
 import { closeSettings, useSettingsDialog, type SettingsSection } from './settingsDialogState.js'
 import styles from './Settings.module.css'
 
@@ -64,14 +67,20 @@ const SettingsContent = () => {
   const isMobile = useIsMobile()
   // 打开时按调用方指定的分组选中，之后在弹窗内切换
   const [section, setSection] = useState(() => useSettingsDialog.getState().section)
-  const [mobilePage, setMobilePage] = useState<'main' | 'data'>('main')
+  const [mobilePage, setMobilePage] = useState<'main' | 'data' | 'location'>('main')
   // 切换分组不丢失正在输入的 API Key 与导入状态
   const apiKeyEditor = useApiKeyEditor()
   const historyImport = useHistoryImport()
   const historyDelete = useHistoryDelete()
   const replacingHistory = useChatStore((state) => state.importingHistory)
   const historyBusy = historyImport.busy || historyDelete.busy || replacingHistory
-  const inMobileDataPage = isMobile && mobilePage === 'data'
+  const inMobileSubPage = isMobile && mobilePage !== 'main'
+  const mobileTitleKey =
+    mobilePage === 'data'
+      ? 'settingDialogAsideDataOptionLabel'
+      : mobilePage === 'location'
+        ? 'settingsLocation'
+        : 'settings'
   return (
     <>
       <Modal
@@ -83,7 +92,7 @@ const SettingsContent = () => {
                 className={styles.mobileBackButton}
                 aria-label={t('close')}
                 onClick={() => {
-                  if (inMobileDataPage) {
+                  if (inMobileSubPage) {
                     setMobilePage('main')
                   } else if (!historyDelete.busy) {
                     closeSettings()
@@ -92,9 +101,7 @@ const SettingsContent = () => {
               >
                 <IconChevronRightOutline14 />
               </button>
-              <span>
-                {inMobileDataPage ? t('settingDialogAsideDataOptionLabel') : t('settings')}
-              </span>
+              <span>{t(mobileTitleKey)}</span>
             </div>
           ) : (
             t('settings')
@@ -107,7 +114,7 @@ const SettingsContent = () => {
           if (historyDelete.busy) {
             return
           }
-          if (inMobileDataPage) {
+          if (inMobileSubPage) {
             setMobilePage('main')
             return
           }
@@ -115,7 +122,7 @@ const SettingsContent = () => {
         }}
       >
         {isMobile ? (
-          inMobileDataPage ? (
+          mobilePage === 'data' ? (
             <div className={clsx(styles.content, styles.mobileDataContent)}>
               <ImportHistory historyImport={historyImport} disabled={historyBusy} />
               <ExportHistory disabled={historyBusy} />
@@ -127,6 +134,8 @@ const SettingsContent = () => {
                 onAction={historyDelete.open}
               />
             </div>
+          ) : mobilePage === 'location' ? (
+            <MobileLocationPage />
           ) : (
             <div className={styles.content}>
               <div className={styles.mobileGroupTitle}>
@@ -150,7 +159,7 @@ const SettingsContent = () => {
               <div className={styles.mobileCard}>
                 <MobileLocaleSetting />
                 <MobileThemeSetting />
-                <LocationSetting />
+                <MobileLocationNavRow onOpen={() => setMobilePage('location')} />
               </div>
               <div className={styles.mobileGroupTitle}>{t('settingGroupChat')}</div>
               <div className={styles.mobileCard}>
@@ -183,6 +192,7 @@ const SettingsContent = () => {
                   <LocaleSetting />
                   <TtsVoiceSetting />
                   <LocationSetting />
+                  <AiLocationSetting />
                   <SystemPromptSetting />
                 </>
               ) : (
@@ -288,92 +298,6 @@ const useHistoryDelete = () => {
     },
     confirm,
   }
-}
-
-const LocationSetting = () => {
-  const t = useTranslate()
-  const locale = useSettings((state) => state.locale)
-  const location = useSettings((state) => state.location)
-  const [provinceOpen, setProvinceOpen] = useState(false)
-  const [cityOpen, setCityOpen] = useState(false)
-  const province =
-    location?.region === 'CN'
-      ? provinces.find((item) => item.code === location.province)
-      : undefined
-  const showCitySelect = !province || province.cities.length > 0
-
-  return (
-    <SettingCell
-      label={t('settingsLocation')}
-      status={null}
-      className={styles.locationCell}
-      action={
-        <div className={styles.locationSelectors}>
-          {isChineseBrowser() ? (
-            <>
-              <Select
-                ariaLabel={t('settingsLocationProvince')}
-                className={styles.provinceSelect}
-                value={province?.code ?? ''}
-                open={provinceOpen}
-                onOpenChange={setProvinceOpen}
-                placeholder={t('settingsLocationProvince')}
-                options={provinces.map((item) => ({ value: item.code, label: item.name }))}
-                onChange={(value) => {
-                  if (value !== province?.code) {
-                    const nextProvince = provinces.find((item) => item.code === value)
-                    const defaultCity = nextProvince?.cities[0]?.code
-                    setLocation(
-                      defaultCity
-                        ? { region: 'CN', province: value, city: defaultCity }
-                        : { region: 'CN', province: value }
-                    )
-                  }
-                }}
-              />
-              {showCitySelect ? (
-                <Select
-                  ariaLabel={t('settingsLocationCity')}
-                  className={styles.citySelect}
-                  value={province ? (location?.city ?? '') : ''}
-                  open={province ? cityOpen : false}
-                  onOpenChange={(next) => {
-                    if (!province) {
-                      if (next) {
-                        setProvinceOpen(true)
-                      }
-                      return
-                    }
-                    setCityOpen(next)
-                  }}
-                  placeholder={t('settingsLocationCity')}
-                  options={
-                    province?.cities.map((item) => ({ value: item.code, label: item.name })) ?? []
-                  }
-                  onChange={(value) => {
-                    if (province) {
-                      setLocation({ region: 'CN', province: province.code, city: value })
-                    }
-                  }}
-                />
-              ) : null}
-            </>
-          ) : (
-            <Select
-              ariaLabel={t('settingsLocationRegion')}
-              className={styles.regionSelect}
-              value={location?.region ?? ''}
-              placeholder={t('settingsLocationRegion')}
-              options={regionCodes
-                .map((code) => ({ value: code, label: getRegionName(code, locale) }))
-                .sort((a, b) => a.label.localeCompare(b.label, locale))}
-              onChange={(value) => setLocation({ region: value })}
-            />
-          )}
-        </div>
-      }
-    />
-  )
 }
 
 const LocaleSetting = () => {
@@ -774,55 +698,33 @@ const SettingCell = ({
   className,
 }: {
   label: string
-  description?: string
+  description?: ReactNode
   infoAsModal?: boolean
   status: Status
   action: ReactNode
   className?: string
 }) => {
   const t = useTranslate()
-  const [infoOpen, setInfoOpen] = useState(false)
   const inlineDescription = infoAsModal ? undefined : description
   return (
-    <>
-      <div className={clsx(styles.cell, styles.row, className)}>
-        <div className={styles.text}>
-          <div className={styles.labelRow}>
-            <span className={styles.label}>{label}</span>
-            {infoAsModal && description ? (
-              <button
-                type="button"
-                className={styles.infoButton}
-                aria-label={label}
-                onClick={() => setInfoOpen(true)}
-              >
-                <IconWarningOutline16 />
-              </button>
-            ) : null}
-          </div>
-          {status || inlineDescription ? (
-            <div className={clsx(styles.description, status?.error && styles.error)}>
-              {status
-                ? t(status.key, status.reason ? { message: t(status.reason) } : status.params)
-                : inlineDescription}
-            </div>
+    <div className={clsx(styles.cell, styles.row, className)}>
+      <div className={styles.text}>
+        <div className={styles.labelRow}>
+          <span className={styles.label}>{label}</span>
+          {infoAsModal && description ? (
+            <InfoModalButton ariaLabel={label} description={description} />
           ) : null}
         </div>
-        {action}
+        {status || inlineDescription ? (
+          <div className={clsx(styles.description, status?.error && styles.error)}>
+            {status
+              ? t(status.key, status.reason ? { message: t(status.reason) } : status.params)
+              : inlineDescription}
+          </div>
+        ) : null}
       </div>
-      {infoOpen && description ? (
-        <Modal title="" className={styles.infoModal} onClose={() => setInfoOpen(false)}>
-          <div className={styles.infoModalText}>{description}</div>
-          <button
-            type="button"
-            className={styles.themeModalConfirm}
-            onClick={() => setInfoOpen(false)}
-          >
-            {t('confirm')}
-          </button>
-        </Modal>
-      ) : null}
-    </>
+      {action}
+    </div>
   )
 }
 
@@ -845,61 +747,37 @@ const MobileActionCard = ({
   children?: ReactNode
 }) => {
   const t = useTranslate()
-  const [infoOpen, setInfoOpen] = useState(false)
 
   return (
-    <>
-      <div className={styles.mobileActionCard}>
-        <button
-          type="button"
-          className={styles.mobileActionHit}
-          aria-label={label}
-          disabled={disabled}
-          onClick={onAction}
-        />
-        <div className={styles.mobileActionBody}>
-          <div className={styles.labelRow}>
-            <span
-              className={clsx(
-                styles.label,
-                danger && styles.mobileActionDangerLabel,
-                disabled && styles.mobileActionLabelDisabled
-              )}
-            >
-              {label}
-            </span>
-            {description ? (
-              <button
-                type="button"
-                className={styles.infoButton}
-                aria-label={label}
-                onClick={() => setInfoOpen(true)}
-              >
-                <IconWarningOutline16 />
-              </button>
-            ) : null}
-          </div>
-          {status ? (
-            <div className={clsx(styles.description, status.error && styles.error)}>
-              {t(status.key, status.reason ? { message: t(status.reason) } : status.params)}
-            </div>
-          ) : null}
-        </div>
-        {children}
-      </div>
-      {infoOpen && description ? (
-        <Modal title="" className={styles.infoModal} onClose={() => setInfoOpen(false)}>
-          <div className={styles.infoModalText}>{description}</div>
-          <button
-            type="button"
-            className={styles.themeModalConfirm}
-            onClick={() => setInfoOpen(false)}
+    <div className={styles.mobileActionCard}>
+      <button
+        type="button"
+        className={styles.mobileActionHit}
+        aria-label={label}
+        disabled={disabled}
+        onClick={onAction}
+      />
+      <div className={styles.mobileActionBody}>
+        <div className={styles.labelRow}>
+          <span
+            className={clsx(
+              styles.label,
+              danger && styles.mobileActionDangerLabel,
+              disabled && styles.mobileActionLabelDisabled
+            )}
           >
-            {t('confirm')}
-          </button>
-        </Modal>
-      ) : null}
-    </>
+            {label}
+          </span>
+          {description ? <InfoModalButton ariaLabel={label} description={description} /> : null}
+        </div>
+        {status ? (
+          <div className={clsx(styles.description, status.error && styles.error)}>
+            {t(status.key, status.reason ? { message: t(status.reason) } : status.params)}
+          </div>
+        ) : null}
+      </div>
+      {children}
+    </div>
   )
 }
 

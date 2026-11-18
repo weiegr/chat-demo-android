@@ -8,6 +8,8 @@ declare const styles: {
   readonly mobileSubHeader: string
   readonly mobileBackButton: string
   readonly mobileDataContent: string
+  readonly mobileLocationContent: string
+  readonly mobileSubActionRow: string
   readonly mobileActionCard: string
   readonly mobileActionHit: string
   readonly mobileActionBody: string
@@ -27,8 +29,22 @@ declare const styles: {
   readonly themeModalConfirm: string
   readonly infoModal: string
   readonly infoModalText: string
+  readonly infoModalExtra: string
+  readonly infoModalActions: string
+  readonly infoModalCancel: string
   readonly ttsSheet: string
   readonly ttsSheetMain: string
+  readonly locationSheet: string
+  readonly locationSheetMain: string
+  readonly wheelStage: string
+  readonly wheelHighlight: string
+  readonly wheelColumns: string
+  readonly wheelColumn: string
+  readonly wheelSpacer: string
+  readonly wheelOption: string
+  readonly wheelOptionActive: string
+  readonly wheelOptionText: string
+  readonly wheelEmpty: string
   readonly ttsStage: string
   readonly ttsVoiceName: string
   readonly ttsVoiceDesc: string
@@ -42,8 +58,13 @@ declare const styles: {
   readonly labelRow: string
   readonly label: string
   readonly infoButton: string
+  readonly infoButtonWarn: string
   readonly uploadButton: string
-  readonly locationCell: string
+  readonly locationSwitchCell: string
+  readonly switchHeader: string
+  readonly locationCollapse: string
+  readonly locationCollapseOpen: string
+  readonly locationCollapseClip: string
   readonly locationSelectors: string
   readonly provinceSelect: string
   readonly citySelect: string
