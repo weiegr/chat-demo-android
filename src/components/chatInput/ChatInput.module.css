@@ -358,6 +358,8 @@
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
   transition-property: border-color, background-color, color;
   transition-duration: 0.2s;
 
@@ -374,8 +376,14 @@
     transform: translate(-1px, 1.5px);
   }
 
-  &:hover:not(:disabled) {
-    background-color: var(--dsw-alias-interactive-bg-hover);
+  @media (hover: hover) {
+    &:hover:not(:disabled) {
+      background-color: var(--dsw-alias-interactive-bg-hover);
+    }
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
   }
 
   &:disabled {
@@ -388,8 +396,10 @@
     color: var(--dsw-alias-brand-text);
     border-color: var(--dsw-alias-button-ghost-active-border);
 
-    &:hover {
-      background-color: var(--dsw-alias-button-ghost-active-hover);
+    @media (hover: hover) {
+      &:hover {
+        background-color: var(--dsw-alias-button-ghost-active-hover);
+      }
     }
   }
 }
@@ -416,10 +426,14 @@
   background: var(--dsw-alias-button-primary-fill);
   color: var(--dsw-static-neutral-bluish-00);
   cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
   transition: background 0.2s ease;
 
-  &:not(.disabled):hover {
-    background: var(--dsw-alias-button-primary-hover);
+  @media (hover: hover) {
+    &:not(.disabled):hover {
+      background: var(--dsw-alias-button-primary-hover);
+    }
   }
 
   &.disabled {
