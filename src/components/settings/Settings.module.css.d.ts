@@ -36,6 +36,7 @@ declare const styles: {
   readonly ttsSheetMain: string
   readonly locationSheet: string
   readonly locationSheetMain: string
+  readonly sheetVisible: string
   readonly wheelStage: string
   readonly wheelHighlight: string
   readonly wheelColumns: string
@@ -46,6 +47,12 @@ declare const styles: {
   readonly wheelOptionText: string
   readonly wheelEmpty: string
   readonly ttsStage: string
+  readonly ttsVoiceViewport: string
+  readonly ttsVoiceSlide: string
+  readonly ttsEnterNext: string
+  readonly ttsEnterPrev: string
+  readonly ttsExitNext: string
+  readonly ttsExitPrev: string
   readonly ttsVoiceName: string
   readonly ttsVoiceDesc: string
   readonly ttsDots: string

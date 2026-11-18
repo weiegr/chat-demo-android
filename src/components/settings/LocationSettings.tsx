@@ -25,6 +25,7 @@ import { IconChevronRightOutline14 } from '../base/icons.js'
 import { Modal } from '../base/Modal.js'
 import { Select } from '../base/Select.js'
 import { Switch } from '../base/Switch.js'
+import { usePresence } from '../base/usePresence.js'
 import { InfoModalButton } from './InfoModalButton.js'
 import styles from './Settings.module.css'
 
@@ -255,7 +256,13 @@ const WheelColumn = ({
 }
 
 /** 手动设置位置的二级弹出菜单：中文环境左列选省、右列选市；英文环境单列选国家/地区 */
-const MobileLocationPickerModal = ({ onClose }: { onClose: () => void }) => {
+const MobileLocationPickerModal = ({
+  visible,
+  onClose,
+}: {
+  visible: boolean
+  onClose: () => void
+}) => {
   const t = useTranslate()
   const locale = useSettings((state) => state.locale)
   const location = useSettings((state) => state.location)
@@ -342,7 +349,8 @@ const MobileLocationPickerModal = ({ onClose }: { onClose: () => void }) => {
     <Modal
       title={t('settingsLocationManual')}
       closable
-      className={styles.locationSheet}
+      visible={visible}
+      className={clsx(styles.locationSheet, visible && styles.sheetVisible)}
       mainClassName={styles.locationSheetMain}
       onClose={onClose}
     >
@@ -402,6 +410,7 @@ export const MobileLocationPage = () => {
   const location = useSettings((state) => state.location)
   const locationEnabled = useSettings((state) => state.locationEnabled)
   const [pickerOpen, setPickerOpen] = useState(false)
+  const pickerPresence = usePresence(pickerOpen, 280)
 
   return (
     <div className={clsx(styles.content, styles.mobileLocationContent)}>
@@ -456,7 +465,12 @@ export const MobileLocationPage = () => {
         </div>
       </div>
 
-      {pickerOpen ? <MobileLocationPickerModal onClose={() => setPickerOpen(false)} /> : null}
+      {pickerPresence.mounted ? (
+        <MobileLocationPickerModal
+          visible={pickerPresence.visible}
+          onClose={() => setPickerOpen(false)}
+        />
+      ) : null}
     </div>
   )
 }

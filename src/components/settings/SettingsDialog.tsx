@@ -33,6 +33,7 @@ import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
 import { Select } from '../base/Select.js'
 import { showToast } from '../base/toastState.js'
+import { usePresence } from '../base/usePresence.js'
 import { ApiKeyConfirm, ApiKeyField, useApiKeyEditor } from './ApiKeyField.js'
 import { InfoModalButton } from './InfoModalButton.js'
 import {
@@ -339,12 +340,18 @@ const mobileTtsVoices: {
   },
 ]
 
-/** 移动端朗读音色：点击弹出底部圆角抽屉，支持左右滑动与点击圆点切换，抛弃中央胶囊动画且不自动试听 */
+/** 移动端朗读音色：点击弹出底部圆角抽屉，支持左右滑动与点击圆点切换，切换时标题与说明随方向平滑移动 */
 const MobileTtsVoiceSetting = () => {
   const t = useTranslate()
   const ttsVoice = useSettings((state) => state.ttsVoice)
   const [sheetOpen, setSheetOpen] = useState(false)
+  const sheetPresence = usePresence(sheetOpen, 280)
   const [draftVoice, setDraftVoice] = useState<TtsVoice>(ttsVoice)
+  const [voiceTransition, setVoiceTransition] = useState<{
+    prev: TtsVoice | null
+    dir: 'next' | 'prev'
+    tick: number
+  }>({ prev: null, dir: 'next', tick: 0 })
   const touchStartX = useRef<number | null>(null)
   const currentVoice = mobileTtsVoices.find((item) => item.value === ttsVoice) ?? mobileTtsVoices[0]
   const draftIndex = Math.max(
@@ -352,6 +359,17 @@ const MobileTtsVoiceSetting = () => {
     mobileTtsVoices.findIndex((item) => item.value === draftVoice)
   )
   const activeDraft = mobileTtsVoices[draftIndex] ?? mobileTtsVoices[0]
+  const exitingDraft = voiceTransition.prev
+    ? mobileTtsVoices.find((item) => item.value === voiceTransition.prev)
+    : undefined
+
+  const switchDraftVoice = (nextVoice: TtsVoice, dir: 'next' | 'prev') => {
+    if (nextVoice === draftVoice) {
+      return
+    }
+    setVoiceTransition((cur) => ({ prev: draftVoice, dir, tick: cur.tick + 1 }))
+    setDraftVoice(nextVoice)
+  }
 
   return (
     <>
@@ -360,6 +378,7 @@ const MobileTtsVoiceSetting = () => {
         className={styles.mobileNavRow}
         onClick={() => {
           setDraftVoice(ttsVoice)
+          setVoiceTransition({ prev: null, dir: 'next', tick: 0 })
           setSheetOpen(true)
         }}
       >
@@ -369,11 +388,12 @@ const MobileTtsVoiceSetting = () => {
           <IconChevronRightOutline14 />
         </span>
       </button>
-      {sheetOpen ? (
+      {sheetPresence.mounted ? (
         <Modal
           title={t('settingsTtsVoice')}
           closable
-          className={styles.ttsSheet}
+          visible={sheetPresence.visible}
+          className={clsx(styles.ttsSheet, sheetPresence.visible && styles.sheetVisible)}
           mainClassName={styles.ttsSheetMain}
           onClose={() => setSheetOpen(false)}
         >
@@ -391,21 +411,51 @@ const MobileTtsVoiceSetting = () => {
               }
               const dx = endX - startX
               if (Math.abs(dx) > 36) {
+                const dir = dx < 0 ? 'next' : 'prev'
                 const nextIndex =
                   dx < 0
                     ? (draftIndex + 1) % mobileTtsVoices.length
                     : (draftIndex - 1 + mobileTtsVoices.length) % mobileTtsVoices.length
                 const next = mobileTtsVoices[nextIndex]
                 if (next) {
-                  setDraftVoice(next.value)
+                  switchDraftVoice(next.value, dir)
                 }
               }
             }}
           >
-            <div className={styles.ttsVoiceName}>{t(activeDraft.nameKey)}</div>
-            <div className={styles.ttsVoiceDesc}>{t(activeDraft.descKey)}</div>
+            <div className={styles.ttsVoiceViewport}>
+              {exitingDraft ? (
+                <div
+                  key={`out-${exitingDraft.value}-${voiceTransition.tick}`}
+                  aria-hidden="true"
+                  className={clsx(
+                    styles.ttsVoiceSlide,
+                    voiceTransition.dir === 'next' ? styles.ttsExitNext : styles.ttsExitPrev
+                  )}
+                  onAnimationEnd={() =>
+                    setVoiceTransition((cur) =>
+                      cur.tick === voiceTransition.tick ? { ...cur, prev: null } : cur
+                    )
+                  }
+                >
+                  <div className={styles.ttsVoiceName}>{t(exitingDraft.nameKey)}</div>
+                  <div className={styles.ttsVoiceDesc}>{t(exitingDraft.descKey)}</div>
+                </div>
+              ) : null}
+              <div
+                key={`in-${activeDraft.value}-${voiceTransition.tick}`}
+                className={clsx(
+                  styles.ttsVoiceSlide,
+                  voiceTransition.tick > 0 &&
+                    (voiceTransition.dir === 'next' ? styles.ttsEnterNext : styles.ttsEnterPrev)
+                )}
+              >
+                <div className={styles.ttsVoiceName}>{t(activeDraft.nameKey)}</div>
+                <div className={styles.ttsVoiceDesc}>{t(activeDraft.descKey)}</div>
+              </div>
+            </div>
             <div role="tablist" aria-label={t('settingsTtsVoice')} className={styles.ttsDots}>
-              {mobileTtsVoices.map((item) => {
+              {mobileTtsVoices.map((item, idx) => {
                 const selected = item.value === draftVoice
                 return (
                   <button
@@ -415,7 +465,9 @@ const MobileTtsVoiceSetting = () => {
                     aria-selected={selected}
                     aria-label={t(item.nameKey)}
                     className={clsx(styles.ttsDot, selected && styles.ttsDotActive)}
-                    onClick={() => setDraftVoice(item.value)}
+                    onClick={() =>
+                      switchDraftVoice(item.value, idx >= draftIndex ? 'next' : 'prev')
+                    }
                   />
                 )
               })}

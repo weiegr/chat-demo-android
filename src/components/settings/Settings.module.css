@@ -403,6 +403,10 @@
     background-color: var(--dsw-specific-sidebar-fill);
     box-shadow: none;
 
+    [data-ds-dark-theme] & {
+      background-color: var(--dsw-alias-bg-base);
+    }
+
     > div:first-child {
       position: relative;
       justify-content: center;
@@ -437,6 +441,10 @@
     background-color: var(--dsw-alias-bg-base);
     color: var(--dsw-alias-label-primary);
     cursor: pointer;
+
+    [data-ds-dark-theme] & {
+      background-color: var(--dsw-alias-bg-layer-2);
+    }
 
     svg {
       width: 16px;
@@ -480,6 +488,10 @@
     border-radius: 16px;
     background-color: var(--dsw-alias-bg-base);
     overflow: hidden;
+
+    [data-ds-dark-theme] & {
+      background-color: var(--dsw-alias-bg-layer-2);
+    }
   }
 
   .mobileActionHit {
@@ -541,6 +553,10 @@
     padding: 4px 16px;
     border-radius: 16px;
     background-color: var(--dsw-alias-bg-base);
+
+    [data-ds-dark-theme] & {
+      background-color: var(--dsw-alias-bg-layer-2);
+    }
   }
 
   .mobileNavRow {
@@ -618,6 +634,10 @@
     border-radius: 40px;
     background-color: var(--dsw-specific-login-input);
     font-size: 15px;
+
+    [data-ds-dark-theme] & {
+      background-color: var(--dsw-alias-bg-layer-3);
+    }
   }
 
   .apiKeySaved svg {
@@ -782,6 +802,13 @@
   max-width: none;
   padding: 20px 24px calc(24px + var(--safe-bottom));
   border-radius: 28px 28px 0 0;
+  transform: translate3d(0, 100%, 0);
+  will-change: transform;
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+
+  &.sheetVisible {
+    transform: translate3d(0, 0, 0);
+  }
 
   > div:first-child {
     position: relative;
@@ -919,6 +946,83 @@
   justify-content: center;
   padding: 80px 0 56px;
   user-select: none;
+  touch-action: pan-y;
+}
+
+.ttsVoiceViewport {
+  position: relative;
+  width: 100%;
+  height: 60px;
+  overflow: hidden;
+}
+
+.ttsVoiceSlide {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.ttsEnterNext {
+  animation: ttsInFromRight 0.26s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.ttsEnterPrev {
+  animation: ttsInFromLeft 0.26s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.ttsExitNext {
+  animation: ttsOutToLeft 0.26s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.ttsExitPrev {
+  animation: ttsOutToRight 0.26s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes ttsInFromRight {
+  from {
+    opacity: 0;
+    transform: translate3d(48px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes ttsInFromLeft {
+  from {
+    opacity: 0;
+    transform: translate3d(-48px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes ttsOutToLeft {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(-48px, 0, 0);
+  }
+}
+
+@keyframes ttsOutToRight {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(48px, 0, 0);
+  }
 }
 
 .ttsVoiceName {
@@ -1006,5 +1110,19 @@
     white-space: normal;
     overflow-wrap: anywhere;
     max-width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ttsSheet,
+  .locationSheet {
+    transition: none;
+  }
+
+  .ttsEnterNext,
+  .ttsEnterPrev,
+  .ttsExitNext,
+  .ttsExitPrev {
+    animation: none;
   }
 }

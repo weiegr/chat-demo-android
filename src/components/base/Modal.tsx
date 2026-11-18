@@ -15,6 +15,7 @@ export const Modal = ({
   children,
   footer,
   closable = false,
+  visible,
   className,
   mainClassName,
   onClose,
@@ -24,6 +25,8 @@ export const Modal = ({
   footer?: ReactNode
   /** 标题栏右侧显示关闭按钮 */
   closable?: boolean
+  /** 可选受控显隐态：传入布尔值时由外层配合 usePresence 驱动进/退场遮罩过渡 */
+  visible?: boolean
   className?: string
   /** 内容区的 class */
   mainClassName?: string
@@ -33,7 +36,12 @@ export const Modal = ({
   const titleId = useId()
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
+  const controlled = visible !== undefined
+  const active = visible ?? true
   useEffect(() => {
+    if (!active) {
+      return
+    }
     const token = {}
     openModals.push(token)
     const onKeyDown = (event: KeyboardEvent) => {
@@ -46,12 +54,20 @@ export const Modal = ({
       openModals.splice(openModals.indexOf(token), 1)
       document.removeEventListener('keydown', onKeyDown)
     }
-  }, [])
+  }, [active])
 
   return createPortal(
     <div
-      className={styles.overlay}
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+      className={clsx(
+        styles.overlay,
+        controlled && (visible ? styles.overlayVisible : styles.overlayHidden)
+      )}
+      aria-hidden={controlled && !visible ? true : undefined}
+      onMouseDown={(event) => {
+        if (active && event.target === event.currentTarget) {
+          onClose()
+        }
+      }}
     >
       <div
         className={clsx(styles.content, className)}
