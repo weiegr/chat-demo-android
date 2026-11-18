@@ -301,7 +301,13 @@ export const IconThinkOutline14 = ({ active }: { active?: boolean }) => {
   if (animating) {
     const ringRefs = [ringARef, ringBRef]
     return (
-      <svg width={14} height={14} viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <svg
+        width={14}
+        height={14}
+        viewBox="0 0 14 14"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+      >
         <circle
           ref={coreRef}
           cx={7.064}
@@ -460,7 +466,13 @@ export const IconGlobeLanguageOutline14 = ({ active }: { active?: boolean }) => 
   if (animating) {
     const meridianRefs = [refA, refB, refC]
     return (
-      <svg width={14} height={14} viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <svg
+        width={14}
+        height={14}
+        viewBox="0 0 14 14"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+      >
         <circle cx={7} cy={7} r={6.25} stroke="currentColor" strokeWidth={1.2} />
         <line x1={0.9} y1={7} x2={13.1} y2={7} stroke="currentColor" strokeWidth={1.2} />
         {GLOBE_BASE_ANGLES.map((angle, index) => (
@@ -681,12 +693,12 @@ export const IconFolderOutline20 = () => (
 
 export const IconPlusCircleOutline24 = ({ open = false }: { open?: boolean }) => (
   <svg width={24} height={24} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <circle cx={12} cy={12} r={10.1} stroke="currentColor" strokeWidth={1.8} />
+    <circle cx={12} cy={12} r={9.4} stroke="currentColor" strokeWidth={1.45} />
     <path
       className={clsx(styles.plusCross, open && styles.plusCrossOpen)}
-      d="M12 7.6v8.8M7.6 12h8.8"
+      d="M12 8.2v7.6M8.2 12h7.6"
       stroke="currentColor"
-      strokeWidth={1.8}
+      strokeWidth={1.45}
       strokeLinecap="round"
     />
   </svg>

@@ -43,8 +43,7 @@
   background: linear-gradient(
     to bottom,
     transparent 0%,
-    transparent 30%,
-    var(--dsw-alias-bg-base) 30%,
+    var(--dsw-alias-bg-base) 38%,
     var(--dsw-alias-bg-base) 100%
   );
 }
