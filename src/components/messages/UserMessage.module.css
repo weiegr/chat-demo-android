@@ -13,6 +13,19 @@
   }
 }
 
+.editingTarget {
+  position: relative;
+  z-index: 16;
+}
+
+.clickableBubble {
+  cursor: pointer;
+
+  &:active {
+    opacity: 0.88;
+  }
+}
+
 .files {
   display: flex;
   flex-wrap: wrap;

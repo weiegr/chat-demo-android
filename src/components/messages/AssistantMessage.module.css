@@ -100,6 +100,21 @@
   transition: opacity var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
+@media not all and (min-width: 768px) {
+  .bottom {
+    left: -6px;
+    width: calc(100% + 12px);
+  }
+
+  .actions {
+    flex: 1;
+  }
+
+  .regenerateButton {
+    margin-left: auto;
+  }
+}
+
 .alwaysShow {
   opacity: 1;
 }

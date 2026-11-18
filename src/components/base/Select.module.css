@@ -36,8 +36,11 @@
   }
 
   > span:first-child {
+    display: inline-block;
     overflow: hidden;
     text-overflow: ellipsis;
+    line-height: 20px;
+    transform: translateY(1.5px);
   }
 }
 

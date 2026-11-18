@@ -257,35 +257,67 @@
   bottom: 0;
   left: 0;
   z-index: 800;
+  transform: translate3d(-100%, 0, 0);
+  visibility: hidden;
+  will-change: transform;
+  transition:
+    transform 0.26s cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 0.26s;
+}
+
+.drawerOpen {
+  transform: translate3d(0, 0, 0);
+  visibility: visible;
+  transition:
+    transform 0.26s cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 0s;
 }
 
 .drawerMask {
   position: absolute;
   inset: 0;
   z-index: 799;
+  background-color: rgba(0, 0, 0, 0.16);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.drawerMaskOpen {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .mobile {
-  width: 300px;
-  max-width: calc(100vw - 48px);
+  width: 80vw;
+  max-width: 320px;
+  padding-top: calc(8px + var(--safe-top));
+  padding-bottom: var(--safe-bottom);
+  border-right: none;
+  box-shadow: 8px 0 24px rgba(0, 0, 0, 0.08);
+
+  .top {
+    margin-bottom: 4px;
+  }
 
   .listWrap {
-    margin-top: 16px;
+    margin-top: 4px;
   }
 
   .sectionHeader {
-    padding: 4px 10px 3px;
-    font-size: 14px;
-    line-height: 22px;
+    padding: 6px 12px 4px;
+    font-size: 13px;
+    line-height: 20px;
   }
 
   .bottom {
     height: auto;
-    padding: 12px 0;
+    padding: 10px 0;
+    border-top: 1px solid var(--dsw-alias-border-l1);
   }
 
   .settings {
-    padding: 9px 10px;
+    padding: 10px 12px;
   }
 
   .settingsIcon {

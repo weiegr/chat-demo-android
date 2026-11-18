@@ -33,7 +33,7 @@
 
 .close {
   position: absolute;
-  top: max(16px, calc(env(safe-area-inset-top) + 8px));
+  top: max(16px, calc(var(--safe-top) + 8px));
   right: max(16px, calc(env(safe-area-inset-right) + 8px));
   z-index: 1;
   display: flex;

@@ -57,18 +57,18 @@ const upload = (attachment: DraftAttachment, apiKey: string) => {
   ).catch(() => {})
 }
 
-/** 整批校验通过后才创建预览和开始上传。 */
-export const addDraftFiles = (
+/** 整批校验通过后才创建预览和开始上传，返回校验错误与新增附件 ID。 */
+export const addDraftFilesWithIds = (
   sessionId: string | null,
   files: File[],
   apiKey: string
-): TranslationMessage | null => {
+): { error: TranslationMessage | null; ids: string[] } => {
   if (files.length === 0) {
-    return null
+    return { error: null, ids: [] }
   }
   const error = validateFiles(files, getDraft(sessionId).attachments.length)
   if (error) {
-    return error
+    return { error, ids: [] }
   }
   const added = files.map((file): DraftAttachment => {
     const image = isImage(resolveMimeType(file))
@@ -81,8 +81,15 @@ export const addDraftFiles = (
   })
   updateDraft(sessionId, (draft) => ({ ...draft, attachments: [...draft.attachments, ...added] }))
   added.forEach((attachment) => upload(attachment, apiKey))
-  return null
+  return { error: null, ids: added.map((item) => item.id) }
 }
+
+/** 整批校验通过后才创建预览和开始上传。 */
+export const addDraftFiles = (
+  sessionId: string | null,
+  files: File[],
+  apiKey: string
+): TranslationMessage | null => addDraftFilesWithIds(sessionId, files, apiKey).error
 
 export const retryDraftAttachment = (
   sessionId: string | null,

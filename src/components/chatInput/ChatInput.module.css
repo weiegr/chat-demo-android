@@ -1,3 +1,7 @@
+.root {
+  width: 100%;
+}
+
 .wrapper {
   --line-height: 24px;
   --input-padding-top: 12px;
@@ -28,6 +32,47 @@
 
   [data-ds-dark-theme] & {
     box-shadow: none;
+  }
+}
+
+.editBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 6px 6px 0;
+  padding: 6px 8px 6px 14px;
+  border-radius: 20px;
+  background-color: var(--dsw-specific-selector);
+  cursor: default;
+}
+
+.editBannerTitle {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.editBannerClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background-color: rgba(0, 0, 0, 0.06);
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+
+  [data-ds-dark-theme] & {
+    background-color: rgba(255, 255, 255, 0.12);
+  }
+
+  svg {
+    width: 13px;
+    height: 13px;
   }
 }
 
@@ -247,8 +292,16 @@
 
 @media not all and (min-width: 768px) {
   .wrapper {
+    --input-padding-top: 15px;
     flex-shrink: 0;
+    border-radius: 26px;
     max-height: calc(var(--app-viewport-height, 100dvh) - 120px);
+  }
+
+  .textarea,
+  .mirror {
+    min-height: calc(var(--line-height) + var(--input-padding-top) + 2px);
+    padding: var(--input-padding-top) 16px 2px 18px;
   }
 
   .textareaWrapper {
@@ -258,6 +311,11 @@
   .attachments,
   .functionRow {
     flex-shrink: 0;
+  }
+
+  .functionRow {
+    margin-top: 2px;
+    padding: 8px 12px 10px;
   }
 }
 
@@ -288,20 +346,33 @@
   justify-content: center;
   gap: 4px;
   height: 34px;
-  padding: 0 12px;
+  padding: 0 13px 0 10px;
   border-radius: 18px;
   border: 1px solid var(--dsw-alias-border-l2);
   background-color: transparent;
   color: var(--dsw-alias-label-primary);
   font: inherit;
   font-size: 13px;
-  line-height: 20px;
+  line-height: 1;
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
-  transition-property: border, background;
+  transition-property: border-color, background-color, color;
   transition-duration: 0.2s;
+
+  svg {
+    display: block;
+    flex-shrink: 0;
+    width: 15px;
+    height: 15px;
+  }
+
+  .toggleLabel {
+    display: inline-block;
+    line-height: 1;
+    transform: translate(-1px, 1.5px);
+  }
 
   &:hover:not(:disabled) {
     background-color: var(--dsw-alias-interactive-bg-hover);
@@ -327,7 +398,7 @@
   display: flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   margin-left: auto;
 }
 
@@ -338,7 +409,7 @@
   flex-shrink: 0;
   width: 34px;
   height: 34px;
-  margin-left: 6px;
+  margin-left: 0;
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -355,4 +426,260 @@
     opacity: 0.4;
     cursor: not-allowed;
   }
+}
+
+.plusButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background-color: transparent;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  outline: none;
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+
+  svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  &:active:not(:disabled) {
+    opacity: 0.72;
+    transform: scale(0.93);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+
+.attachPanel {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transition:
+    grid-template-rows 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.14s ease-out,
+    visibility 0s linear 0.24s;
+
+  &.attachPanelOpen {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    pointer-events: auto;
+    visibility: visible;
+    transition:
+      grid-template-rows 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 0.14s ease-out,
+      visibility 0s linear 0s;
+  }
+}
+
+.attachPanelClip {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.attachPanelInner {
+  padding-top: 10px;
+  transform: translateY(18px);
+  opacity: 0;
+  transition:
+    transform 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.14s ease-out;
+}
+
+.attachPanelOpen .attachPanelInner {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+.permissionBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  background-color: var(--dsw-specific-input-major);
+}
+
+.permissionText {
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.permissionButton {
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  background-color: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-static-neutral-bluish-00);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+
+  &:active {
+    opacity: 0.85;
+  }
+}
+
+.recentSection {
+  margin-bottom: 10px;
+}
+
+.recentTitle {
+  margin: 0 0 6px 2px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.recentPhotosBar {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.recentPhoto {
+  position: relative;
+  flex-shrink: 0;
+  width: 68px;
+  height: 68px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  border-radius: 12px;
+  overflow: hidden;
+  background-color: var(--dsw-alias-bg-skeleton);
+  cursor: pointer;
+  transition:
+    transform 0.14s ease,
+    border-color 0.14s ease;
+
+  img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.95);
+  }
+
+  &:disabled {
+    opacity: 0.65;
+  }
+
+  &.recentPhotoSelected {
+    border: 2px solid var(--dsw-alias-brand-primary);
+  }
+}
+
+.recentPhotoCheck {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid #ffffff;
+  background-color: rgba(0, 0, 0, 0.36);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  color: #ffffff;
+  pointer-events: none;
+  transition:
+    background-color 0.14s ease,
+    border-color 0.14s ease;
+
+  svg {
+    width: 10px;
+    height: 10px;
+  }
+
+  &.recentPhotoCheckActive {
+    border-color: var(--dsw-alias-brand-primary);
+    background-color: var(--dsw-alias-brand-primary);
+  }
+}
+
+.attachGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.attachCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 76px;
+  padding: 12px 8px;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  border-radius: 16px;
+  background-color: var(--dsw-specific-input-major);
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  transition:
+    transform 0.14s ease,
+    background-color 0.14s ease;
+
+  &:active:not(:disabled) {
+    transform: scale(0.97);
+    background-color: var(--dsw-alias-interactive-bg-hover);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+
+.attachCardIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  color: var(--dsw-alias-label-primary);
+
+  svg {
+    width: 21px;
+    height: 21px;
+  }
+}
+
+.attachCardLabel {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
 }

@@ -1,6 +1,8 @@
 declare const styles: {
   readonly "container": string;
   readonly "isFirst": string;
+  readonly "editingTarget": string;
+  readonly "clickableBubble": string;
   readonly "actions": string;
   readonly "files": string;
   readonly "filesWithDocuments": string;

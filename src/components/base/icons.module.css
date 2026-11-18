@@ -1,0 +1,19 @@
+.thinkNode {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+}
+
+.globeMeridian {
+  transform-box: view-box;
+  transform-origin: 7px 7px;
+}
+
+.plusCross {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.plusCrossOpen {
+  transform: rotate(45deg);
+}

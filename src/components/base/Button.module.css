@@ -4,7 +4,7 @@
   justify-content: center;
   box-sizing: border-box;
   min-width: 72px;
-  padding: 0 14px;
+  padding: 2px 14px 0;
   border-radius: 4096px;
   border: 1px solid transparent;
   font: inherit;

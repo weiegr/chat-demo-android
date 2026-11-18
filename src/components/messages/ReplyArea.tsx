@@ -1,6 +1,6 @@
 import { useTranslate } from '../../i18n/index.js'
 import clsx from 'clsx'
-import { memo, useEffect, useState, type ReactNode } from 'react'
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   IconBrowseOutline16,
   IconBrowseWarningOutline16,
@@ -66,6 +66,7 @@ export const ReplyArea = memo(function ReplyArea({
 }) {
   useTranslate()
   const [open, setOpen] = useState(true)
+  const areaRef = useRef<HTMLDivElement>(null)
   const titleActive = streaming && !hasResponse
   useTicker(titleActive, 1000)
   if (view.steps.length === 0 && !(message.thinking && streaming)) {
@@ -75,10 +76,31 @@ export const ReplyArea = memo(function ReplyArea({
   const thinking = message.thinking ?? view.steps.some((step) => step.type === 'thinking')
   const title = thinking ? getAreaTitle(view, streaming, Date.now(), hasResponse) : null
   const stopped = !streaming && !hasResponse
+
+  const toggleOpen = () => {
+    if (open && areaRef.current) {
+      let scroller: HTMLElement | null = areaRef.current.parentElement
+      while (scroller && scroller !== document.body) {
+        if (/auto|scroll/.test(getComputedStyle(scroller).overflowY)) {
+          break
+        }
+        scroller = scroller.parentElement
+      }
+      if (scroller && scroller !== document.body) {
+        const areaTop = areaRef.current.getBoundingClientRect().top
+        const scrollerTop = scroller.getBoundingClientRect().top
+        if (areaTop < scrollerTop + 8) {
+          scroller.scrollTop += areaTop - scrollerTop - 8
+        }
+      }
+    }
+    setOpen((value) => !value)
+  }
+
   return (
-    <div className={styles.area}>
+    <div ref={areaRef} className={styles.area}>
       {title ? (
-        <div className={styles.title} onClick={() => setOpen((value) => !value)}>
+        <div className={clsx(styles.title, open && styles.titleSticky)} onClick={toggleOpen}>
           <span className={clsx(styles.titleIcon, stopped && styles.stoppedIcon)}>
             <IconThinkOutline16 />
           </span>
@@ -86,7 +108,10 @@ export const ReplyArea = memo(function ReplyArea({
           {open ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />}
         </div>
       ) : null}
-      {open || !title ? (
+      <div
+        className={clsx(styles.stepsCollapse, !(open || !title) && styles.stepsCollapsed)}
+        aria-hidden={!(open || !title)}
+      >
         <div className={styles.steps}>
           {view.steps.map((step, index) => (
             <StepItem
@@ -99,7 +124,7 @@ export const ReplyArea = memo(function ReplyArea({
             />
           ))}
         </div>
-      ) : null}
+      </div>
     </div>
   )
 })

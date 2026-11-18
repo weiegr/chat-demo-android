@@ -1,7 +1,11 @@
 declare const styles: {
+  readonly "root": string;
   readonly "wrapper": string;
   readonly "session": string;
   readonly "home": string;
+  readonly "editBanner": string;
+  readonly "editBannerTitle": string;
+  readonly "editBannerClose": string;
   readonly "attachments": string;
   readonly "attachment": string;
   readonly "remove": string;
@@ -20,6 +24,25 @@ declare const styles: {
   readonly "right": string;
   readonly "sendButton": string;
   readonly "disabled": string;
+  readonly "plusButton": string;
+  readonly "attachPanel": string;
+  readonly "attachPanelOpen": string;
+  readonly "attachPanelClip": string;
+  readonly "attachPanelInner": string;
+  readonly "permissionBanner": string;
+  readonly "permissionText": string;
+  readonly "permissionButton": string;
+  readonly "recentSection": string;
+  readonly "recentTitle": string;
+  readonly "recentPhotosBar": string;
+  readonly "recentPhoto": string;
+  readonly "recentPhotoSelected": string;
+  readonly "recentPhotoCheck": string;
+  readonly "recentPhotoCheckActive": string;
+  readonly "attachGrid": string;
+  readonly "attachCard": string;
+  readonly "attachCardIcon": string;
+  readonly "attachCardLabel": string;
 };
 export = styles;
 

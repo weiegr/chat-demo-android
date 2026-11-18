@@ -17,6 +17,10 @@
   &.active {
     background-color: var(--dsw-specific-sidebar-nav-item-active-accent);
     color: var(--dsw-alias-brand-primary-invert);
+
+    .action {
+      display: flex;
+    }
   }
 
   @media (hover: hover) {
@@ -24,11 +28,8 @@
       background-color: var(--dsw-specific-sidebar-nav-item-hover);
     }
 
-    &:hover,
-    &.active {
-      .action {
-        display: flex;
-      }
+    &:hover .action {
+      display: flex;
     }
   }
 }
@@ -65,12 +66,6 @@
   font: inherit;
   font-size: 14px;
   outline: none;
-}
-
-@media (hover: none) {
-  .action {
-    display: flex;
-  }
 }
 
 @media not all and (min-width: 768px) {

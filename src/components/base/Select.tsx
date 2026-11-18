@@ -19,6 +19,8 @@ export const Select = <T extends string>({
   ariaLabel,
   className,
   disabled = false,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   value: T
   options: SelectOption<T>[]
@@ -27,14 +29,23 @@ export const Select = <T extends string>({
   ariaLabel?: string
   className?: string
   disabled?: boolean
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }) => {
-  const [open, setOpen] = useState(false)
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
+  const open = controlledOpen ?? uncontrolledOpen
+  const setOpen = (next: boolean) => {
+    if (controlledOpen === undefined) {
+      setUncontrolledOpen(next)
+    }
+    onOpenChange?.(next)
+  }
   const current = options.find((option) => option.value === value)
   // 菜单贴右侧展开，最多 320px 高，超出在菜单内滚动
   const { anchorRef, floatingRef, position } = useAnchoredPosition<
     HTMLButtonElement,
     HTMLDivElement
-  >(open, { align: 'end', maxHeight: 320, minSpace: 160 })
+  >(open, { align: 'end', maxHeight: 320, minSpace: 160, measureKey: options.length })
   // Esc 只关菜单，不让外层弹窗一起关闭
   useDismiss(open, [anchorRef, floatingRef], () => setOpen(false), { captureEscape: true })
 
@@ -48,7 +59,7 @@ export const Select = <T extends string>({
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => setOpen(!open)}
       >
         {current ? (
           <span lang={current.lang}>{current.label}</span>

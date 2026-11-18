@@ -5,12 +5,33 @@ export type Theme = 'light' | 'dark'
 
 const query = window.matchMedia('(prefers-color-scheme: dark)')
 
-const subscribeOsTheme = (listener: () => void) => {
-  query.addEventListener('change', listener)
-  return () => query.removeEventListener('change', listener)
+type AndroidHostBridge = {
+  isSystemDark?: () => boolean
 }
 
-const getOsTheme = (): Theme => (query.matches ? 'dark' : 'light')
+const getAndroidHost = (): AndroidHostBridge | undefined =>
+  (window as Window & { AndroidHost?: AndroidHostBridge }).AndroidHost
+
+const subscribeOsTheme = (listener: () => void) => {
+  query.addEventListener('change', listener)
+  window.addEventListener('os-theme-change', listener)
+  return () => {
+    query.removeEventListener('change', listener)
+    window.removeEventListener('os-theme-change', listener)
+  }
+}
+
+const getOsTheme = (): Theme => {
+  const host = getAndroidHost()
+  if (host && typeof host.isSystemDark === 'function') {
+    try {
+      return host.isSystemDark() ? 'dark' : 'light'
+    } catch {
+      // 回退到 matchMedia
+    }
+  }
+  return query.matches ? 'dark' : 'light'
+}
 
 const resolveTheme = (preference: ThemePreference, osTheme: Theme): Theme =>
   preference === 'system' ? osTheme : preference

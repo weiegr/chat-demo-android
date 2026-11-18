@@ -18,6 +18,7 @@ export type AnchoredPosition = {
   top: number
   left?: number
   right?: number
+  minWidth?: number
   maxHeight?: number
 }
 
@@ -106,6 +107,7 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
       previous.top === next.top &&
       previous.left === next.left &&
       previous.right === next.right &&
+      previous.minWidth === next.minWidth &&
       previous.maxHeight === next.maxHeight
         ? previous
         : next
@@ -156,6 +158,7 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
           ? Math.max(VIEWPORT_PADDING, rect.top - offset - height)
           : rect.bottom + offset,
       right: Math.max(VIEWPORT_PADDING, window.innerWidth - rect.right),
+      minWidth: Math.round(rect.width),
       maxHeight: height,
     })
   }, [align, alignOffset, applyPosition, floatingRef, getAnchor, maxHeight, minSpace, offset, side])

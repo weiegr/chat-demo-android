@@ -1,6 +1,10 @@
 declare const styles: {
   readonly "area": string;
+  readonly "stepsCollapse": string;
+  readonly "stepsCollapsed": string;
+  readonly "steps": string;
   readonly "title": string;
+  readonly "titleSticky": string;
   readonly "titleIcon": string;
   readonly "stoppedIcon": string;
   readonly "titleText": string;

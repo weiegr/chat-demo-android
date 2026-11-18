@@ -147,6 +147,7 @@ export const AssistantMessage = memo(function AssistantMessage({
               <ReadAloudButton messageId={message.id} text={responseText} />
             ) : null}
             <IconButton
+              className={styles.regenerateButton}
               icon={<IconRefreshOutline16 />}
               tooltip={t('regenerate')}
               tooltipPlacement="bottom"

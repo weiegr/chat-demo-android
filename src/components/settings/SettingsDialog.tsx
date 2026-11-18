@@ -1,6 +1,7 @@
 import clsx from 'clsx'
 import { useRef, useState, type ReactNode } from 'react'
 import {
+  IconChevronRightOutline14,
   IconDarkOutline16,
   IconDataOutline16,
   IconDownloadOutline16,
@@ -8,6 +9,7 @@ import {
   IconLightOutline16,
   IconSettingsOutline16,
   IconUploadOutline14,
+  IconWarningOutline16,
 } from '../base/icons.js'
 import {
   BackupError,
@@ -28,6 +30,7 @@ import {
   useSettings,
   type ThemePreference,
 } from '../../services/settings.js'
+import type { TtsVoice } from '../../services/api/speech.js'
 import { useTranslate, type TranslationKey, type TranslationMessage } from '../../i18n/index.js'
 import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
@@ -60,73 +63,157 @@ const SettingsContent = () => {
   const isMobile = useIsMobile()
   // 打开时按调用方指定的分组选中，之后在弹窗内切换
   const [section, setSection] = useState(() => useSettingsDialog.getState().section)
+  const [mobilePage, setMobilePage] = useState<'main' | 'data'>('main')
   // 切换分组不丢失正在输入的 API Key 与导入状态
   const apiKeyEditor = useApiKeyEditor()
   const historyImport = useHistoryImport()
   const historyDelete = useHistoryDelete()
   const replacingHistory = useChatStore((state) => state.importingHistory)
   const historyBusy = historyImport.busy || historyDelete.busy || replacingHistory
+  const inMobileDataPage = isMobile && mobilePage === 'data'
   return (
     <>
       <Modal
-        title={t('settings')}
-        closable
+        title={
+          isMobile ? (
+            <div className={styles.mobileSubHeader}>
+              <button
+                type="button"
+                className={styles.mobileBackButton}
+                aria-label={t('close')}
+                onClick={() => {
+                  if (inMobileDataPage) {
+                    setMobilePage('main')
+                  } else if (!historyDelete.busy) {
+                    closeSettings()
+                  }
+                }}
+              >
+                <IconChevronRightOutline14 />
+              </button>
+              <span>
+                {inMobileDataPage ? t('settingDialogAsideDataOptionLabel') : t('settings')}
+              </span>
+            </div>
+          ) : (
+            t('settings')
+          )
+        }
+        closable={!isMobile}
         className={styles.dialog}
         mainClassName={styles.dialogMain}
         onClose={() => {
-          if (!historyDelete.busy) {
-            closeSettings()
+          if (historyDelete.busy) {
+            return
           }
+          if (inMobileDataPage) {
+            setMobilePage('main')
+            return
+          }
+          closeSettings()
         }}
       >
-        <div role="tablist" className={styles.navigation}>
-          {sections.map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              role="tab"
-              aria-selected={section === item.value}
-              className={clsx(styles.navItem, section === item.value && styles.navItemActive)}
-              onClick={() => setSection(item.value)}
-            >
-              {item.icon}
-              {t(item.label)}
-            </button>
-          ))}
-        </div>
-        <div role="tabpanel" className={styles.content}>
-          {section === 'general' ? (
-            <>
-              <ThemeSetting />
-              <LocaleSetting />
-              <TtsVoiceSetting />
-              <LocationSetting />
-              <SystemPromptSetting />
-            </>
+        {isMobile ? (
+          inMobileDataPage ? (
+            <div className={clsx(styles.content, styles.mobileDataContent)}>
+              <div className={styles.mobileCard}>
+                <ImportHistory historyImport={historyImport} disabled={historyBusy} />
+              </div>
+              <div className={styles.mobileCard}>
+                <ExportHistory disabled={historyBusy} />
+              </div>
+              <button
+                type="button"
+                className={styles.mobileDangerCard}
+                disabled={historyBusy}
+                onClick={historyDelete.open}
+              >
+                {t('deleteAllSessions')}
+              </button>
+            </div>
           ) : (
-            <>
-              <ApiKeyField editor={apiKeyEditor} />
-              <ImportHistory historyImport={historyImport} disabled={historyBusy} />
-              <ExportHistory disabled={historyBusy} />
-              <SettingCell
-                label={t('deleteAllSessions')}
-                status={null}
-                action={
-                  <Button
-                    variant="dangerOutlined"
-                    size="m"
-                    className={styles.cellButton}
-                    disabled={historyBusy}
-                    onClick={historyDelete.open}
-                  >
-                    {t('delete')}
-                  </Button>
-                }
-              />
-              {isMobile ? <ApiKeyConfirm editor={apiKeyEditor} /> : null}
-            </>
-          )}
-        </div>
+            <div className={styles.content}>
+              <div className={styles.mobileGroupTitle}>
+                {t('settingDialogAsideDataOptionLabel')}
+              </div>
+              <div className={styles.mobileCard}>
+                <ApiKeyField editor={apiKeyEditor} />
+                <ApiKeyConfirm editor={apiKeyEditor} />
+                <button
+                  type="button"
+                  className={styles.mobileNavRow}
+                  onClick={() => setMobilePage('data')}
+                >
+                  <span className={styles.label}>{t('settingDialogAsideDataOptionLabel')}</span>
+                  <span className={styles.mobileNavRight}>
+                    <IconChevronRightOutline14 />
+                  </span>
+                </button>
+              </div>
+              <div className={styles.mobileGroupTitle}>{t('settingGroupApp')}</div>
+              <div className={styles.mobileCard}>
+                <LocaleSetting />
+                <MobileThemeSetting />
+                <LocationSetting />
+              </div>
+              <div className={styles.mobileGroupTitle}>{t('settingGroupChat')}</div>
+              <div className={styles.mobileCard}>
+                <SystemPromptSetting />
+                <MobileTtsVoiceSetting />
+              </div>
+            </div>
+          )
+        ) : (
+          <>
+            <div role="tablist" className={styles.navigation}>
+              {sections.map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  role="tab"
+                  aria-selected={section === item.value}
+                  className={clsx(styles.navItem, section === item.value && styles.navItemActive)}
+                  onClick={() => setSection(item.value)}
+                >
+                  {item.icon}
+                  {t(item.label)}
+                </button>
+              ))}
+            </div>
+            <div role="tabpanel" className={styles.content}>
+              {section === 'general' ? (
+                <>
+                  <ThemeSetting />
+                  <LocaleSetting />
+                  <TtsVoiceSetting />
+                  <LocationSetting />
+                  <SystemPromptSetting />
+                </>
+              ) : (
+                <>
+                  <ApiKeyField editor={apiKeyEditor} />
+                  <ImportHistory historyImport={historyImport} disabled={historyBusy} />
+                  <ExportHistory disabled={historyBusy} />
+                  <SettingCell
+                    label={t('deleteAllSessions')}
+                    status={null}
+                    action={
+                      <Button
+                        variant="dangerOutlined"
+                        size="m"
+                        className={styles.cellButton}
+                        disabled={historyBusy}
+                        onClick={historyDelete.open}
+                      >
+                        {t('delete')}
+                      </Button>
+                    }
+                  />
+                </>
+              )}
+            </div>
+          </>
+        )}
       </Modal>
       {historyImport.file ? <ImportConfirm historyImport={historyImport} /> : null}
       {historyDelete.opened ? <DeleteAllConfirm historyDelete={historyDelete} /> : null}
@@ -211,10 +298,13 @@ const LocationSetting = () => {
   const t = useTranslate()
   const locale = useSettings((state) => state.locale)
   const location = useSettings((state) => state.location)
+  const [provinceOpen, setProvinceOpen] = useState(false)
+  const [cityOpen, setCityOpen] = useState(false)
   const province =
     location?.region === 'CN'
       ? provinces.find((item) => item.code === location.province)
       : undefined
+  const showCitySelect = !province || province.cities.length > 0
 
   return (
     <SettingCell
@@ -229,29 +319,48 @@ const LocationSetting = () => {
                 ariaLabel={t('settingsLocationProvince')}
                 className={styles.provinceSelect}
                 value={province?.code ?? ''}
+                open={provinceOpen}
+                onOpenChange={setProvinceOpen}
                 placeholder={t('settingsLocationProvince')}
                 options={provinces.map((item) => ({ value: item.code, label: item.name }))}
                 onChange={(value) => {
                   if (value !== province?.code) {
-                    setLocation({ region: 'CN', province: value })
+                    const nextProvince = provinces.find((item) => item.code === value)
+                    const defaultCity = nextProvince?.cities[0]?.code
+                    setLocation(
+                      defaultCity
+                        ? { region: 'CN', province: value, city: defaultCity }
+                        : { region: 'CN', province: value }
+                    )
                   }
                 }}
               />
-              <Select
-                ariaLabel={t('settingsLocationCity')}
-                className={styles.citySelect}
-                value={province ? (location?.city ?? '') : ''}
-                disabled={!province?.cities.length}
-                placeholder={t('settingsLocationCity')}
-                options={
-                  province?.cities.map((item) => ({ value: item.code, label: item.name })) ?? []
-                }
-                onChange={(value) => {
-                  if (province) {
-                    setLocation({ region: 'CN', province: province.code, city: value })
+              {showCitySelect ? (
+                <Select
+                  ariaLabel={t('settingsLocationCity')}
+                  className={styles.citySelect}
+                  value={province ? (location?.city ?? '') : ''}
+                  open={province ? cityOpen : false}
+                  onOpenChange={(next) => {
+                    if (!province) {
+                      if (next) {
+                        setProvinceOpen(true)
+                      }
+                      return
+                    }
+                    setCityOpen(next)
+                  }}
+                  placeholder={t('settingsLocationCity')}
+                  options={
+                    province?.cities.map((item) => ({ value: item.code, label: item.name })) ?? []
                   }
-                }}
-              />
+                  onChange={(value) => {
+                    if (province) {
+                      setLocation({ region: 'CN', province: province.code, city: value })
+                    }
+                  }}
+                />
+              ) : null}
             </>
           ) : (
             <Select
@@ -290,6 +399,122 @@ const LocaleSetting = () => {
         />
       }
     />
+  )
+}
+
+const mobileTtsVoices: {
+  value: TtsVoice
+  nameKey: TranslationKey
+  descKey: TranslationKey
+}[] = [
+  {
+    value: 'stella',
+    nameKey: 'settingsTtsVoiceStellaName',
+    descKey: 'settingsTtsVoiceStellaDesc',
+  },
+  {
+    value: 'tide',
+    nameKey: 'settingsTtsVoiceTideName',
+    descKey: 'settingsTtsVoiceTideDesc',
+  },
+]
+
+/** 移动端朗读音色：点击弹出底部圆角抽屉，支持左右滑动与点击圆点切换，抛弃中央胶囊动画且不自动试听 */
+const MobileTtsVoiceSetting = () => {
+  const t = useTranslate()
+  const ttsVoice = useSettings((state) => state.ttsVoice)
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const [draftVoice, setDraftVoice] = useState<TtsVoice>(ttsVoice)
+  const touchStartX = useRef<number | null>(null)
+  const currentVoice =
+    mobileTtsVoices.find((item) => item.value === ttsVoice) ?? mobileTtsVoices[0]
+  const draftIndex = Math.max(
+    0,
+    mobileTtsVoices.findIndex((item) => item.value === draftVoice)
+  )
+  const activeDraft = mobileTtsVoices[draftIndex] ?? mobileTtsVoices[0]
+
+  return (
+    <>
+      <button
+        type="button"
+        className={styles.mobileNavRow}
+        onClick={() => {
+          setDraftVoice(ttsVoice)
+          setSheetOpen(true)
+        }}
+      >
+        <span className={styles.label}>{t('settingsTtsVoice')}</span>
+        <span className={styles.mobileNavRight}>
+          <span className={styles.mobileNavValue}>{t(currentVoice.nameKey)}</span>
+          <IconChevronRightOutline14 />
+        </span>
+      </button>
+      {sheetOpen ? (
+        <Modal
+          title={t('settingsTtsVoice')}
+          closable
+          className={styles.ttsSheet}
+          mainClassName={styles.ttsSheetMain}
+          onClose={() => setSheetOpen(false)}
+        >
+          <div
+            className={styles.ttsStage}
+            onTouchStart={(event) => {
+              touchStartX.current = event.touches[0]?.clientX ?? null
+            }}
+            onTouchEnd={(event) => {
+              const startX = touchStartX.current
+              touchStartX.current = null
+              const endX = event.changedTouches[0]?.clientX
+              if (startX === null || endX === undefined) {
+                return
+              }
+              const dx = endX - startX
+              if (Math.abs(dx) > 36) {
+                const nextIndex =
+                  dx < 0
+                    ? (draftIndex + 1) % mobileTtsVoices.length
+                    : (draftIndex - 1 + mobileTtsVoices.length) % mobileTtsVoices.length
+                const next = mobileTtsVoices[nextIndex]
+                if (next) {
+                  setDraftVoice(next.value)
+                }
+              }
+            }}
+          >
+            <div className={styles.ttsVoiceName}>{t(activeDraft.nameKey)}</div>
+            <div className={styles.ttsVoiceDesc}>{t(activeDraft.descKey)}</div>
+            <div role="tablist" aria-label={t('settingsTtsVoice')} className={styles.ttsDots}>
+              {mobileTtsVoices.map((item) => {
+                const selected = item.value === draftVoice
+                return (
+                  <button
+                    key={item.value}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    aria-label={t(item.nameKey)}
+                    className={clsx(styles.ttsDot, selected && styles.ttsDotActive)}
+                    onClick={() => setDraftVoice(item.value)}
+                  />
+                )
+              })}
+            </div>
+          </div>
+          <button
+            type="button"
+            className={styles.ttsSheetConfirm}
+            onClick={() => {
+              setTtsVoice(draftVoice)
+              setSheetOpen(false)
+            }}
+          >
+            {t('confirm')}
+          </button>
+        </Modal>
+      ) : null}
+    </>
   )
 }
 
@@ -387,6 +612,81 @@ const themeOptions: { value: ThemePreference; label: TranslationKey; icon: React
   },
 ]
 
+const mobileThemeOptions: { value: ThemePreference; label: TranslationKey }[] = [
+  { value: 'system', label: 'avatarMenuSettingsDialogThemeSelectSystemOption' },
+  { value: 'light', label: 'avatarMenuSettingsDialogThemeSelectLightOption' },
+  { value: 'dark', label: 'avatarMenuSettingsDialogThemeSelectDarkOption' },
+]
+
+/** 移动端外观设置：左侧标题，右侧当前值 + 箭头，点击弹出单选确认框 */
+const MobileThemeSetting = () => {
+  const t = useTranslate()
+  const themePreference = useSettings((state) => state.themePreference)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [draftTheme, setDraftTheme] = useState<ThemePreference>(themePreference)
+  const currentOption =
+    mobileThemeOptions.find((item) => item.value === themePreference) ?? mobileThemeOptions[0]
+
+  return (
+    <>
+      <button
+        type="button"
+        className={styles.mobileNavRow}
+        onClick={() => {
+          setDraftTheme(themePreference)
+          setModalOpen(true)
+        }}
+      >
+        <span className={styles.label}>{t('avatarMenuSettingsDialogThemeItemLabel')}</span>
+        <span className={styles.mobileNavRight}>
+          <span className={styles.mobileNavValue}>{t(currentOption.label)}</span>
+          <IconChevronRightOutline14 />
+        </span>
+      </button>
+      {modalOpen ? (
+        <Modal
+          title={t('avatarMenuSettingsDialogThemeItemLabel')}
+          className={styles.themeModal}
+          onClose={() => setModalOpen(false)}
+        >
+          <div
+            role="radiogroup"
+            aria-label={t('avatarMenuSettingsDialogThemeItemLabel')}
+            className={styles.themeRadioList}
+          >
+            {mobileThemeOptions.map((option) => {
+              const checked = draftTheme === option.value
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={checked}
+                  className={styles.themeRadioRow}
+                  onClick={() => setDraftTheme(option.value)}
+                >
+                  <span className={clsx(styles.radioCircle, checked && styles.radioCircleChecked)} />
+                  <span className={styles.themeRadioLabel}>{t(option.label)}</span>
+                </button>
+              )
+            })}
+          </div>
+          <button
+            type="button"
+            className={styles.themeModalConfirm}
+            onClick={() => {
+              setThemePreference(draftTheme)
+              setModalOpen(false)
+            }}
+          >
+            {t('confirm')}
+          </button>
+        </Modal>
+      ) : null}
+    </>
+  )
+}
+
 /**
  * 主题项：标题下方浅色 / 深色 / 跟随系统三个选块。
  * 与下方语言选项连续排列。
@@ -435,31 +735,61 @@ const errorStatus = (key: TranslationKey, error: unknown): Status => ({
 const SettingCell = ({
   label,
   description,
+  infoAsModal = false,
   status,
   action,
   className,
 }: {
   label: string
   description?: string
+  infoAsModal?: boolean
   status: Status
   action: ReactNode
   className?: string
 }) => {
   const t = useTranslate()
+  const [infoOpen, setInfoOpen] = useState(false)
+  const inlineDescription = infoAsModal ? undefined : description
   return (
-    <div className={clsx(styles.cell, styles.row, className)}>
-      <div className={styles.text}>
-        <div className={styles.label}>{label}</div>
-        {status || description ? (
-          <div className={clsx(styles.description, status?.error && styles.error)}>
-            {status
-              ? t(status.key, status.reason ? { message: t(status.reason) } : status.params)
-              : description}
+    <>
+      <div className={clsx(styles.cell, styles.row, className)}>
+        <div className={styles.text}>
+          <div className={styles.labelRow}>
+            <span className={styles.label}>{label}</span>
+            {infoAsModal && description ? (
+              <button
+                type="button"
+                className={styles.infoButton}
+                aria-label={label}
+                onClick={() => setInfoOpen(true)}
+              >
+                <IconWarningOutline16 />
+              </button>
+            ) : null}
           </div>
-        ) : null}
+          {status || inlineDescription ? (
+            <div className={clsx(styles.description, status?.error && styles.error)}>
+              {status
+                ? t(status.key, status.reason ? { message: t(status.reason) } : status.params)
+                : inlineDescription}
+            </div>
+          ) : null}
+        </div>
+        {action}
       </div>
-      {action}
-    </div>
+      {infoOpen && description ? (
+        <Modal title="" className={styles.infoModal} onClose={() => setInfoOpen(false)}>
+          <div className={styles.infoModalText}>{description}</div>
+          <button
+            type="button"
+            className={styles.themeModalConfirm}
+            onClick={() => setInfoOpen(false)}
+          >
+            {t('confirm')}
+          </button>
+        </Modal>
+      ) : null}
+    </>
   )
 }
 
@@ -507,6 +837,7 @@ const ImportHistory = ({
     <SettingCell
       label={t('historyImport')}
       description={t('historyImportDescription')}
+      infoAsModal
       status={historyImport.status}
       action={
         <>
@@ -568,6 +899,7 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
     <SettingCell
       label={t('exportAllLabel')}
       description={t('historyExportDescription')}
+      infoAsModal
       status={status}
       action={
         <Button

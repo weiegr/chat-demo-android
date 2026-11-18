@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
+import { IconChevronDownOutline14 } from '../base/icons.js'
 import {
   buildMessageVersions,
   getVisibleMessages,
@@ -14,6 +15,7 @@ import { closeSearchPanel } from '../search/searchPanelState.js'
 import type { SelectMessageVersion } from './BranchSwitcher.js'
 import { AssistantMessage } from './AssistantMessage.js'
 import { ScrollToBottomContext } from './scrollContext.js'
+import { cancelUserEdit, useUserEdit } from './userEditState.js'
 import { UserMessage } from './UserMessage.js'
 import type { Message } from '../../services/chat/types.js'
 
@@ -90,6 +92,7 @@ export const MessageList = ({
   const contentRef = useRef<HTMLDivElement>(null)
   const stickyRef = useRef(true)
   const scrollTopRef = useRef(0)
+  const [showScrollButton, setShowScrollButton] = useState(false)
   const restoreScrollRef = useRef<{ messageId: string; top: number } | null>(null)
   const messages = useMemo(() => getVisibleMessages(session), [session])
   const [previousVersions, setPreviousVersions] = useState(() =>
@@ -108,6 +111,7 @@ export const MessageList = ({
     if (el && stickyRef.current) {
       el.scrollTop = el.scrollHeight
       scrollTopRef.current = el.scrollTop
+      setShowScrollButton(false)
     }
   }, [])
 
@@ -143,6 +147,21 @@ export const MessageList = ({
   }, [session.id, lastMessageId, scrollToBottom])
 
   useEffect(closeSearchPanel, [session.id, lastMessageId])
+  useEffect(cancelUserEdit, [session.id, lastMessageId])
+
+  const editingUserMessage = useUserEdit((state) => state.active?.sessionId === session.id)
+  useEffect(() => {
+    if (!editingUserMessage) {
+      return
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !document.querySelector('[role="dialog"][aria-modal="true"]')) {
+        cancelUserEdit()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [editingUserMessage])
 
   const selectVersion = useCallback(
     (messageId: string, anchorTop: number) => {
@@ -152,6 +171,7 @@ export const MessageList = ({
       restoreScrollRef.current = { messageId, top: anchorTop }
       stickyRef.current = false
       closeSearchPanel()
+      cancelUserEdit()
       selectMessageVersion(session.id, messageId)
     },
     [session.id, streaming]
@@ -177,6 +197,7 @@ export const MessageList = ({
         stickyRef.current = false
       }
       scrollTopRef.current = el.scrollTop
+      setShowScrollButton(!nearBottom)
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
@@ -187,50 +208,72 @@ export const MessageList = ({
   return (
     <ScrollToBottomContext.Provider value={scrollToBottom}>
       <div ref={isMobile ? undefined : scrollRef} className={styles.container}>
-        <div ref={isMobile ? scrollRef : undefined} className={styles.scroll}>
-          <div
-            ref={contentRef}
-            className={styles.column}
-            data-long={messages.length > LONG_LIST_THRESHOLD ? 'true' : undefined}
-          >
-            {messages.map((message, index) =>
-              message.role === 'user' ? (
-                <UserMessage
-                  key={message.id}
-                  sessionId={session.id}
-                  message={message}
-                  retryUploadId={uploadRetryId}
-                  isFirst={index === 0}
-                  isLast={index === lastIndex || index === lastIndex - 1}
-                  busy={streaming}
-                  versions={versions.get(message.id) ?? EMPTY_VERSIONS}
-                  onSelectVersion={selectVersion}
+        <div className={styles.scrollArea}>
+          <div ref={isMobile ? scrollRef : undefined} className={styles.scroll}>
+            <div
+              ref={contentRef}
+              className={styles.column}
+              data-long={messages.length > LONG_LIST_THRESHOLD ? 'true' : undefined}
+            >
+              {editingUserMessage ? (
+                <div
+                  data-open="true"
+                  className={styles.editMask}
+                  onClick={cancelUserEdit}
                 />
-              ) : index === lastIndex ? (
-                <LiveAssistantMessage
-                  key={message.id}
-                  sessionId={session.id}
-                  message={message}
-                  isLast
-                  streaming={streaming}
-                  busy={streaming}
-                  versions={versions.get(message.id) ?? EMPTY_VERSIONS}
-                  onSelectVersion={selectVersion}
-                />
-              ) : (
-                <AssistantMessage
-                  key={message.id}
-                  sessionId={session.id}
-                  message={message}
-                  isLast={false}
-                  streaming={false}
-                  busy={streaming}
-                  versions={versions.get(message.id) ?? EMPTY_VERSIONS}
-                  onSelectVersion={selectVersion}
-                />
-              )
-            )}
+              ) : null}
+              {messages.map((message, index) =>
+                message.role === 'user' ? (
+                  <UserMessage
+                    key={message.id}
+                    sessionId={session.id}
+                    message={message}
+                    retryUploadId={uploadRetryId}
+                    isFirst={index === 0}
+                    isLast={index === lastIndex || index === lastIndex - 1}
+                    busy={streaming}
+                    versions={versions.get(message.id) ?? EMPTY_VERSIONS}
+                    onSelectVersion={selectVersion}
+                  />
+                ) : index === lastIndex ? (
+                  <LiveAssistantMessage
+                    key={message.id}
+                    sessionId={session.id}
+                    message={message}
+                    isLast
+                    streaming={streaming}
+                    busy={streaming}
+                    versions={versions.get(message.id) ?? EMPTY_VERSIONS}
+                    onSelectVersion={selectVersion}
+                  />
+                ) : (
+                  <AssistantMessage
+                    key={message.id}
+                    sessionId={session.id}
+                    message={message}
+                    isLast={false}
+                    streaming={false}
+                    busy={streaming}
+                    versions={versions.get(message.id) ?? EMPTY_VERSIONS}
+                    onSelectVersion={selectVersion}
+                  />
+                )
+              )}
+            </div>
           </div>
+          {isMobile && showScrollButton ? (
+            <button
+              type="button"
+              className={styles.scrollBottomButton}
+              aria-label="Scroll to bottom"
+              onClick={() => {
+                stickyRef.current = true
+                scrollToBottom()
+              }}
+            >
+              <IconChevronDownOutline14 />
+            </button>
+          ) : null}
         </div>
         {footer}
       </div>

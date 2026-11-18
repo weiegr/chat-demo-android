@@ -1,4 +1,5 @@
 .container {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -6,6 +7,34 @@
   overflow-y: auto;
   scrollbar-gutter: stable both-edges;
   scrollbar-color: var(--scroll-color) transparent;
+}
+
+.scrollArea {
+  display: contents;
+}
+
+.scrollBottomButton {
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 50%;
+  background-color: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-primary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+
+  svg {
+    width: 16px;
+    height: 16px;
+  }
 }
 
 .scroll {
@@ -16,6 +45,14 @@
   .container {
     overflow: hidden;
     scrollbar-gutter: auto;
+  }
+
+  .scrollArea {
+    position: relative;
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
   }
 
   .scroll {
@@ -30,10 +67,22 @@
 }
 
 .column {
+  position: relative;
   width: calc(var(--message-list-max-width) - 2 * var(--message-list-padding-horizontal));
   max-width: calc(100% - 40px);
   margin: 0 auto;
   padding-bottom: 24px;
+}
+
+.editMask {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  background-color: rgba(255, 255, 255, 0.78);
+
+  [data-ds-dark-theme] & {
+    background-color: rgba(0, 0, 0, 0.72);
+  }
 }
 
 /*
