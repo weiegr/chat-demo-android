@@ -1,84 +1,115 @@
-# chat-demo
+# chat-demo-android
 
 [English](README.md) | 简体中文
 
-基于 DeepSeek API 的静态聊天示例。无需应用后端，浏览器直接请求配置的 API 服务。
+基于 [deepseek-ai/chat-demo](https://github.com/deepseek-ai/chat-demo) 开发的 **Android WebView 应用与静态聊天前端（API demo）**。无需应用后端，应用内页面直接请求配置的 DeepSeek API 服务。
 
-点击 [在线体验](https://deepseek-ai.github.io/chat-demo/) 即可使用，也可以前往 [Releases](https://github.com/deepseek-ai/deepseek-chat-demo/releases) 下载压缩包，解压后双击 `index.html` 在本地使用，无需安装或构建。首次使用时，请在设置中填写 API Key。
+- **应用名称**：`API demo`
+- **Android 包名**：`xyz.app566512.apidemo`
+- **系统要求**：Android 8.0+（`minSdkVersion 26`，`targetSdkVersion 34`）
+- **签名方式**：免 Gradle 构建，自动使用本地 `~/.android/debug.keystore` 签名，输出 `dist-apk/chat-demo.apk`
 
-## 运行
+首次使用时，请在应用内 **设置 → 数据管理** 中填写 DeepSeek API Key。
 
-准备 Node.js 22.12+ 和 pnpm：
+## 构建 Android APK
+
+准备以下环境：
+
+- **Node.js 22.12+** 与 **pnpm**
+- **JDK 11+**（需包含 `javac`、`jar`、`keytool`；未加入 `PATH` 时可设置 `JAVA_HOME`）
+- **Android SDK**（需包含 `platforms` 与 `build-tools`，并设置 `ANDROID_HOME` 或 `ANDROID_SDK_ROOT`）
+
+在 Bash / Git Bash / Linux / macOS 下运行：
 
 ```sh
-git clone https://github.com/deepseek-ai/chat-demo.git
-cd chat-demo
 pnpm install
+pnpm build:apk
+```
+
+在 Windows PowerShell 下（因 `package.json` 中的组合命令使用了 `rm -rf` 与行内环境变量）可分步执行：
+
+```powershell
+pnpm install
+$env:NODE_ENV = "production"
+pnpm exec rspack build -c rspack.config.ts
+node scripts/build-apk.mjs
+```
+
+构建脚本 [scripts/build-apk.mjs](scripts/build-apk.mjs) 不依赖 Gradle，会直接调用 `aapt2`、`javac`、`d8`、`jar`、`zipalign` 与 `apksigner`，将前端 `dist/` 打包进 `assets/web/` 并生成已签名的 `dist-apk/chat-demo.apk`。
+
+## 网页运行与构建
+
+本项目仍保留完整的 Web 开发与静态 / 单文件打包能力：
+
+```sh
+# 启动开发服务器（http://localhost:8090）
 pnpm dev
-```
 
-打开 http://localhost:8090 。
-
-生成静态产物：
-
-```sh
+# 生成静态站点产物到 dist/
 pnpm build
-```
 
-产物位于 `dist/`，可部署到静态服务器，也可直接打开 `dist/index.html`。直接打开时，浏览器和 API 服务需允许 `file://` 页面的存储与跨域请求。
-
-需要在手机上以文件形式分发时，可以打包成单文件：
-
-```sh
+# 生成脚本/样式/字体全内联的单文件 HTML（dist-single/index.html）
 pnpm build:single
 ```
 
-产物是 `dist-single/index.html`（约 4.5 MB），脚本、样式、字体全部内联，不依赖相邻目录。Android 文件管理器用 `content://` 打开时相对路径无法解析，必须用这个单文件版本；`content://` 下 `localStorage`、IndexedDB 是否可用取决于浏览器，不可用时应用会退化为仅在本次会话内保存。
+## 功能与 Android 端增强
 
-## 功能
+### 对话与基础能力
 
-- 多会话、自动标题、重命名与删除；编辑提问、重新生成和切换消息分支。
+- 多会话、自动标题、重命名与删除；编辑提问、重新生成与切换消息分支。
 - 流式回答、深度思考、智能搜索、链接阅读与来源引用；支持停止和符合条件的继续生成。
-- 附件上传、粘贴与拖拽，语音输入和回复朗读；移动端录音时输入框首行显示实时频谱。
-- Markdown、代码高亮、KaTeX 公式和 Mermaid 图表。
-- 简体中文与英文、浅色与深色主题、移动端布局、位置设置、历史导入导出。
+- 附件上传（图片与多种文档/代码格式）、语音输入（ASR）与回复朗读（TTS）；移动端录音时输入框首行显示实时频谱。
+- Markdown、Prism 代码高亮、KaTeX 公式和 Mermaid 图表。
+- 简体中文与英文、浅色与深色主题、位置设置、ZIP 历史导入导出。
 
-## 数据
+### Android 与移动端优化
 
-API Key 和设置保存在浏览器 localStorage，会话及附件原件保存在 IndexedDB，本地数据按浏览器用户配置和站点源（origin）隔离。发送对话、上传附件和使用语音功能时，相应内容会提交给配置的 API 服务。
+- **HTTPS 虚拟域名挂载**：WebView 将 `https://appassets.androidplatform.net/` 拦截映射到本地 `assets/web/`，使 `localStorage` 与 IndexedDB 处于标准 HTTPS 同源下稳定持久化。
+- **系统级适配**：Edge-to-Edge 状态栏与导航栏安全区适配（`--safe-top` / `--safe-bottom`）、系统深浅色同步、物理/手势返回键优先关闭弹窗与侧栏。
+- **原生媒体与权限接入**：移动端输入框「+」面板集成相机拍照、系统相册、文件选择器，授权相册后直接显示最近 10 张照片缩略图快选；语音输入自动申请系统录音权限。
+- **导出写入系统下载目录**：导出历史对话 ZIP 时自动拦截 `blob:` 下载并写入手机公共 `Download/` 目录。
+- **移动端交互优化**：手势滑动开合侧边栏抽屉；历史对话列表仅在选中当前会话时显示三点菜单（桌面端保留悬停显示）；支持在底部输入栏编辑历史提问与增删附件；图片支持站内全屏预览；设置弹窗适配移动端卡片分页布局。
 
-设置中的历史导入导出使用 ZIP 格式。导入会在确认并校验成功后替换全部本地会话和附件；导出包含会话与本地可用的图片原件，不包含 API Key、设置或非图片附件原件。格式与保留范围见[历史导入导出](src/services/chat/history/README.md)。
+## 数据存储与备份
 
-设置 → 数据管理 → 删除所有对话，会在确认后清空全部本地会话、附件原件和未发送的草稿，停止正在生成的回复并回到新对话。API Key 和其他设置保留，已上传到 API 服务的文件不受影响。
+- **存储位置**：API Key 和应用设置保存在 `localStorage`，会话记录、分支与附件原件保存在 IndexedDB（按包名所在的应用私有沙盒隔离）。发送对话、上传附件与使用语音功能时，相应内容会直接提交给配置的 API 服务。
+- **卸载与升级提示**：
+  - **直接卸载应用** 会连同应用私有沙盒数据一并清空，导致本地历史对话和 API Key 丢失。
+  - **同包名、同签名覆盖安装** 升级新版时，历史会话与设置会保留。
+  - 卸载或更换设备前，请通过 **设置 → 数据管理 → 导出所有历史对话** 将 ZIP 备份保存至手机 `Download/` 目录；重装后再导入即可恢复历史会话（导出包含会话与本地图片原件，不包含 API Key 与非图片附件原件，格式详见 [历史导入导出](src/services/chat/history/README.md)）。
+- **删除全部对话**：**设置 → 数据管理 → 删除所有对话** 会在确认后清空全部本地会话、附件原件和未发送草稿，保留 API Key 与应用设置，不影响已上传到 API 服务的文件。
 
-## 开发
+## 开发命令与目录结构
 
-| 命令                | 用途                     |
-| ------------------- | ------------------------ |
-| `pnpm dev`          | 启动开发服务器           |
-| `pnpm build`        | 构建到 `dist/`           |
-| `pnpm build:single` | 构建单文件到 `dist-single/` |
-| `pnpm type`         | TypeScript 类型检查      |
-| `pnpm lint`         | oxlint 检查              |
-| `pnpm format`       | oxfmt 格式化             |
+| 命令                | 用途                                  |
+| ------------------- | ------------------------------------- |
+| `pnpm dev`          | 启动本地开发服务器                    |
+| `pnpm build`        | 构建静态站点到 `dist/`                |
+| `pnpm build:single` | 构建单文件产物到 `dist-single/`       |
+| `pnpm build:apk`    | 构建并签名 Android APK 到 `dist-apk/` |
+| `pnpm type`         | TypeScript 类型检查                   |
+| `pnpm lint`         | oxlint 检查                           |
+| `pnpm format`       | oxfmt 格式化                          |
 
-[rspack.config.ts](rspack.config.ts) 默认连接 `https://api.deepseek.com`。`createConfig({ apiOrigin, devServer, singleFile })` 支持自定义 API 地址、开发服务器代理和单文件产物。
-
-聊天默认使用 `deepseek-flash`，通过 Anthropic 兼容的 Messages / Files API 通信；语音使用 ASR / TTS 接口。请求使用搜索、链接阅读、标题和 `latest_reminder` 等扩展，接入服务需支持相应能力。附件实际支持的格式以服务端校验为准。
+[rspack.config.ts](rspack.config.ts) 默认连接 `https://api.deepseek.com`，可通过 `createConfig({ apiOrigin, devServer, singleFile })` 自定义 API 地址与代理配置。聊天默认使用 `deepseek-flash`，通过 Anthropic 兼容 Messages / Files API 通信，语音使用 ASR / TTS 接口。
 
 ```text
+android/               AndroidManifest.xml、MainActivity.java 与图标/主题资源
+scripts/
+  build-apk.mjs        免 Gradle Android APK 构建与签名脚本
+  inline-dist.mjs      单文件 HTML 内联脚本
 src/
-  app/                 应用布局、主题与全局样式
-  components/          聊天、设置、Markdown 等界面组件
+  app/                 应用布局、主题联动、视口与全局样式
+  components/          聊天输入、消息列表、搜索引用、Markdown、设置与侧边栏组件
   i18n/                中英文文案
   services/
     api/               API 请求、SSE 与协议类型
-    chat/              会话、消息分支、本地存储与历史导入导出
-    markdown/          Markdown 解析、代码高亮与图表
-    speech/            录音与朗读
+    chat/              会话、分支树、IndexedDB/内存存储与 ZIP 导入导出
+    markdown/          Markdown 解析、代码高亮、公式与 Mermaid 图表
+    speech/            录音编码与流式 PCM 朗读
   utils/               通用工具
 ```
 
 ## 许可证
 
-[MIT](LICENSE)。构建会将许可证复制到 `dist/LICENSE`，分发时请一并保留；第三方依赖遵循各自的许可证。
+[MIT](LICENSE)，衍生自 [deepseek-ai/chat-demo](https://github.com/deepseek-ai/chat-demo)。构建会将许可证复制到 `dist/LICENSE`，分发时请一并保留；第三方依赖遵循各自的许可证。

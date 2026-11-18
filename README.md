@@ -1,84 +1,115 @@
-# chat-demo
+# chat-demo-android
 
 English | [简体中文](README.zh-CN.md)
 
-A static chat demo powered by the DeepSeek API. No application backend is required: the browser connects directly to the configured API service.
+An **Android WebView app and static chat client (`API demo`)** built on top of [deepseek-ai/chat-demo](https://github.com/deepseek-ai/chat-demo). No application backend is required: the embedded web app connects directly to the configured DeepSeek API service.
 
-You can [try the app online](https://deepseek-ai.github.io/chat-demo/) or download the archive from [Releases](https://github.com/deepseek-ai/deepseek-chat-demo/releases), extract it, and double-click `index.html` to use it locally without installation or a build. Enter your API key in Settings before your first chat.
+- **App Name**: `API demo`
+- **Android Package Name**: `xyz.app566512.apidemo`
+- **Minimum / Target SDK**: Android 8.0+ (`minSdkVersion 26`, `targetSdkVersion 34`)
+- **Signing**: Gradle-free build using `~/.android/debug.keystore`, outputting `dist-apk/chat-demo.apk`
 
-## Getting started
+Enter your DeepSeek API key in **Settings → Data** before starting your first chat.
 
-Install Node.js 22.12+ and pnpm, then run:
+## Building the Android APK
+
+Prerequisites:
+
+- **Node.js 22.12+** and **pnpm**
+- **JDK 11+** (providing `javac`, `jar`, and `keytool`; set `JAVA_HOME` if not in `PATH`)
+- **Android SDK** (with `platforms` and `build-tools` installed, and `ANDROID_HOME` or `ANDROID_SDK_ROOT` set)
+
+On Bash / Git Bash / Linux / macOS:
 
 ```sh
-git clone https://github.com/deepseek-ai/chat-demo.git
-cd chat-demo
 pnpm install
+pnpm build:apk
+```
+
+On Windows PowerShell (since the `package.json` script uses `rm -rf` and inline env vars), run step by step:
+
+```powershell
+pnpm install
+$env:NODE_ENV = "production"
+pnpm exec rspack build -c rspack.config.ts
+node scripts/build-apk.mjs
+```
+
+[scripts/build-apk.mjs](scripts/build-apk.mjs) builds without Gradle by directly invoking `aapt2`, `javac`, `d8`, `jar`, `zipalign`, and `apksigner`, packaging `dist/` into `assets/web/` and producing the signed `dist-apk/chat-demo.apk`.
+
+## Web Development & Builds
+
+All original web development, static build, and single-file build workflows remain supported:
+
+```sh
+# Start the dev server (http://localhost:8090)
 pnpm dev
-```
 
-Open http://localhost:8090.
-
-To build the static site:
-
-```sh
+# Build the static site into dist/
 pnpm build
-```
 
-The output is written to `dist/`. Deploy it to a static web server or open `dist/index.html` directly. Opening the file directly requires browser support for storage on `file://` pages and an API service that permits their cross-origin requests.
-
-To ship one self-contained HTML file (for example, to open on a phone from a file manager):
-
-```sh
+# Build a self-contained single HTML file into dist-single/index.html
 pnpm build:single
 ```
 
-The result is `dist-single/index.html` (about 4.5 MB) with scripts, styles, and fonts inlined, so it needs no sibling directories. Android file managers open local files through `content://` URIs, where relative asset paths cannot resolve; this build is the way around it. Whether `localStorage` and IndexedDB work under `content://` depends on the browser; when they are blocked, the app falls back to in-memory storage for the current session.
+## Features & Android Enhancements
 
-## Features
+### Core Capabilities
 
 - Multiple conversations with automatic titles, renaming, and deletion; edit prompts, regenerate replies, and switch between message branches.
 - Streaming replies, deep thinking, smart search, link reading, and source citations; stop generation or continue eligible replies.
-- Upload, paste, or drag and drop attachments; use voice input and read replies aloud. A live audio spectrum appears in the first row of the input area while recording on mobile.
-- Markdown, syntax highlighting, KaTeX math, and Mermaid diagrams.
-- Simplified Chinese and English, light and dark themes, mobile layouts, location settings, and chat history import and export.
+- Attachment uploads (images, documents, and code files), voice input (ASR), and read-aloud playback (TTS) with a live audio spectrum while recording on mobile.
+- Markdown, Prism syntax highlighting, KaTeX math, and Mermaid diagrams.
+- Simplified Chinese and English, light and dark themes, location settings, and ZIP chat history import/export.
 
-## Data and storage
+### Android & Mobile Enhancements
 
-Your API key and settings are stored in the browser's localStorage. Conversations and original attachments are stored in IndexedDB. Local data is isolated by browser profile and site origin. Sending messages, uploading attachments, and using speech features sends the relevant content to the configured API service.
+- **Virtual HTTPS Origin**: WebView intercepts `https://appassets.androidplatform.net/` and serves `assets/web/`, ensuring `localStorage` and IndexedDB persist reliably under a standard HTTPS origin.
+- **Native Integration**: Edge-to-Edge status/navigation bar safe-area insets (`--safe-top` / `--safe-bottom`), OS dark/light theme synchronization, and Back button handling to dismiss open drawers, menus, or modals first.
+- **Media & Permissions**: Mobile `+` attachment panel integrates native camera capture, system photo picker, generic file chooser, and a quick-select strip of the 10 most recent photos once gallery permission is granted; microphone permission is requested dynamically for voice input.
+- **Downloads Support**: Intercepts `blob:` exports and saves chat history ZIP archives directly to the device's `Download/` folder.
+- **Mobile UI Refinements**: Swipe gestures for the sidebar drawer; three-dot menu on chat list items shown only for the active session on touch devices (hover preserved on desktop); inline bottom-composer editing of user messages and attachments; in-app image preview modal; and mobile card navigation for Settings.
 
-History import and export in Settings use ZIP archives. After confirmation and successful validation, importing replaces all local conversations and attachments. Exports include conversations and locally available original images, but exclude API keys, settings, and original non-image attachments. See the [history import/export documentation (Chinese)](src/services/chat/history/README.md) for the archive format and preservation details.
+## Data Storage & Backup
 
-Settings → Data → Delete all chats clears all local conversations, original attachments, and unsent drafts after confirmation. It stops ongoing replies and returns to a new chat. Your API key and settings are preserved; files already uploaded to the API service are not deleted.
+- **Where data lives**: Your API key and preferences are stored in `localStorage`, while conversations, message branches, and original attachments are stored in IndexedDB inside the app's private WebView sandbox (isolated by package name). Sending messages, uploading files, or using speech features submits the relevant data to the configured API service.
+- **Uninstall & Upgrade Notes**:
+  - **Uninstalling the app** deletes the app's private sandbox directory, removing all local chats and your saved API key.
+  - **Overwriting / upgrading** in place with the same package name and signing keystore preserves existing conversations and settings.
+  - Before uninstalling or switching devices, use **Settings → Data → Export all chats** to save a ZIP backup to your `Download/` folder. Exports include conversations and locally stored original images, but exclude API keys and original non-image files (see [history import/export docs (Chinese)](src/services/chat/history/README.md)).
+- **Clear all chats**: **Settings → Data → Delete all chats** clears all local conversations, original attachments, and unsent drafts after confirmation while keeping your API key, settings, and previously uploaded server files intact.
 
-## Development
+## Development & Structure
 
-| Command             | Description                    |
-| ------------------- | ------------------------------ |
-| `pnpm dev`          | Start the development server   |
-| `pnpm build`        | Build into `dist/`             |
-| `pnpm build:single` | Build one file into `dist-single/` |
-| `pnpm type`         | Run TypeScript type checks     |
-| `pnpm lint`         | Lint with oxlint               |
-| `pnpm format`       | Format with oxfmt              |
+| Command             | Description                                            |
+| ------------------- | ------------------------------------------------------ |
+| `pnpm dev`          | Start the development server                           |
+| `pnpm build`        | Build static assets into `dist/`                       |
+| `pnpm build:single` | Build a single self-contained HTML into `dist-single/` |
+| `pnpm build:apk`    | Build and sign Android APK into `dist-apk/`            |
+| `pnpm type`         | Run TypeScript type checks                             |
+| `pnpm lint`         | Lint with oxlint                                       |
+| `pnpm format`       | Format with oxfmt                                      |
 
-[rspack.config.ts](rspack.config.ts) uses `https://api.deepseek.com` by default. Use `createConfig({ apiOrigin, devServer, singleFile })` to customize the API origin, the development server proxy, and the single-file output.
-
-Chat uses `deepseek-flash` by default through Anthropic-compatible Messages / Files APIs. Speech features use ASR / TTS endpoints. Requests include extensions for search, link reading, titles, and `latest_reminder`, so the configured service must support the corresponding capabilities. Supported attachment formats are determined by server-side validation.
+[rspack.config.ts](rspack.config.ts) uses `https://api.deepseek.com` by default and supports `createConfig({ apiOrigin, devServer, singleFile })`. Chat defaults to `deepseek-flash` over Anthropic-compatible Messages / Files APIs, with ASR / TTS speech endpoints.
 
 ```text
+android/               AndroidManifest.xml, MainActivity.java, and app icon/theme resources
+scripts/
+  build-apk.mjs        Gradle-free Android APK build and signing script
+  inline-dist.mjs      Single-file HTML inlining script
 src/
-  app/                 Application layout, themes, and global styles
-  components/          Chat, settings, Markdown, and other UI components
-  i18n/                English and Chinese translations
+  app/                 App layout, theme sync, viewport adaptation, and global styles
+  components/          Chat input, messages, search citations, Markdown, settings, and sidebar
+  i18n/                Chinese and English translations
   services/
-    api/               API requests, SSE, and protocol types
-    chat/              Conversations, message branches, storage, and history import/export
-    markdown/          Markdown parsing, syntax highlighting, and diagrams
-    speech/            Audio recording and read-aloud playback
+    api/               API client, SSE parser, and protocol types
+    chat/              Sessions, branch tree, IndexedDB/memory storage, and ZIP backup
+    markdown/          Markdown AST parsing, Prism highlighting, KaTeX, and Mermaid
+    speech/            Audio recording and streaming PCM read-aloud
   utils/               Shared utilities
 ```
 
 ## License
 
-[MIT](LICENSE). The build copies the license to `dist/LICENSE`; include it when distributing the app. Third-party dependencies are subject to their own licenses.
+[MIT](LICENSE), derived from [deepseek-ai/chat-demo](https://github.com/deepseek-ai/chat-demo). The build copies `LICENSE` to `dist/LICENSE`; include it when redistributing. Third-party dependencies remain under their own licenses.
