@@ -3,13 +3,13 @@ import { useEffect, useRef, useState } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import {
+  DEFAULT_EXPERT_SYSTEM_PROMPT,
+  DEFAULT_FAST_SYSTEM_PROMPT,
   DEFAULT_LOCATION_TOOL_PROMPT,
   DEFAULT_READ_LINK_TOOL_PROMPT,
   DEFAULT_RP_SYSTEM_PROMPT,
   DEFAULT_SEARCH_TOOL_PROMPT,
-  DEFAULT_SYSTEM_PROMPT,
   setExpertLocationToolPrompt,
-  setExpertReadLinkToolPrompt,
   setExpertSearchToolPrompt,
   setExpertSystemPrompt,
   setFastLocationToolPrompt,
@@ -34,7 +34,6 @@ export type PromptTarget =
   | 'fastLocationTool'
   | 'expertSystem'
   | 'expertSearchTool'
-  | 'expertReadLinkTool'
   | 'expertLocationTool'
   | 'rpSystem'
 
@@ -52,7 +51,7 @@ const PROMPT_TARGET_CONFIG: Record<PromptTarget, PromptConfig> = {
     titleKey: 'settingsFastSystemPrompt',
     descKey: 'settingsFastSystemPromptDesc',
     placeholderKey: 'settingsSystemPromptPlaceholder',
-    defaultValue: DEFAULT_SYSTEM_PROMPT,
+    defaultValue: DEFAULT_FAST_SYSTEM_PROMPT,
     read: () => useSettings.getState().fastSystemPrompt,
     save: setFastSystemPrompt,
   },
@@ -84,7 +83,7 @@ const PROMPT_TARGET_CONFIG: Record<PromptTarget, PromptConfig> = {
     titleKey: 'settingsExpertSystemPrompt',
     descKey: 'settingsExpertSystemPromptDesc',
     placeholderKey: 'settingsSystemPromptPlaceholder',
-    defaultValue: DEFAULT_SYSTEM_PROMPT,
+    defaultValue: DEFAULT_EXPERT_SYSTEM_PROMPT,
     read: () => useSettings.getState().expertSystemPrompt,
     save: setExpertSystemPrompt,
   },
@@ -95,14 +94,6 @@ const PROMPT_TARGET_CONFIG: Record<PromptTarget, PromptConfig> = {
     defaultValue: DEFAULT_SEARCH_TOOL_PROMPT,
     read: () => useSettings.getState().expertSearchToolPrompt,
     save: setExpertSearchToolPrompt,
-  },
-  expertReadLinkTool: {
-    titleKey: 'settingsExpertReadLinkToolPrompt',
-    descKey: 'settingsExpertReadLinkToolPromptDesc',
-    placeholderKey: 'settingsToolPromptPlaceholder',
-    defaultValue: DEFAULT_READ_LINK_TOOL_PROMPT,
-    read: () => useSettings.getState().expertReadLinkToolPrompt,
-    save: setExpertReadLinkToolPrompt,
   },
   expertLocationTool: {
     titleKey: 'settingsExpertLocationToolPrompt',
@@ -130,7 +121,8 @@ const MODE_PROMPT_GROUPS: { main: PromptTarget; tools: PromptTarget[] }[] = [
   },
   {
     main: 'expertSystem',
-    tools: ['expertSearchTool', 'expertReadLinkTool', 'expertLocationTool'],
+    // v4-pro 不支持 deepseek_read_url，链接阅读提示词条目随之移除
+    tools: ['expertSearchTool', 'expertLocationTool'],
   },
 ]
 

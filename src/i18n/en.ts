@@ -10,7 +10,7 @@ export const en = {
   welcomeModeTitleExpert: 'Start chatting in Expert mode',
   welcomeModeTitleRp: 'Start chatting in RP mode',
   chatModeFastHint: 'Fast responses with full features,\npowered by Flash',
-  chatModeExpertHint: 'Built for complex tasks, no vision or web search, powered by Pro',
+  chatModeExpertHint: 'Built for complex tasks, no vision support, powered by Pro',
   chatModeRpHint: 'Tailored for roleplay and long context,\nwithout search or global memory',
   chatModeSwitchInNewSessionHint: 'Switch modes in a new chat',
   expandSiderbarButton: 'Open sidebar',
@@ -136,9 +136,6 @@ export const en = {
   settingsExpertSearchToolPrompt: 'Expert mode search tool prompt',
   settingsExpertSearchToolPromptDesc:
     'Search instructions appended in Expert mode when Search is enabled; leave empty to omit.',
-  settingsExpertReadLinkToolPrompt: 'Expert mode link reader tool prompt',
-  settingsExpertReadLinkToolPromptDesc:
-    'Link-reading instructions appended in Expert mode when a message contains a URL; leave empty to omit.',
   settingsExpertLocationToolPrompt: 'Expert mode location tool prompt',
   settingsExpertLocationToolPromptDesc:
     'Sent as the get_location tool description in Expert mode when AI location is enabled with DeepThink and Search; leave empty to use default.',
@@ -262,6 +259,8 @@ export const en = {
   thinkingSwitch: 'DeepThink',
   deactivatedSearchTooltip: 'Search the web when necessary',
   search: 'Search',
+  bypassSearch: 'Bypass search',
+  bypassSearchTooltip: 'Search the web before sending and attach the results',
   uploadFile: 'Upload files',
   attachCamera: 'Camera',
   attachAlbum: 'Album',

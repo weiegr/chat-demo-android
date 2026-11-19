@@ -257,6 +257,8 @@ type UserParamOptions = {
   ocrTexts?: Map<string, string>
   strictInline?: boolean
   useOcrForVisual?: boolean
+  /** 置于正文最前的注入文本（旁路搜索结果），与内联附件、正文按空行连接 */
+  prepend?: string
 }
 
 /**
@@ -268,7 +270,7 @@ type UserParamOptions = {
  */
 const toUserParam = (
   { content, files }: UserMessage,
-  { texts, ocrTexts, strictInline = false, useOcrForVisual = false }: UserParamOptions = {}
+  { texts, ocrTexts, strictInline = false, useOcrForVisual = false, prepend }: UserParamOptions = {}
 ): MessageParam => {
   const isInlinedText = (file: FileAttachment) =>
     isTextAttachment(file) && (strictInline || texts?.has(file.id))
@@ -297,7 +299,7 @@ const toUserParam = (
     }
     return []
   })
-  const merged = [...inline, content].filter((part) => part !== '').join('\n\n')
+  const merged = [prepend, ...inline, content].filter((part) => part !== '').join('\n\n')
   return blocks.length === 0
     ? { role: 'user', content: merged }
     : {
@@ -443,6 +445,8 @@ export const toRequestMessages = (
     omitServerTools?: boolean
     omitLatestReminder?: boolean
     useOcrForVisual?: boolean
+    /** 旁路搜索注入文本，仅置于本轮提问最前（历史轮搜索块不进请求） */
+    searchContext?: string
   }
 ): MessageParam[] => {
   const texts = options?.texts
@@ -490,7 +494,15 @@ export const toRequestMessages = (
     )
   }
   appendReminder(latestReminder)
-  messages.push(toUserParam(question, { texts, ocrTexts, strictInline: true, useOcrForVisual }))
+  messages.push(
+    toUserParam(question, {
+      texts,
+      ocrTexts,
+      strictInline: true,
+      useOcrForVisual,
+      prepend: options?.searchContext,
+    })
+  )
   if (toolLoopReply) {
     messages.push(...toReplyParams(toolLoopReply, true, thinking, omitServerTools))
   } else if (prefix?.prefix) {

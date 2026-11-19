@@ -727,19 +727,23 @@ const Input = ({
                 <span className={styles.toggleLabel}>{t('thinkingSwitch')}</span>
               </button>
             </Tooltip>
-            {/* v4-pro 不支持服务端搜索工具，开关随 RP 模式一并隐藏 */}
-            {isRpMode || useOcrModel ? null : (
-              <Tooltip content={t('deactivatedSearchTooltip')}>
+            {/* v4-pro 不支持服务端搜索工具，专家模式开关走客户端旁路搜索 */}
+            {isRpMode ? null : (
+              <Tooltip
+                content={t(useOcrModel ? 'bypassSearchTooltip' : 'deactivatedSearchTooltip')}
+              >
                 <button
                   type="button"
                   className={clsx(styles.toggle, search && styles.selected)}
-                  aria-label={t('search')}
+                  aria-label={t(useOcrModel ? 'bypassSearch' : 'search')}
                   aria-pressed={search}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => setSearch(!search)}
                 >
                   <IconGlobeLanguageOutline14 active={search} />
-                  <span className={styles.toggleLabel}>{t('search')}</span>
+                  <span className={styles.toggleLabel}>
+                    {t(useOcrModel ? 'bypassSearch' : 'search')}
+                  </span>
                 </button>
               </Tooltip>
             )}

@@ -2,6 +2,12 @@ import { create } from 'zustand'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
 import { isOcrSupportedAttachment, recognizeFileText } from '../api/ocr.js'
+import {
+  rewriteSearchQuery,
+  searchWeb,
+  truncateSearchQuery,
+  type SearchApiResult,
+} from '../api/search.js'
 import type { ChatModel, ClientToolDefinition, CreateMessageRequest } from '../api/types.js'
 import {
   classifyStatus,
@@ -17,6 +23,7 @@ import {
   resolveModeModel,
   useSettings,
   type ChatMode,
+  type Locale,
 } from '../settings.js'
 import { appendBranch, getVisibleMessages, normalizeSession, selectVersion } from './branches.js'
 import * as db from './db.js'
@@ -150,6 +157,48 @@ const buildLocalTitle = (question: UserMessage): string => {
   const fromContent = question.content.replace(/\s+/g, ' ').trim()
   const raw = fromContent || question.files[0]?.name.replace(/\.[^.]+$/, '').trim() || ''
   return Array.from(raw).slice(0, LOCAL_TITLE_MAX_CHARS).join('').trim()
+}
+
+/**
+ * 搜索结果按 URL 去重：来源面板按 URL 首次出现登记角标编号，
+ * 重复项会让注入文本里的 [N] 与角标错位。
+ */
+const dedupeSearchResults = (results: SearchApiResult[]): SearchApiResult[] => {
+  const seen = new Set<string>()
+  return results.filter((item) => {
+    if (seen.has(item.url)) {
+      return false
+    }
+    seen.add(item.url)
+    return true
+  })
+}
+
+/**
+ * 把旁路搜索结果格式化为注入提问的文本。
+ * 编号与伪工具块里结果的顺序一致，模型输出 [citation:N] 后由渲染层解析成角标。
+ */
+const buildSearchContext = (results: SearchApiResult[], locale: Locale): string => {
+  const isZh = locale === 'zh-CN'
+  const items = results.map((item, index) => {
+    const site = [item.site_name, item.date?.slice(0, 10)].filter(Boolean).join(isZh ? '，' : ', ')
+    return [
+      `[${index + 1}] ${item.title}${site ? (isZh ? `（${site}）` : ` (${site})`) : ''}`,
+      item.summary || item.snippet,
+      isZh ? `链接：${item.url}` : `Link: ${item.url}`,
+    ]
+      .filter((part) => part !== '')
+      .join('\n')
+  })
+  return [
+    isZh ? '【联网搜索结果】' : '[Web search results]',
+    ...items,
+    isZh
+      ? '请结合以上搜索结果回答；引用某条结果时在句末使用 [citation:N]（N 为对应编号）标注。若结果与问题无关，请忽略并直接回答。'
+      : 'Answer using the search results above. When citing a result, append [citation:N] (N is its number) at the end of the sentence. Ignore the results and answer directly if they are irrelevant.',
+  ]
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 /** 允许自动补标题的请求；手动重命名后取消本轮标题写入，包含主动清空标题的情况。 */
@@ -1381,6 +1430,8 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
   // v4-pro 无原生识图，且服务端不支持 server-side 工具、title 与 latest_reminder 等扩展能力
   const isV4Pro = model === 'deepseek-v4-pro'
   const useOcrForVisual = isV4Pro
+  /** 旁路搜索：v4-pro 不支持服务端搜索工具，改为发送前客户端先搜、结果注入提问 */
+  const bypassSearch = !isRpMode && isV4Pro && (initial.search ?? false)
   let reply = initial
   let prepared: PreparedRequest = request
   let frame = 0
@@ -1393,6 +1444,8 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
 
   try {
     let toolRound = 0
+    /** 旁路搜索注入文本；附件重传重试时沿用首轮结果，不重复搜索 */
+    let searchContext: string | undefined
     for (let attempt = 0; ; attempt += 1) {
       /** 附件补齐或 OCR 前出错属于预处理失败，主对话请求还没有发出 */
       let preparing = toolRound === 0
@@ -1413,6 +1466,84 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           reply = { ...reply, latestReminder }
           // 只进草稿槽，收尾时随整段回复一起落盘；这里再写一次是整段会话的重复克隆。
           updateReply(sessionId, reply)
+          // 旁路搜索：先改写查询词再调独立搜索接口，结果以伪工具块驱动既有引用展示，
+          // 同时注入提问让模型基于结果作答。守卫空 blocks 避免附件重传重试时重复搜索。
+          if (bypassSearch && reply.blocks.length === 0 && prepared.question.content.trim()) {
+            const questionText = prepared.question.content
+            const searchApiKey = useSettings.getState().apiKey ?? ''
+            let query = truncateSearchQuery(questionText)
+            try {
+              query = await rewriteSearchQuery(searchApiKey, questionText, controller.signal)
+            } catch (error) {
+              if (controller.signal.aborted) {
+                throw error
+              }
+              // 改写失败降级：直接用原问题截断作为查询词
+            }
+            const toolUseId = `bypass-search-${createId()}`
+            reply = {
+              ...reply,
+              blocks: [
+                ...reply.blocks,
+                {
+                  type: 'server_tool_use',
+                  id: toolUseId,
+                  name: 'deepseek_web_search',
+                  input: { action: 'search', queries: [query] },
+                  caller: { type: 'direct' },
+                  kind: 'search',
+                },
+              ],
+            }
+            updateReply(sessionId, reply)
+            let results: SearchApiResult[] | null = null
+            try {
+              results = dedupeSearchResults(
+                await searchWeb(
+                  searchApiKey,
+                  { query, oriQuestion: truncateSearchQuery(questionText) },
+                  controller.signal
+                )
+              )
+            } catch (error) {
+              if (controller.signal.aborted) {
+                throw error
+              }
+              // 搜索失败：结果块记错误项展示「暂不可用」，请求继续（无搜索上下文）
+            }
+            reply = {
+              ...reply,
+              blocks: [
+                ...reply.blocks,
+                {
+                  type: 'web_search_tool_result',
+                  tool_use_id: toolUseId,
+                  content: results
+                    ? results.map((item) => ({
+                        type: 'web_search_result' as const,
+                        title: item.title,
+                        url: item.url,
+                        snippet: item.snippet,
+                        site_icon: item.site_icon,
+                        site_name: item.site_name,
+                        encrypted_content: '',
+                        page_age: item.date,
+                      }))
+                    : [
+                        {
+                          type: 'web_search_tool_result_error' as const,
+                          error_code: 'unavailable' as const,
+                        },
+                      ],
+                  kind: 'search' as const,
+                },
+              ],
+            }
+            updateReply(sessionId, reply)
+            if (results && results.length > 0) {
+              searchContext = buildSearchContext(results, settingsSnapshot.locale)
+            }
+          }
         }
         const messages = toRequestMessages(
           prepared.history,
@@ -1427,6 +1558,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             omitServerTools: isRpMode,
             omitLatestReminder: isV4Pro,
             useOcrForVisual,
+            searchContext,
           }
         )
         const currentSettings = useSettings.getState()

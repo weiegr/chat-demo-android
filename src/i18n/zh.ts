@@ -8,7 +8,7 @@ export const zh = {
   welcomeModeTitleExpert: '使用专家模式开始对话',
   welcomeModeTitleRp: '使用RP模式开始对话',
   chatModeFastHint: '响应快速，功能完整，\n运行于Flash模型',
-  chatModeExpertHint: '适合复杂问题，无识图与联网搜索，运行于Pro模型',
+  chatModeExpertHint: '适合复杂问题，无识图功能，运行于Pro模型',
   chatModeRpHint: '适合角色扮演，为长上下文打造，\n无搜索、全局记忆功能',
   chatModeSwitchInNewSessionHint: '需要在新会话切换模式',
   expandSiderbarButton: '打开边栏',
@@ -128,9 +128,6 @@ export const zh = {
   settingsExpertSearchToolPrompt: '专家模式搜索工具提示词',
   settingsExpertSearchToolPromptDesc:
     '专家模式开启「智能搜索」时附带给模型的联网搜索说明，留空则不附带。',
-  settingsExpertReadLinkToolPrompt: '专家模式链接阅读工具提示词',
-  settingsExpertReadLinkToolPromptDesc:
-    '专家模式检测到消息包含网页链接时附带给模型的阅读链接说明，留空则不附带。',
   settingsExpertLocationToolPrompt: '专家模式实时定位工具提示词',
   settingsExpertLocationToolPromptDesc:
     '专家模式开启「允许 AI 主动请求真实位置」（且启用深度思考与智能搜索）时，作为 get_location 工具描述发送给模型；留空则恢复默认描述。',
@@ -250,6 +247,8 @@ export const zh = {
   thinkingSwitch: '深度思考',
   deactivatedSearchTooltip: '按需搜索网页',
   search: '智能搜索',
+  bypassSearch: '旁路搜索',
+  bypassSearchTooltip: '发送前先搜索网页，结果随提问一起提交',
   uploadFile: '上传文件',
   attachCamera: '拍照',
   attachAlbum: '相册',
