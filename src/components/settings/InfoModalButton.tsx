@@ -9,14 +9,12 @@ import styles from './Settings.module.css'
 export const InfoModalButton = ({
   ariaLabel,
   description,
-  extra,
   actionLabel,
   onAction,
   warning = false,
 }: {
   ariaLabel: string
   description: ReactNode
-  extra?: ReactNode
   actionLabel?: string
   onAction?: () => void
   warning?: boolean
@@ -39,10 +37,7 @@ export const InfoModalButton = ({
       </button>
       {open ? (
         <Modal title="" className={styles.infoModal} onClose={() => setOpen(false)}>
-          <div className={styles.infoModalText}>
-            <div>{description}</div>
-            {extra ? <div className={styles.infoModalExtra}>{extra}</div> : null}
-          </div>
+          <div className={styles.infoModalText}>{description}</div>
           {actionLabel && onAction ? (
             <div className={styles.infoModalActions}>
               <button

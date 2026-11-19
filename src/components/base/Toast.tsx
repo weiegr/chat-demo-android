@@ -6,20 +6,25 @@ import styles from './Toast.module.css'
 
 export const Toast = () => {
   const t = useTranslate()
-  const { id, message } = useToast()
+  const { id, message, placement } = useToast()
   if (!message) {
     return null
   }
+  const center = placement === 'center'
   if (typeof message === 'string') {
     return (
-      <div key={id} className={styles.toast} role="status">
+      <div key={id} className={clsx(styles.toast, center && styles.center)} role="status">
         {message}
       </div>
     )
   }
-  const error = message.type === 'error'
+  const error = !center && message.type === 'error'
   return (
-    <div key={id} className={clsx(styles.toast, error && styles.error)} role="status">
+    <div
+      key={id}
+      className={clsx(styles.toast, center && styles.center, error && styles.error)}
+      role="status"
+    >
       {error ? (
         <span className={styles.icon}>
           <IconToastError16 />

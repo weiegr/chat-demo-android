@@ -81,6 +81,7 @@ const searchResult: Read<SearchResult> = (value) => {
     published_at: nullable(time)(item.published_at),
     site_name: nullable(string)(item.site_name),
     ...('site_icon' in item ? { site_icon: nullable(string)(item.site_icon) } : {}),
+    ...('image_url' in item ? { image_url: nullable(string)(item.image_url) } : {}),
   }
 }
 

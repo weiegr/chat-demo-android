@@ -3,15 +3,36 @@ import clsx from 'clsx'
 import type {
   BlockContent,
   DefinitionContent,
+  Image as ImageNode,
   List as ListNode,
   PhrasingContent,
   Root,
   Table as TableNode,
 } from 'mdast'
+import type { Source } from '../../services/chat/view.js'
 import { CitationLink } from '../search/CitationLink.js'
 import { CodeBlock } from './CodeBlock.js'
 import { ImageAsLink, Link } from './Link.js'
 import { InlineMath, MathBlock } from './MathFormula.js'
+import { RichImage } from './RichImage.js'
+
+const getStandaloneImageNode = (nodes: PhrasingContent[]): ImageNode | null => {
+  let image: ImageNode | null = null
+  for (const child of nodes) {
+    if (child.type === 'text' && !child.value.trim()) {
+      continue
+    }
+    if (child.type === 'break') {
+      continue
+    }
+    if (child.type === 'image' && image === null) {
+      image = child
+      continue
+    }
+    return null
+  }
+  return image
+}
 
 const Html = memo(function Html({ value }: { value: string }) {
   if (/^<br\s*\/?>$/i.test(value)) {
@@ -20,7 +41,17 @@ const Html = memo(function Html({ value }: { value: string }) {
   return <span className="ds-markdown-html">{value}</span>
 })
 
-const List = memo(function List({ node, loading }: { node: ListNode; loading: boolean }) {
+const List = memo(function List({
+  node,
+  loading,
+  allowImages,
+  sources,
+}: {
+  node: ListNode
+  loading: boolean
+  allowImages: boolean
+  sources?: Source[]
+}) {
   const ListTag = node.ordered ? 'ol' : 'ul'
   return (
     <ListTag start={node.ordered ? node.start || undefined : undefined}>
@@ -34,7 +65,12 @@ const List = memo(function List({ node, loading }: { node: ListNode; loading: bo
               // □ U+25A1 / ☑ U+2611
               <span className="ds-markdown-task-checkbox">{checked ? '☑  ' : '□  '}</span>
             ) : null}
-            <MarkdownBlockContentOrDefinitionContent nodes={child.children} loading={loading} />
+            <MarkdownBlockContentOrDefinitionContent
+              nodes={child.children}
+              loading={loading}
+              allowImages={allowImages}
+              sources={sources}
+            />
           </li>
         )
       })}
@@ -42,7 +78,15 @@ const List = memo(function List({ node, loading }: { node: ListNode; loading: bo
   )
 })
 
-const Table = memo(function Table({ node }: { node: TableNode }) {
+const Table = memo(function Table({
+  node,
+  allowImages,
+  sources,
+}: {
+  node: TableNode
+  allowImages: boolean
+  sources?: Source[]
+}) {
   const columnCount = node.children[0]?.children.length
   return (
     <div className="markdown-table-wrapper">
@@ -53,7 +97,11 @@ const Table = memo(function Table({ node }: { node: TableNode }) {
               {node.children[0].children.map((cell, cellIndex) => {
                 return (
                   <th key={cellIndex}>
-                    <MarkdownPhrasingContent nodes={cell.children} />
+                    <MarkdownPhrasingContent
+                      nodes={cell.children}
+                      allowImages={allowImages}
+                      sources={sources}
+                    />
                   </th>
                 )
               })}
@@ -69,7 +117,11 @@ const Table = memo(function Table({ node }: { node: TableNode }) {
                   {row.children.map((cell, cellIndex) => {
                     return (
                       <td key={cellIndex}>
-                        <MarkdownPhrasingContent nodes={cell.children} />
+                        <MarkdownPhrasingContent
+                          nodes={cell.children}
+                          allowImages={allowImages}
+                          sources={sources}
+                        />
                       </td>
                     )
                   })}
@@ -89,13 +141,24 @@ const Table = memo(function Table({ node }: { node: TableNode }) {
 
 const MarkdownPhrasingContent = memo(function MarkdownPhrasingContent({
   nodes,
+  allowImages,
+  sources,
 }: {
   nodes: PhrasingContent[]
+  allowImages: boolean
+  sources?: Source[]
 }) {
   return (
     <>
       {nodes.map((node, index) => {
-        return <MarkdownPhrasingContentItem key={index} node={node} />
+        return (
+          <MarkdownPhrasingContentItem
+            key={index}
+            node={node}
+            allowImages={allowImages}
+            sources={sources}
+          />
+        )
       })}
     </>
   )
@@ -103,8 +166,12 @@ const MarkdownPhrasingContent = memo(function MarkdownPhrasingContent({
 
 const MarkdownPhrasingContentItem = memo(function MarkdownPhrasingContentItem({
   node,
+  allowImages,
+  sources,
 }: {
   node: PhrasingContent
+  allowImages: boolean
+  sources?: Source[]
 }) {
   switch (node.type) {
     case 'inlineMath':
@@ -114,11 +181,15 @@ const MarkdownPhrasingContentItem = memo(function MarkdownPhrasingContentItem({
     case 'emphasis':
       return (
         <em>
-          <MarkdownPhrasingContent nodes={node.children} />
+          <MarkdownPhrasingContent
+            nodes={node.children}
+            allowImages={allowImages}
+            sources={sources}
+          />
         </em>
       )
     case 'image':
-      return <ImageAsLink node={node} />
+      return allowImages ? <RichImage node={node} sources={sources} /> : <ImageAsLink node={node} />
     case 'html':
       return <Html value={node.value} />
     case 'inlineCode':
@@ -126,13 +197,21 @@ const MarkdownPhrasingContentItem = memo(function MarkdownPhrasingContentItem({
     case 'link':
       return (
         <Link node={node}>
-          <MarkdownPhrasingContent nodes={node.children} />
+          <MarkdownPhrasingContent
+            nodes={node.children}
+            allowImages={allowImages}
+            sources={sources}
+          />
         </Link>
       )
     case 'strong':
       return (
         <strong>
-          <MarkdownPhrasingContent nodes={node.children} />
+          <MarkdownPhrasingContent
+            nodes={node.children}
+            allowImages={allowImages}
+            sources={sources}
+          />
         </strong>
       )
     case 'text':
@@ -159,9 +238,13 @@ const MarkdownBlockContentOrDefinitionContent = memo(
   function MarkdownBlockContentOrDefinitionContent({
     nodes,
     loading,
+    allowImages,
+    sources,
   }: {
     nodes: Array<BlockContent | DefinitionContent>
     loading: boolean
+    allowImages: boolean
+    sources?: Source[]
   }) {
     return nodes.map((node, index) => {
       switch (node.type) {
@@ -172,7 +255,12 @@ const MarkdownBlockContentOrDefinitionContent = memo(
         case 'blockquote':
           return (
             <blockquote key={index}>
-              <MarkdownBlockContentOrDefinitionContent nodes={node.children} loading={loading} />
+              <MarkdownBlockContentOrDefinitionContent
+                nodes={node.children}
+                loading={loading}
+                allowImages={allowImages}
+                sources={sources}
+              />
             </blockquote>
           )
         case 'html':
@@ -183,14 +271,27 @@ const MarkdownBlockContentOrDefinitionContent = memo(
             : createElement(
                 `h${node.depth}`,
                 { key: index },
-                <MarkdownPhrasingContent nodes={node.children} />
+                <MarkdownPhrasingContent
+                  nodes={node.children}
+                  allowImages={allowImages}
+                  sources={sources}
+                />
               )
-        case 'paragraph':
+        case 'paragraph': {
+          const standaloneImage = allowImages ? getStandaloneImageNode(node.children) : null
+          if (standaloneImage) {
+            return <RichImage key={index} node={standaloneImage} sources={sources} block />
+          }
           return (
             <p key={index} className="ds-markdown-paragraph">
-              <MarkdownPhrasingContent nodes={node.children} />
+              <MarkdownPhrasingContent
+                nodes={node.children}
+                allowImages={allowImages}
+                sources={sources}
+              />
             </p>
           )
+        }
         case 'code':
           return (
             <CodeBlock
@@ -201,9 +302,17 @@ const MarkdownBlockContentOrDefinitionContent = memo(
             />
           )
         case 'table':
-          return <Table node={node} key={index} />
+          return <Table node={node} key={index} allowImages={allowImages} sources={sources} />
         case 'list':
-          return <List key={index} node={node} loading={loading} />
+          return (
+            <List
+              key={index}
+              node={node}
+              loading={loading}
+              allowImages={allowImages}
+              sources={sources}
+            />
+          )
         default:
           // 脚注与定义已在解析时换成段落
           return null
@@ -217,10 +326,14 @@ export const MarkdownAstRenderer = memo(function MarkdownAstRenderer({
   onUpdate,
   className,
   loading = false,
+  allowImages = false,
+  sources,
 }: {
   ast: Root
   className?: string
   loading?: boolean
+  allowImages?: boolean
+  sources?: Source[]
   /**
    * layoutEffect 之后触发 -> 进行页面滚动
    */
@@ -239,9 +352,11 @@ export const MarkdownAstRenderer = memo(function MarkdownAstRenderer({
         <MarkdownBlockContentOrDefinitionContent
           nodes={ast.children as Array<BlockContent | DefinitionContent>}
           loading={loading}
+          allowImages={allowImages}
+          sources={sources}
         />
       </div>
     ),
-    [className, ast.children, loading]
+    [className, ast.children, loading, allowImages, sources]
   )
 })

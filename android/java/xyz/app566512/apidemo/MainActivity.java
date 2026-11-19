@@ -2,6 +2,7 @@ package xyz.app566512.apidemo;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.DownloadManager;
 import android.content.ClipData;
 import android.content.ContentUris;
 import android.content.ContentValues;
@@ -28,6 +29,7 @@ import android.os.Message;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.util.Base64;
+import android.util.Log;
 import android.util.Size;
 import android.view.View;
 import android.view.Window;
@@ -50,9 +52,14 @@ import org.json.JSONObject;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -71,6 +78,7 @@ public class MainActivity extends Activity {
     private static final String APP_HOST = "appassets.androidplatform.net";
     private static final String APP_ORIGIN = "https://" + APP_HOST;
     private static final String MEDIA_PREFIX = "/__android_media__/";
+    private static final String PROXY_PATH = "/__android_proxy__";
     private static final int REQ_FILE_CHOOSER = 1001;
     private static final int REQ_AUDIO_PERMISSION = 1002;
     private static final int REQ_GALLERY_PERMISSION = 1003;
@@ -92,6 +100,7 @@ public class MainActivity extends Activity {
     private boolean lastLocationPermissionHadCoarse = false;
     private Uri pendingCameraUri;
     private String nextPickerMode = "file";
+    private volatile String cachedUserAgent = "Mozilla/5.0";
     private int safeTopCss = 24;
     private int safeBottomCss = 0;
 
@@ -118,6 +127,7 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(true);
         settings.setSupportMultipleWindows(true);
         settings.setTextZoom(100);
+        cachedUserAgent = settings.getUserAgentString();
 
         webView.addJavascriptInterface(new AndroidBridge(), "AndroidHost");
 
@@ -127,6 +137,9 @@ public class MainActivity extends Activity {
                 Uri uri = request.getUrl();
                 if (uri != null && "https".equals(uri.getScheme()) && APP_HOST.equals(uri.getHost())) {
                     String path = uri.getPath();
+                    if (PROXY_PATH.equals(path)) {
+                        return proxyExternalGet(request, uri);
+                    }
                     if (path != null && path.startsWith(MEDIA_PREFIX)) {
                         return serveMediaUri(path.substring(MEDIA_PREFIX.length()));
                     }
@@ -285,6 +298,131 @@ public class MainActivity extends Activity {
         mainHandler.removeCallbacksAndMessages(null);
         mediaExecutor.shutdownNow();
         super.onDestroy();
+    }
+
+    private WebResourceResponse errorTextResponse(int statusCode, String reason, String body) {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Access-Control-Allow-Origin", APP_ORIGIN);
+        headers.put("Cache-Control", "no-store");
+        return new WebResourceResponse(
+                "text/plain",
+                "UTF-8",
+                statusCode,
+                reason,
+                headers,
+                new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8))
+        );
+    }
+
+    private WebResourceResponse proxyExternalGet(WebResourceRequest request, Uri requestUri) {
+        if (!"GET".equalsIgnoreCase(request.getMethod())) {
+            return errorTextResponse(405, "Method Not Allowed", "Method Not Allowed");
+        }
+        String rawUrl = requestUri.getQueryParameter("url");
+        if (rawUrl == null || rawUrl.trim().isEmpty()) {
+            return errorTextResponse(400, "Bad Request", "Missing url");
+        }
+        HttpURLConnection conn = null;
+        try {
+            URL currentUrl = new URL(rawUrl.trim());
+            for (int redirects = 0; redirects < 6; redirects++) {
+                String scheme = currentUrl.getProtocol().toLowerCase(Locale.US);
+                if (!"http".equals(scheme) && !"https".equals(scheme)) {
+                    return errorTextResponse(400, "Bad Request", "Unsupported URL scheme");
+                }
+                if (APP_HOST.equalsIgnoreCase(currentUrl.getHost())) {
+                    return errorTextResponse(400, "Bad Request", "Invalid target host");
+                }
+                conn = (HttpURLConnection) currentUrl.openConnection();
+                conn.setInstanceFollowRedirects(false);
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(30000);
+                conn.setRequestMethod("GET");
+                conn.setRequestProperty("Accept", "*/*");
+                conn.setRequestProperty("User-Agent", cachedUserAgent);
+                int status = conn.getResponseCode();
+                if (status == HttpURLConnection.HTTP_MOVED_PERM
+                        || status == HttpURLConnection.HTTP_MOVED_TEMP
+                        || status == HttpURLConnection.HTTP_SEE_OTHER
+                        || status == 307
+                        || status == 308) {
+                    String location = conn.getHeaderField("Location");
+                    conn.disconnect();
+                    conn = null;
+                    if (location == null || location.isEmpty()) {
+                        return errorTextResponse(502, "Bad Gateway", "Redirect missing Location");
+                    }
+                    currentUrl = new URL(currentUrl, location);
+                    continue;
+                }
+
+                String reason = conn.getResponseMessage();
+                if (reason == null || reason.trim().isEmpty()) {
+                    reason = status >= 400 ? "Error" : "OK";
+                } else {
+                    reason = reason.replace('\r', ' ').replace('\n', ' ').trim();
+                }
+
+                String rawContentType = conn.getContentType();
+                String mimeType = "application/octet-stream";
+                String encoding = null;
+                if (rawContentType != null && !rawContentType.trim().isEmpty()) {
+                    String[] parts = rawContentType.split(";");
+                    if (parts[0] != null && !parts[0].trim().isEmpty()) {
+                        mimeType = parts[0].trim();
+                    }
+                    for (int i = 1; i < parts.length; i++) {
+                        String part = parts[i].trim();
+                        if (part.toLowerCase(Locale.US).startsWith("charset=")) {
+                            encoding = part.substring(8).trim().replace("\"", "");
+                            break;
+                        }
+                    }
+                }
+
+                InputStream rawStream = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
+                Map<String, String> headers = new HashMap<>();
+                headers.put("Access-Control-Allow-Origin", APP_ORIGIN);
+                headers.put("Cache-Control", "no-store");
+                long contentLength = conn.getContentLengthLong();
+                if (contentLength >= 0) {
+                    headers.put("Content-Length", String.valueOf(contentLength));
+                }
+
+                if (rawStream == null) {
+                    conn.disconnect();
+                    return new WebResourceResponse(
+                            mimeType,
+                            encoding,
+                            status,
+                            reason,
+                            headers,
+                            new ByteArrayInputStream(new byte[0])
+                    );
+                }
+
+                final HttpURLConnection activeConn = conn;
+                InputStream wrappedStream = new FilterInputStream(rawStream) {
+                    @Override
+                    public void close() throws IOException {
+                        try {
+                            super.close();
+                        } finally {
+                            activeConn.disconnect();
+                        }
+                    }
+                };
+                return new WebResourceResponse(mimeType, encoding, status, reason, headers, wrappedStream);
+            }
+            return errorTextResponse(502, "Bad Gateway", "Too many redirects");
+        } catch (Exception e) {
+            if (conn != null) {
+                conn.disconnect();
+            }
+            Log.w("ApiDemoProxy", "Proxy GET failed", e);
+            String msg = e.getMessage() != null ? e.getMessage() : "Download failed";
+            return errorTextResponse(502, "Bad Gateway", msg);
+        }
     }
 
     private WebResourceResponse notFoundResponse() {
@@ -631,13 +769,18 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void openExternalUri(Uri uri) {
+    private boolean tryStartActivity(Intent intent) {
         try {
-            Intent intent = new Intent(Intent.ACTION_VIEW, uri);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(intent);
+            return true;
         } catch (Exception ignored) {
+            return false;
         }
+    }
+
+    private void openExternalUri(Uri uri) {
+        tryStartActivity(new Intent(Intent.ACTION_VIEW, uri));
     }
 
     private String guessMimeType(String path) {
@@ -1084,6 +1227,11 @@ public class MainActivity extends Activity {
 
     private class AndroidBridge {
         @JavascriptInterface
+        public boolean hasUrlDownloadProxy() {
+            return true;
+        }
+
+        @JavascriptInterface
         public boolean isSystemDark() {
             return (getResources().getConfiguration().uiMode
                     & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
@@ -1207,28 +1355,213 @@ public class MainActivity extends Activity {
             });
         }
 
-        @JavascriptInterface
-        public void saveBlobBase64(String base64, String fileName, String mimeType) {
+    private String sanitizeDownloadName(String fileName) {
+        if (fileName == null) {
+            return "deepseek_data.zip";
+        }
+        String clean = fileName.replaceAll("[/\\\\:*?\"<>|\\r\\n]", "_").trim();
+        return clean.isEmpty() || ".".equals(clean) || "..".equals(clean) ? "deepseek_data.zip" : clean;
+    }
+
+    private File resolveUniqueDownloadFile(File dir, String fileName) {
+        File candidate = new File(dir, fileName);
+        if (!candidate.exists()) {
+            return candidate;
+        }
+        int dot = fileName.lastIndexOf('.');
+        String stem = dot > 0 ? fileName.substring(0, dot) : fileName;
+        String ext = dot > 0 ? fileName.substring(dot) : "";
+        for (int i = 1; i < 1000; i++) {
+            File next = new File(dir, stem + " (" + i + ")" + ext);
+            if (!next.exists()) {
+                return next;
+            }
+        }
+        return new File(dir, stem + "_" + System.currentTimeMillis() + ext);
+    }
+
+    @SuppressWarnings("deprecation")
+    private String[] writeBytesToDownloads(byte[] bytes, String rawFileName, String rawMimeType) throws IOException {
+        String safeName = sanitizeDownloadName(rawFileName);
+        String safeMime = (rawMimeType == null || rawMimeType.trim().isEmpty())
+                ? "application/zip"
+                : rawMimeType.trim();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Downloads.DISPLAY_NAME, safeName);
+            values.put(MediaStore.Downloads.MIME_TYPE, safeMime);
+            values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+            values.put(MediaStore.Downloads.IS_PENDING, 1);
+
+            Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+            if (uri == null) {
+                throw new IOException("无法创建下载目录文件");
+            }
             try {
-                byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    ContentValues values = new ContentValues();
-                    values.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
-                    values.put(MediaStore.Downloads.MIME_TYPE, mimeType);
-                    values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
-                    Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-                    if (uri != null) {
-                        try (OutputStream out = getContentResolver().openOutputStream(uri)) {
-                            if (out != null) {
-                                out.write(bytes);
-                            }
+                try (OutputStream out = getContentResolver().openOutputStream(uri)) {
+                    if (out == null) {
+                        throw new IOException("无法打开下载输出流");
+                    }
+                    out.write(bytes);
+                    out.flush();
+                }
+                ContentValues ready = new ContentValues();
+                ready.put(MediaStore.Downloads.IS_PENDING, 0);
+                getContentResolver().update(uri, ready, null, null);
+            } catch (Exception e) {
+                try {
+                    getContentResolver().delete(uri, null, null);
+                } catch (Exception ignored) {
+                }
+                if (e instanceof IOException) {
+                    throw (IOException) e;
+                }
+                throw new IOException(e.getMessage(), e);
+            }
+
+            String actualName = safeName;
+            String actualPath = Environment.DIRECTORY_DOWNLOADS + "/" + safeName;
+            String[] projection = {
+                    MediaStore.Downloads.DISPLAY_NAME,
+                    MediaStore.Downloads.RELATIVE_PATH,
+                    MediaStore.MediaColumns.DATA
+            };
+            try (Cursor cursor = getContentResolver().query(uri, projection, null, null, null)) {
+                if (cursor != null && cursor.moveToFirst()) {
+                    int nameIdx = cursor.getColumnIndex(MediaStore.Downloads.DISPLAY_NAME);
+                    int relIdx = cursor.getColumnIndex(MediaStore.Downloads.RELATIVE_PATH);
+                    int dataIdx = cursor.getColumnIndex(MediaStore.MediaColumns.DATA);
+                    if (nameIdx >= 0 && cursor.getString(nameIdx) != null) {
+                        actualName = cursor.getString(nameIdx);
+                    }
+                    String dataPath = dataIdx >= 0 ? cursor.getString(dataIdx) : null;
+                    if (dataPath != null && !dataPath.trim().isEmpty()) {
+                        actualPath = dataPath.trim();
+                    } else {
+                        String relPath = relIdx >= 0 ? cursor.getString(relIdx) : Environment.DIRECTORY_DOWNLOADS;
+                        if (relPath == null || relPath.isEmpty()) {
+                            relPath = Environment.DIRECTORY_DOWNLOADS;
                         }
+                        if (!relPath.endsWith("/")) {
+                            relPath = relPath + "/";
+                        }
+                        actualPath = relPath + actualName;
                     }
                 }
-                runOnUiThread(() -> Toast.makeText(MainActivity.this, "已导出至系统下载目录: " + fileName, Toast.LENGTH_SHORT).show());
-            } catch (Exception e) {
-                runOnUiThread(() -> Toast.makeText(MainActivity.this, "导出失败: " + e.getMessage(), Toast.LENGTH_SHORT).show());
+            } catch (Exception ignored) {
             }
+            return new String[]{actualName, actualPath};
+        }
+
+        File targetDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        if (!targetDir.exists() && !targetDir.mkdirs()) {
+            targetDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        }
+        if (targetDir == null) {
+            throw new IOException("下载目录不可用");
+        }
+        File targetFile;
+        try {
+            targetFile = resolveUniqueDownloadFile(targetDir, safeName);
+            try (FileOutputStream out = new FileOutputStream(targetFile)) {
+                out.write(bytes);
+                out.flush();
+            }
+        } catch (SecurityException se) {
+            File appDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+            if (appDir == null || (!appDir.exists() && !appDir.mkdirs())) {
+                throw new IOException("没有下载目录写入权限", se);
+            }
+            targetFile = resolveUniqueDownloadFile(appDir, safeName);
+            try (FileOutputStream out = new FileOutputStream(targetFile)) {
+                out.write(bytes);
+                out.flush();
+            }
+        }
+        return new String[]{targetFile.getName(), targetFile.getAbsolutePath()};
+    }
+
+    private void dispatchExportJson(final JSONObject payload) {
+        final String json = payload.toString();
+        runOnUiThread(() -> {
+            if (webView != null) {
+                webView.evaluateJavascript(
+                        "window.dispatchEvent(new CustomEvent('android-export-result',{detail:" + json + "}));",
+                        null
+                );
+            }
+        });
+    }
+
+    private void performSaveExportFile(int requestId, String base64, String fileName, String mimeType) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("requestId", requestId);
+            byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
+            String[] saved = writeBytesToDownloads(bytes, fileName, mimeType);
+            payload.put("ok", true);
+            payload.put("fileName", saved[0]);
+            payload.put("path", saved[1]);
+        } catch (Exception e) {
+            try {
+                payload.put("ok", false);
+                payload.put("message", e.getMessage() != null ? e.getMessage() : "写入文件失败");
+            } catch (Exception ignored) {
+            }
+        }
+        dispatchExportJson(payload);
+    }
+
+        @JavascriptInterface
+        public void saveExportFile(final int requestId, final String base64, final String fileName, final String mimeType) {
+            mediaExecutor.execute(() -> performSaveExportFile(requestId, base64, fileName, mimeType));
+        }
+
+        @JavascriptInterface
+        public boolean openDownloadsFolder() {
+            if (tryStartActivity(new Intent(DownloadManager.ACTION_VIEW_DOWNLOADS))) {
+                return true;
+            }
+            Intent docsIntent = new Intent(Intent.ACTION_VIEW);
+            docsIntent.setDataAndType(
+                    Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload"),
+                    "vnd.android.document/directory"
+            );
+            if (tryStartActivity(docsIntent)) {
+                return true;
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                Intent filesIntent = Intent.makeMainSelectorActivity(
+                        Intent.ACTION_MAIN,
+                        Intent.CATEGORY_APP_FILES
+                );
+                if (tryStartActivity(filesIntent)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        @JavascriptInterface
+        public void saveBlobBase64(final String base64, final String fileName, final String mimeType) {
+            mediaExecutor.execute(() -> {
+                try {
+                    byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
+                    String[] saved = writeBytesToDownloads(bytes, fileName, mimeType);
+                    runOnUiThread(() -> Toast.makeText(
+                            MainActivity.this,
+                            "已导出至: " + saved[1],
+                            Toast.LENGTH_SHORT
+                    ).show());
+                } catch (Exception e) {
+                    runOnUiThread(() -> Toast.makeText(
+                            MainActivity.this,
+                            "导出失败: " + e.getMessage(),
+                            Toast.LENGTH_SHORT
+                    ).show());
+                }
+            });
         }
     }
 }

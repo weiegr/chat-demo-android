@@ -105,6 +105,15 @@ export const en = {
   settingsSystemPrompt: 'System prompt',
   settingsSystemPromptDescription: 'System instructions sent with every conversation.',
   settingsSystemPromptPlaceholder: 'Enter a system prompt, leave empty to send none',
+  settingsAiImages: 'Allow images in AI replies',
+  settingsAiImagesDescription:
+    'When enabled, AI replies include rich-text image layouts using verified search results only after a web or image search tool is actually executed. Replies stay text-only when no search is run. External images may fail to load due to source host restrictions.',
+  settingsAiImagesRequiresSearchDescription:
+    'When enabled, turn on Search in the chat bar as well: rich-text image layouts trigger only when the AI actually runs a search tool and retrieves valid images; otherwise replies stay text-only.',
+  richImageGalleryLabel: 'Search images',
+  richImageOpenSource: 'Open source page',
+  richImageLoadFailed: 'Image unavailable',
+  richImageViewOriginal: 'Open image URL',
   settingsLocation: 'Location',
   settingsLocationProvince: 'Select province/region',
   settingsLocationCity: 'Select city',
@@ -120,8 +129,16 @@ export const en = {
   settingsLocationStatusOff: 'Off',
   settingsAiLocation: 'Allow AI to request real location',
   settingsAiLocationDescription: 'Let AI request current device location when needed',
-  settingsAiLocationCoarseHint: 'Approximate location only; positioning may fail or be inaccurate',
-  settingsAiLocationDeniedHint: 'Location permission is not granted yet',
+  settingsAiLocationRequiresDescription:
+    'Let AI request current device location when needed (requires deep thinking and web search)',
+  settingsAiLocationCoarseDescription:
+    'Only approximate location is granted, which may fail or be inaccurate. Enable precise location for better accuracy.',
+  settingsAiLocationCoarseRequiresDescription:
+    'Only approximate location is granted. Enable precise location, along with deep thinking and web search, to let AI request your location.',
+  settingsAiLocationDeniedDescription:
+    'Location permission is not granted yet. Grant access to let AI request your current location when needed.',
+  settingsAiLocationDeniedRequiresDescription:
+    'Location permission is not granted yet. Grant access and enable deep thinking and web search to let AI request your location.',
   settingsAiLocationUpgradeAction: 'Enable precise',
   settingsAiLocationGrantAction: 'Grant access',
   toolLocationFetchingTitle: 'Getting location',
@@ -156,11 +173,29 @@ export const en = {
     'The uploaded chat history will replace all your current chats. Import anyway?',
   historyImportDescription:
     'Importing chat history replaces all local chats and attachments. Supports ZIP files exported from DeepSeek.',
+  historyImportFromUrl: 'Import history from DeepSeek',
+  historyImportFromUrlDescription:
+    'Paste a DeepSeek history export download link to download and overwrite all local chats and attachments.',
+  historyImportFromUrlAction: 'Import',
+  historyUrlModalTitle: 'Enter URL',
+  historyUrlPlaceholder: 'Paste DeepSeek history download URL',
+  historyUrlImporting: 'Importing...',
+  historyUrlInvalid: 'Please enter a valid download URL',
+  historyUrlExpiredOrNotFound: 'Download link is invalid or expired',
+  historyUrlHttpFailed: 'Download failed (HTTP {status})',
+  historyUrlNetworkError: 'Download failed, please check your network connection',
+  historyUrlDownloadFailed: 'Import failed, please try again',
   historyImportedOne: 'Imported 1 chat',
   historyImported: 'Imported {count} chats',
   historyImportFailed:
     'File import failed. The file format may be invalid, or the ZIP file may use an older chat export format. Please export your chat history from DeepSeek again and retry the import.',
   historyExportFailed: 'Export failed: {message}',
+  historyExporting: 'Exporting chat history...',
+  historyExportSuccessWithPath: 'Chat history exported successfully at {time}, saved to {path}.',
+  historyExportSuccessBrowser:
+    'Chat history exported successfully at {time}. {fileName} has been saved to your browser Downloads folder.',
+  historyExportOpenFolder: 'Open Downloads',
+  historyExportOpenFolderFailed: 'Unable to open Downloads folder; please check your file manager',
   exportAllLabel: 'Export all chats',
   historyExportDescription:
     'Includes all chat history and locally stored images. Other attachments retain file details only. Your API Key is not included.',

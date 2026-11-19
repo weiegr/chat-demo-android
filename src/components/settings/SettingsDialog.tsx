@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   IconChevronRightOutline14,
   IconDarkOutline16,
@@ -7,18 +7,26 @@ import {
   IconDownloadOutline16,
   IconFollowsystemOutline16,
   IconLightOutline16,
+  IconRightUpOutline14,
   IconSettingsOutline16,
   IconUploadOutline14,
 } from '../base/icons.js'
 import {
   BackupError,
+  canOpenExportFolder,
   clearHistory,
-  exportHistory,
+  exportAndSaveHistory,
+  getLastExportRecord,
   importHistory,
+  importHistoryFromUrl,
+  openExportFolder,
+  parseArchiveDownloadUrl,
+  type ExportRecord,
 } from '../../services/chat/backup.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { useChatStore } from '../../services/chat/store.js'
 import {
+  setAllowAiImages,
   setLocale,
   setSystemPrompt,
   setThemePreference,
@@ -32,6 +40,7 @@ import { useTranslate, type TranslationKey, type TranslationMessage } from '../.
 import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
 import { Select } from '../base/Select.js'
+import { Switch } from '../base/Switch.js'
 import { showToast } from '../base/toastState.js'
 import { usePresence } from '../base/usePresence.js'
 import { ApiKeyConfirm, ApiKeyField, useApiKeyEditor } from './ApiKeyField.js'
@@ -72,9 +81,11 @@ const SettingsContent = () => {
   // 切换分组不丢失正在输入的 API Key 与导入状态
   const apiKeyEditor = useApiKeyEditor()
   const historyImport = useHistoryImport()
+  const historyUrlImport = useHistoryUrlImport()
   const historyDelete = useHistoryDelete()
   const replacingHistory = useChatStore((state) => state.importingHistory)
-  const historyBusy = historyImport.busy || historyDelete.busy || replacingHistory
+  const historyBusy =
+    historyImport.busy || historyUrlImport.busy || historyDelete.busy || replacingHistory
   const inMobileSubPage = isMobile && mobilePage !== 'main'
   const mobileTitleKey =
     mobilePage === 'data'
@@ -126,6 +137,7 @@ const SettingsContent = () => {
           mobilePage === 'data' ? (
             <div className={clsx(styles.content, styles.mobileDataContent)}>
               <ImportHistory historyImport={historyImport} disabled={historyBusy} />
+              <ImportHistoryFromUrl urlImport={historyUrlImport} disabled={historyBusy} />
               <ExportHistory disabled={historyBusy} />
               <MobileActionCard
                 danger
@@ -166,6 +178,7 @@ const SettingsContent = () => {
               <div className={styles.mobileCard}>
                 <SystemPromptSetting />
                 <MobileTtsVoiceSetting />
+                <AiImagesSetting />
               </div>
             </div>
           )
@@ -195,11 +208,13 @@ const SettingsContent = () => {
                   <LocationSetting />
                   <AiLocationSetting />
                   <SystemPromptSetting />
+                  <AiImagesSetting />
                 </>
               ) : (
                 <>
                   <ApiKeyField editor={apiKeyEditor} />
                   <ImportHistory historyImport={historyImport} disabled={historyBusy} />
+                  <ImportHistoryFromUrl urlImport={historyUrlImport} disabled={historyBusy} />
                   <ExportHistory disabled={historyBusy} />
                   <SettingCell
                     label={t('deleteAllSessions')}
@@ -223,6 +238,7 @@ const SettingsContent = () => {
         )}
       </Modal>
       {historyImport.file ? <ImportConfirm historyImport={historyImport} /> : null}
+      <UrlImportDialog urlImport={historyUrlImport} />
       {historyDelete.opened ? <DeleteAllConfirm historyDelete={historyDelete} /> : null}
     </>
   )
@@ -537,6 +553,30 @@ const SystemPromptSetting = () => {
   )
 }
 
+/** 允许在 AI 回复中加入图片：仅在明确执行搜索工具后触发富文本图文展示 */
+const AiImagesSetting = () => {
+  const t = useTranslate()
+  const allowAiImages = useSettings((state) => state.allowAiImages)
+  const search = useSettings((state) => state.search)
+  const description = t(
+    search ? 'settingsAiImagesDescription' : 'settingsAiImagesRequiresSearchDescription'
+  )
+
+  return (
+    <div className={clsx(styles.cell, styles.switchHeader)}>
+      <div className={styles.labelRow}>
+        <span className={styles.label}>{t('settingsAiImages')}</span>
+        <InfoModalButton ariaLabel={t('settingsAiImages')} description={description} />
+      </div>
+      <Switch
+        checked={allowAiImages}
+        ariaLabel={t('settingsAiImages')}
+        onChange={setAllowAiImages}
+      />
+    </div>
+  )
+}
+
 /** 覆盖导入的二次确认，叠在设置弹窗上 */
 const ImportConfirm = ({
   historyImport,
@@ -746,6 +786,7 @@ const SettingCell = ({
   description,
   infoAsModal = false,
   status,
+  statusAction,
   action,
   className,
 }: {
@@ -753,6 +794,7 @@ const SettingCell = ({
   description?: ReactNode
   infoAsModal?: boolean
   status: Status
+  statusAction?: ReactNode
   action: ReactNode
   className?: string
 }) => {
@@ -769,9 +811,16 @@ const SettingCell = ({
         </div>
         {status || inlineDescription ? (
           <div className={clsx(styles.description, status?.error && styles.error)}>
-            {status
-              ? t(status.key, status.reason ? { message: t(status.reason) } : status.params)
-              : inlineDescription}
+            {status ? (
+              <>
+                <span>
+                  {t(status.key, status.reason ? { message: t(status.reason) } : status.params)}
+                </span>
+                {statusAction}
+              </>
+            ) : (
+              inlineDescription
+            )}
           </div>
         ) : null}
       </div>
@@ -928,26 +977,243 @@ const ImportHistory = ({
   )
 }
 
-/** 将全部会话及图片导出为 ZIP 文件并下载 */
+/** 通过粘贴 DeepSeek 历史导出下载链接直接下载并覆盖导入 */
+const useHistoryUrlImport = () => {
+  const [open, setOpen] = useState(false)
+  const [url, setUrl] = useState('')
+  const [busy, setBusy] = useState(false)
+  const importing = useRef(false)
+  const abortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => () => abortRef.current?.abort(), [])
+
+  const openModal = () => {
+    setUrl('')
+    setOpen(true)
+  }
+
+  const closeModal = () => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    setOpen(false)
+  }
+
+  const submit = async () => {
+    if (importing.current) {
+      return
+    }
+    try {
+      parseArchiveDownloadUrl(url)
+    } catch (error) {
+      showToast(
+        { key: error instanceof BackupError ? error.key : 'historyUrlInvalid' },
+        { placement: 'center' }
+      )
+      return
+    }
+    const controller = new AbortController()
+    abortRef.current = controller
+    importing.current = true
+    setBusy(true)
+    try {
+      const count = await importHistoryFromUrl(url, controller.signal)
+      setOpen(false)
+      setUrl('')
+      showToast(
+        {
+          key: count === 1 ? 'historyImportedOne' : 'historyImported',
+          params: { count },
+        },
+        { placement: 'center' }
+      )
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return
+      }
+      if (error instanceof BackupError) {
+        showToast({ key: error.key, params: error.params }, { placement: 'center' })
+      } else {
+        showToast({ key: 'historyUrlDownloadFailed' }, { placement: 'center' })
+      }
+    } finally {
+      if (abortRef.current === controller) {
+        abortRef.current = null
+      }
+      importing.current = false
+      setBusy(false)
+    }
+  }
+
+  return { open, url, setUrl, busy, openModal, closeModal, submit }
+}
+
+/** 从 DeepSeek 链接导入历史会话入口（数据管理卡片 / 桌面设置行） */
+const ImportHistoryFromUrl = ({
+  urlImport,
+  disabled,
+}: {
+  urlImport: ReturnType<typeof useHistoryUrlImport>
+  disabled: boolean
+}) => {
+  const t = useTranslate()
+  const isMobile = useIsMobile()
+
+  if (isMobile) {
+    return (
+      <MobileActionCard
+        label={t('historyImportFromUrl')}
+        description={t('historyImportFromUrlDescription')}
+        status={null}
+        disabled={disabled}
+        onAction={urlImport.openModal}
+      />
+    )
+  }
+
+  return (
+    <SettingCell
+      label={t('historyImportFromUrl')}
+      description={t('historyImportFromUrlDescription')}
+      infoAsModal
+      status={null}
+      action={
+        <Button
+          variant="outlined"
+          size="m"
+          className={styles.cellButton}
+          disabled={disabled}
+          onClick={urlImport.openModal}
+        >
+          {t('historyImportFromUrlAction')}
+        </Button>
+      }
+    />
+  )
+}
+
+/** 填入 URL 菜单：移动端复用朗读音色底部圆角抽屉风格，桌面端使用居中弹窗 */
+const UrlImportDialog = ({ urlImport }: { urlImport: ReturnType<typeof useHistoryUrlImport> }) => {
+  const t = useTranslate()
+  const isMobile = useIsMobile()
+  const sheetPresence = usePresence(urlImport.open && isMobile, 280)
+
+  const inputNode = (
+    <textarea
+      aria-label={t('historyUrlModalTitle')}
+      className={styles.urlInput}
+      placeholder={t('historyUrlPlaceholder')}
+      rows={4}
+      spellCheck={false}
+      autoFocus
+      disabled={urlImport.busy}
+      value={urlImport.url}
+      onChange={(event) => urlImport.setUrl(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault()
+          void urlImport.submit()
+        }
+      }}
+    />
+  )
+
+  if (isMobile) {
+    if (!sheetPresence.mounted) {
+      return null
+    }
+    return (
+      <Modal
+        title={t('historyUrlModalTitle')}
+        closable
+        visible={sheetPresence.visible}
+        className={clsx(styles.urlSheet, sheetPresence.visible && styles.sheetVisible)}
+        mainClassName={styles.urlSheetMain}
+        onClose={urlImport.closeModal}
+      >
+        <div className={styles.urlStage}>{inputNode}</div>
+        <button
+          type="button"
+          className={styles.ttsSheetConfirm}
+          disabled={urlImport.busy}
+          onClick={() => void urlImport.submit()}
+        >
+          {t(urlImport.busy ? 'historyUrlImporting' : 'confirm')}
+        </button>
+      </Modal>
+    )
+  }
+
+  if (!urlImport.open) {
+    return null
+  }
+
+  return (
+    <Modal
+      title={t('historyUrlModalTitle')}
+      className={styles.urlModal}
+      onClose={urlImport.closeModal}
+      footer={
+        <>
+          <Button variant="outlined" size="m" onClick={urlImport.closeModal}>
+            {t('cancel')}
+          </Button>
+          <Button
+            variant="primary"
+            size="m"
+            disabled={urlImport.busy}
+            onClick={() => void urlImport.submit()}
+          >
+            {t(urlImport.busy ? 'historyUrlImporting' : 'confirm')}
+          </Button>
+        </>
+      }
+    >
+      {inputNode}
+    </Modal>
+  )
+}
+
+const formatExportTime = (timestamp: number): string => {
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+const exportRecordStatus = (record: ExportRecord | null): Status => {
+  if (!record) {
+    return null
+  }
+  const time = formatExportTime(record.exportedAt)
+  if (record.isAndroid && record.path) {
+    return {
+      key: 'historyExportSuccessWithPath',
+      params: { time, path: record.path },
+    }
+  }
+  return {
+    key: 'historyExportSuccessBrowser',
+    params: { time, fileName: record.fileName },
+  }
+}
+
+/** 将全部会话及图片导出为 ZIP 文件并下载；导出结果与路径展示在卡片/标题下方 */
 const ExportHistory = ({ disabled }: { disabled: boolean }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
   const empty = useChatStore((state) => state.sessions.length === 0)
   const [busy, setBusy] = useState(false)
-  const [status, setStatus] = useState<Status>(null)
+  const [status, setStatus] = useState<Status>(() => exportRecordStatus(getLastExportRecord()))
   const actionDisabled = disabled || busy || empty
 
   const onExport = async () => {
     setBusy(true)
-    setStatus(null)
+    setStatus({ key: 'historyExporting' })
     try {
-      const { name, blob } = await exportHistory()
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = name
-      link.click()
-      setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      const record = await exportAndSaveHistory()
+      setStatus(exportRecordStatus(record))
     } catch (error) {
       setStatus(errorStatus('historyExportFailed', error))
     } finally {
@@ -955,15 +1221,47 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
     }
   }
 
+  const showOpenFolder = status?.key === 'historyExportSuccessWithPath' && canOpenExportFolder()
+
+  const onOpenFolder = () => {
+    if (!openExportFolder()) {
+      showToast({ key: 'historyExportOpenFolderFailed' }, { placement: 'center' })
+    }
+  }
+
+  const openFolderLink = showOpenFolder ? (
+    <>
+      {' '}
+      <button type="button" className={styles.inlineActionLink} onClick={onOpenFolder}>
+        <span>{t('historyExportOpenFolder')}</span>
+        <span className={styles.inlineActionIcon} aria-hidden="true">
+          <IconRightUpOutline14 />
+        </span>
+      </button>
+    </>
+  ) : null
+
   if (isMobile) {
+    const hintText = status
+      ? t(status.key, status.reason ? { message: t(status.reason) } : status.params)
+      : null
+
     return (
-      <MobileActionCard
-        label={t('exportAllLabel')}
-        description={t('historyExportDescription')}
-        status={status}
-        disabled={actionDisabled}
-        onAction={() => void onExport()}
-      />
+      <div className={styles.mobileActionGroup}>
+        <MobileActionCard
+          label={t('exportAllLabel')}
+          description={t('historyExportDescription')}
+          status={null}
+          disabled={actionDisabled}
+          onAction={() => void onExport()}
+        />
+        {hintText ? (
+          <div className={clsx(styles.mobileCardHint, status?.error && styles.mobileCardHintError)}>
+            <span>{hintText}</span>
+            {openFolderLink}
+          </div>
+        ) : null}
+      </div>
     )
   }
 
@@ -973,6 +1271,7 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
       description={t('historyExportDescription')}
       infoAsModal
       status={status}
+      statusAction={openFolderLink}
       action={
         <Button
           variant="outlined"

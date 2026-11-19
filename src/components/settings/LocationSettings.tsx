@@ -1,6 +1,6 @@
 import clsx from 'clsx'
 import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from 'react'
-import { useTranslate } from '../../i18n/index.js'
+import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import {
   getDeviceLocationPermissionLevel,
   openDeviceLocationSettings,
@@ -77,14 +77,8 @@ const useAiLocationPermission = (t: ReturnType<typeof useTranslate>) => {
 
   return {
     allowAiLocation,
+    permissionLevel,
     permissionMissingFine,
-    permissionExtra: permissionMissingFine
-      ? t(
-          permissionLevel === 'coarse'
-            ? 'settingsAiLocationCoarseHint'
-            : 'settingsAiLocationDeniedHint'
-        )
-      : undefined,
     permissionActionLabel: permissionMissingFine
       ? t(
           permissionLevel === 'coarse'
@@ -102,17 +96,46 @@ const useAiLocationPermission = (t: ReturnType<typeof useTranslate>) => {
   }
 }
 
+const getAiLocationDescriptionKey = (
+  allowAiLocation: boolean,
+  permissionLevel: LocationPermissionLevel,
+  toolsReady: boolean
+): TranslationKey => {
+  if (!allowAiLocation) {
+    return 'settingsAiLocationDescription'
+  }
+  if (permissionLevel === 'none') {
+    return toolsReady
+      ? 'settingsAiLocationDeniedDescription'
+      : 'settingsAiLocationDeniedRequiresDescription'
+  }
+  if (permissionLevel === 'coarse') {
+    return toolsReady
+      ? 'settingsAiLocationCoarseDescription'
+      : 'settingsAiLocationCoarseRequiresDescription'
+  }
+  return toolsReady ? 'settingsAiLocationDescription' : 'settingsAiLocationRequiresDescription'
+}
+
 /** 共用的 AI 主动请求真实位置开关行：标题 + 感叹号提示弹窗 + 蓝色开关 */
 export const AiLocationSetting = () => {
   const t = useTranslate()
+  const thinking = useSettings((state) => state.thinking)
+  const search = useSettings((state) => state.search)
   const {
     allowAiLocation,
+    permissionLevel,
     permissionMissingFine,
-    permissionExtra,
     permissionActionLabel,
     requestOrOpenSettings,
     toggleAllowAiLocation,
   } = useAiLocationPermission(t)
+  // 与 requestTools 的声明条件保持一致，统一整合进弹窗主说明文案
+  const descriptionKey = getAiLocationDescriptionKey(
+    allowAiLocation,
+    permissionLevel,
+    thinking && search
+  )
 
   return (
     <div className={clsx(styles.cell, styles.switchHeader)}>
@@ -120,8 +143,7 @@ export const AiLocationSetting = () => {
         <span className={styles.label}>{t('settingsAiLocation')}</span>
         <InfoModalButton
           ariaLabel={t('settingsAiLocation')}
-          description={t('settingsAiLocationDescription')}
-          extra={permissionExtra}
+          description={t(descriptionKey)}
           actionLabel={permissionActionLabel}
           onAction={() => void requestOrOpenSettings()}
           warning={permissionMissingFine}
@@ -419,7 +441,13 @@ export const MobileLocationPage = () => {
       </div>
 
       <div className={styles.mobileCard}>
-        <div className={clsx(styles.cell, styles.locationSwitchCell)}>
+        <div
+          className={clsx(
+            styles.cell,
+            styles.locationSwitchCell,
+            locationEnabled && styles.locationSwitchCellOpen
+          )}
+        >
           <div className={styles.switchHeader}>
             <div className={styles.labelRow}>
               <span className={styles.label}>{t('settingsLocationManual')}</span>

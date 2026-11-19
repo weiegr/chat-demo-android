@@ -99,6 +99,15 @@ export const zh = {
   settingsSystemPrompt: '系统提示词',
   settingsSystemPromptDescription: '随每轮对话发送给模型的系统指令',
   settingsSystemPromptPlaceholder: '输入系统提示词，留空则不发送',
+  settingsAiImages: '允许在 AI 回复中加入图片',
+  settingsAiImagesDescription:
+    '开启后，仅当本轮对话明确执行了搜索工具（含联网搜索或图像搜索）时，才会在 AI 回复中触发富文本展示并插入搜索结果中的真实图片；未执行搜索时仅输出纯文本，不会生成图片。外站图片受原站点策略影响可能存在无法加载的情况。',
+  settingsAiImagesRequiresSearchDescription:
+    '开启后，需同时在输入框开启「智能搜索」且 AI 明确执行了搜索工具时，才会在回复中触发富文本图片展示；未开启开关或未执行搜索时仅输出纯文本。外站图片可能因原站点防盗链或链接失效而无法加载。',
+  richImageGalleryLabel: '搜索相关图片',
+  richImageOpenSource: '查看来源网页',
+  richImageLoadFailed: '图片暂时无法加载',
+  richImageViewOriginal: '打开原图链接',
   settingsLocation: '位置信息',
   settingsLocationProvince: '请选择省份/地区',
   settingsLocationCity: '请选择市',
@@ -114,8 +123,15 @@ export const zh = {
   settingsLocationStatusOff: '已关闭',
   settingsAiLocation: '允许 AI 主动请求真实位置',
   settingsAiLocationDescription: 'AI 判断需要时可主动调用设备定位获取当前位置',
-  settingsAiLocationCoarseHint: '当前仅授予大致位置，可能导致定位失败或偏差',
-  settingsAiLocationDeniedHint: '尚未授予系统定位权限，开启后才可获取位置',
+  settingsAiLocationRequiresDescription:
+    'AI 判断需要时可主动获取当前位置，需同时开启深度思考与智能搜索',
+  settingsAiLocationCoarseDescription:
+    '当前仅授予大致位置，可能导致定位失败或偏差，建议开启精确位置',
+  settingsAiLocationCoarseRequiresDescription:
+    '当前仅授予大致位置，建议开启精确位置；同时需开启深度思考与智能搜索后方可使用',
+  settingsAiLocationDeniedDescription: '尚未授予系统定位权限，授权后 AI 可在需要时主动获取当前位置',
+  settingsAiLocationDeniedRequiresDescription:
+    '尚未授予系统定位权限，授权并同时开启深度思考与智能搜索后，AI 可主动获取当前位置',
   settingsAiLocationUpgradeAction: '开启精确位置',
   settingsAiLocationGrantAction: '前往授权',
   toolLocationFetchingTitle: '正在获取位置',
@@ -148,11 +164,29 @@ export const zh = {
   historyImportConfirmTitle: '确认导入历史对话？',
   historyImportConfirmDescription: '上传的历史对话会覆盖当前所有对话记录，是否确认导入？',
   historyImportDescription: '导入历史对话会覆盖全部本地对话和附件，支持 DeepSeek 导出的 ZIP 文件。',
+  historyImportFromUrl: '从 DeepSeek 导入历史会话',
+  historyImportFromUrlDescription:
+    '粘贴 DeepSeek 导出的历史对话下载链接，下载并覆盖全部本地对话和附件。',
+  historyImportFromUrlAction: '导入',
+  historyUrlModalTitle: '填入 URL',
+  historyUrlPlaceholder: '请粘贴 DeepSeek 历史对话下载链接',
+  historyUrlImporting: '导入中...',
+  historyUrlInvalid: '请输入有效的下载链接',
+  historyUrlExpiredOrNotFound: '链接无效或已过期',
+  historyUrlHttpFailed: '下载失败（HTTP {status}）',
+  historyUrlNetworkError: '下载失败，请检查网络连接',
+  historyUrlDownloadFailed: '导入失败，请稍后重试',
   historyImportedOne: '已导入 1 个对话',
   historyImported: '已导入 {count} 个对话',
   historyImportFailed:
     '文件导入失败，可能是文件格式错误或使用了旧版的对话导出 ZIP 文件，请前往 DeepSeek 重新导出历史对话文件后再次导入。',
-  historyExportFailed: '导出失败：{message}',
+  historyExportFailed: '历史对话导出失败：{message}',
+  historyExporting: '正在导出历史对话...',
+  historyExportSuccessWithPath: '历史对话于 {time} 导出成功，已保存至 {path}。',
+  historyExportSuccessBrowser:
+    '历史对话于 {time} 导出成功，文件 {fileName} 已保存至浏览器默认下载目录。',
+  historyExportOpenFolder: '打开下载目录',
+  historyExportOpenFolderFailed: '无法打开系统下载目录，请通过文件管理查看',
   exportAllLabel: '导出所有历史对话',
   historyExportDescription:
     '包含所有历史对话及本地图片原件；其他附件仅保留文件信息，不包含 API Key。',

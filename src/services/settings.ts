@@ -10,7 +10,7 @@ export type ThemePreference = 'light' | 'dark' | 'system'
 /** 系统提示词默认值；可在设置中修改或清空（清空后请求不带 system 内容） */
 export const DEFAULT_SYSTEM_PROMPT = '该助手为DeepSeek，由深度求索公司创造。'
 
-/** 本机设置，存 localStorage：API Key、语言、主题、位置与 AI 定位权限、朗读音色、系统提示词、深度思考与智能搜索开关、侧边栏收起状态 */
+/** 本机设置，存 localStorage：API Key、语言、主题、位置与 AI 定位权限、允许回复插图、朗读音色、系统提示词、深度思考与智能搜索开关、侧边栏收起状态 */
 type Settings = {
   apiKey: string | null
   locale: Locale
@@ -18,6 +18,7 @@ type Settings = {
   location: UserLocation | null
   locationEnabled: boolean
   allowAiLocation: boolean
+  allowAiImages: boolean
   ttsVoice: TtsVoice
   systemPrompt: string
   thinking: boolean
@@ -31,6 +32,7 @@ const KEYS = {
   location: 'chat-demo:location',
   locationEnabled: 'chat-demo:location-enabled',
   allowAiLocation: 'chat-demo:allow-ai-location',
+  allowAiImages: 'chat-demo:allow-ai-images',
   themePreference: 'chat-demo:theme-preference',
   ttsVoice: 'chat-demo:tts-voice',
   systemPrompt: 'chat-demo:system-prompt',
@@ -115,6 +117,7 @@ export const useSettings = create<Settings>(() => ({
   location: initialLocationValue,
   locationEnabled: initialLocationEnabled(),
   allowAiLocation: read(KEYS.allowAiLocation) === 'true',
+  allowAiImages: read(KEYS.allowAiImages) !== 'false',
   themePreference: initialThemePreference(),
   ttsVoice: initialTtsVoice(),
   systemPrompt: initialSystemPrompt(),
@@ -142,6 +145,11 @@ export const setLocationEnabled = (locationEnabled: boolean) => {
 export const setAllowAiLocation = (allowAiLocation: boolean) => {
   write(KEYS.allowAiLocation, String(allowAiLocation))
   useSettings.setState({ allowAiLocation })
+}
+
+export const setAllowAiImages = (allowAiImages: boolean) => {
+  write(KEYS.allowAiImages, String(allowAiImages))
+  useSettings.setState({ allowAiImages })
 }
 
 export const setThemePreference = (themePreference: ThemePreference) => {

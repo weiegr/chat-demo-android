@@ -153,6 +153,9 @@ const toBlocks = (fragments: Fragment[], messageId: string): ReplyBlock[] => {
                               ? result.site_icon
                               : null,
                           site_name: result.site_name,
+                          ...(result.image_url && isWebUrl(result.image_url)
+                            ? { image_url: result.image_url }
+                            : {}),
                           page_age: result.published_at,
                           encrypted_content: '',
                         })),

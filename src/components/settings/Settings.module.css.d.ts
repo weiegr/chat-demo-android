@@ -10,6 +10,9 @@ declare const styles: {
   readonly mobileDataContent: string
   readonly mobileLocationContent: string
   readonly mobileSubActionRow: string
+  readonly mobileActionGroup: string
+  readonly mobileCardHint: string
+  readonly mobileCardHintError: string
   readonly mobileActionCard: string
   readonly mobileActionHit: string
   readonly mobileActionBody: string
@@ -29,13 +32,17 @@ declare const styles: {
   readonly themeModalConfirm: string
   readonly infoModal: string
   readonly infoModalText: string
-  readonly infoModalExtra: string
   readonly infoModalActions: string
   readonly infoModalCancel: string
   readonly ttsSheet: string
   readonly ttsSheetMain: string
   readonly locationSheet: string
   readonly locationSheetMain: string
+  readonly urlSheet: string
+  readonly urlSheetMain: string
+  readonly urlStage: string
+  readonly urlModal: string
+  readonly urlInput: string
   readonly sheetVisible: string
   readonly wheelStage: string
   readonly wheelHighlight: string
@@ -66,8 +73,11 @@ declare const styles: {
   readonly label: string
   readonly infoButton: string
   readonly infoButtonWarn: string
+  readonly inlineActionLink: string
+  readonly inlineActionIcon: string
   readonly uploadButton: string
   readonly locationSwitchCell: string
+  readonly locationSwitchCellOpen: string
   readonly switchHeader: string
   readonly locationCollapse: string
   readonly locationCollapseOpen: string

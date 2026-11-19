@@ -23,7 +23,19 @@ export type Source = {
   /** 明文摘要与站点图标；缺少元数据时为 null */
   snippet: string | null
   siteIcon: string | null
+  /** 搜索结果自带的原站图片直链（如图像搜索召回），仅允许 HTTP/HTTPS */
+  imageUrl: string | null
   /** 引用角标与搜索结果列表上的编号，从 1 开始 */
+  index: number
+}
+
+/** 从搜索工具结果中整理出的富文本展示图片 */
+export type SearchImage = {
+  url: string
+  title: string
+  pageUrl: string
+  siteName: string
+  siteIcon: string | null
   index: number
 }
 
@@ -91,6 +103,26 @@ export type ReplyView = {
   sources: Source[]
   /** 搜索到的网页（去重），用于底部汇总与搜索结果列表 */
   searchResults: Source[]
+  /** 本轮是否明确执行过搜索工具（普通搜索、深度搜索或图像搜索） */
+  hasExecutedSearch: boolean
+  /** 搜索工具返回的可用图片（按图片地址去重） */
+  searchImages: SearchImage[]
+}
+
+export const getSafeHttpUrl = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+  try {
+    const parsed = new URL(trimmed)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.toString() : null
+  } catch {
+    return null
+  }
 }
 
 export const getSiteName = (url: string) => {
@@ -128,11 +160,12 @@ class SourceRegistry {
     url: string,
     title: string | null,
     publishedAt: string | null,
-    metadata?: Pick<WebSearchResult, 'snippet' | 'site_icon' | 'site_name'>
+    metadata?: Pick<WebSearchResult, 'snippet' | 'site_icon' | 'site_name' | 'image_url'>
   ): Source {
     const siteName = metadata?.site_name?.trim() || getSiteName(url)
     const snippet = metadata?.snippet?.trim() || null
-    const siteIcon = metadata?.site_icon?.trim() || null
+    const siteIcon = getSafeHttpUrl(metadata?.site_icon)
+    const imageUrl = getSafeHttpUrl(metadata?.image_url)
     const existing = this.byUrl.get(url)
     if (existing) {
       // 同一网页可能先被打开，或先返回不完整元数据；后续结果补齐，不覆盖已有正文信息。
@@ -145,6 +178,7 @@ class SourceRegistry {
       existing.publishedAt ||= publishedAt
       existing.snippet ||= snippet
       existing.siteIcon ||= siteIcon
+      existing.imageUrl ||= imageUrl
       return existing
     }
     const source: Source = {
@@ -154,6 +188,7 @@ class SourceRegistry {
       publishedAt,
       snippet,
       siteIcon,
+      imageUrl,
       index: this.list.length + 1,
     }
     this.list.push(source)
@@ -191,16 +226,25 @@ const joinTextBlocks = (
 export const buildReplyView = (reply: AssistantMessage, streaming: boolean): ReplyView => {
   const results = new Map<string, WebSearchToolResultBlock | WebFetchToolResultBlock>()
   const clientResults = new Map<string, ClientToolResultBlock>()
+  let hasExecutedSearch = false
   for (const block of reply.blocks) {
     if (block.type === 'web_search_tool_result' || block.type === 'web_fetch_tool_result') {
       results.set(block.tool_use_id, block)
     } else if (block.type === 'client_tool_result') {
       clientResults.set(block.tool_use_id, block)
     }
+    if (
+      (block.type === 'server_tool_use' && block.input.action === 'search') ||
+      block.type === 'web_search_tool_result'
+    ) {
+      hasExecutedSearch = true
+    }
   }
 
   const registry = new SourceRegistry()
   const searchResults: Source[] = []
+  const searchImages: SearchImage[] = []
+  const seenImageUrls = new Set<string>()
   const steps: Step[] = []
   const mergedSearch = new Map<ServerToolKind, SearchStep>()
   let mergedThinking: ThinkingStep | null = null
@@ -218,6 +262,18 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
           const source = registry.add(item.url, item.title, item.page_age, item)
           if (!searchResults.includes(source)) {
             searchResults.push(source)
+          }
+          const imageUrl = getSafeHttpUrl(item.image_url)
+          if (imageUrl && !seenImageUrls.has(imageUrl)) {
+            seenImageUrls.add(imageUrl)
+            searchImages.push({
+              url: imageUrl,
+              title: source.title,
+              pageUrl: source.url,
+              siteName: source.siteName,
+              siteIcon: source.siteIcon,
+              index: source.index,
+            })
           }
         }
       }
@@ -381,6 +437,8 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
     answer: answer && answer.text ? answer : null,
     sources: registry.list,
     searchResults,
+    hasExecutedSearch,
+    searchImages,
   }
 }
 

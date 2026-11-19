@@ -88,6 +88,7 @@ export const ImagePreview = () => {
           className={clsx(styles.image, status === 'loading' && styles.imageLoading)}
           src={preview.src}
           alt={preview.alt}
+          referrerPolicy="no-referrer"
           onLoad={() => setStatus('loaded')}
           onError={() => setStatus('error')}
         />

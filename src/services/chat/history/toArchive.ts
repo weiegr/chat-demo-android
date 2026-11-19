@@ -68,6 +68,7 @@ const toolFragment = (tool: ServerToolUseBlock, result: ReplyBlock | undefined):
                   published_at: isoOrNull(item.page_age),
                   site_name: item.site_name,
                   site_icon: item.site_icon ?? null,
+                  ...(item.image_url ? { image_url: item.image_url } : {}),
                 },
               ]
             : []

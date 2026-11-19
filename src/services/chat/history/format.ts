@@ -102,6 +102,8 @@ export type SearchResult = {
   site_name: string | null
   /** 可选的站点图标。 */
   site_icon?: string | null
+  /** 可选的图片直链（图搜结果等场景下携带）。 */
+  image_url?: string | null
 }
 
 /** 普通搜索与边想边搜共用的搜索片段，包含可见结果 */
