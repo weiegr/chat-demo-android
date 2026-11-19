@@ -8,7 +8,7 @@ export const zh = {
   welcomeModeTitleExpert: '使用专家模式开始对话',
   welcomeModeTitleRp: '使用RP模式开始对话',
   chatModeFastHint: '响应快速，功能完整，\n运行于Flash模型',
-  chatModeExpertHint: '适合复杂问题，无识图功能，运行于Pro模型',
+  chatModeExpertHint: '适合复杂问题，无识图功能，\n运行于Pro模型',
   chatModeRpHint: '适合角色扮演，为长上下文打造，\n无搜索、全局记忆功能',
   chatModeSwitchInNewSessionHint: '需要在新会话切换模式',
   expandSiderbarButton: '打开边栏',
@@ -104,6 +104,8 @@ export const zh = {
   backupInvalidFiles: '文件中的附件数据已损坏，无法导入',
   settingsLocalePreference: '语言',
   settingsTtsVoice: '朗读音色',
+  settingsAutoReadAloud: '自动朗读',
+  settingsAutoReadAloudDesc: '回答完成后自动朗读回复内容',
   settingsTtsVoiceStella: '海星（女声）',
   settingsTtsVoiceStellaName: '海星',
   settingsTtsVoiceStellaDesc: '女声',
@@ -113,7 +115,8 @@ export const zh = {
   settingsSystemPrompt: '系统提示词',
   settingsSystemPromptPlaceholder: '输入系统提示词，留空则不发送',
   settingsFastSystemPrompt: '快速模式提示词',
-  settingsFastSystemPromptDesc: '快速模式随每轮对话发送的基础系统指令，留空则不发送。',
+  settingsFastSystemPromptDesc:
+    '快速模式随每轮对话发送的基础系统指令，运行于 Flash 模型；留空则不发送。',
   settingsFastSearchToolPrompt: '快速模式搜索工具提示词',
   settingsFastSearchToolPromptDesc:
     '快速模式开启「智能搜索」时附带给模型的联网搜索说明，留空则不附带。',
@@ -124,13 +127,8 @@ export const zh = {
   settingsFastLocationToolPromptDesc:
     '快速模式开启「允许 AI 主动请求真实位置」（且启用深度思考与智能搜索）时，作为 get_location 工具描述发送给模型；留空则恢复默认描述。',
   settingsExpertSystemPrompt: '专家模式提示词',
-  settingsExpertSystemPromptDesc: '专家模式随每轮对话发送的基础系统指令，留空则不发送。',
-  settingsExpertSearchToolPrompt: '专家模式搜索工具提示词',
-  settingsExpertSearchToolPromptDesc:
-    '专家模式开启「智能搜索」时附带给模型的联网搜索说明，留空则不附带。',
-  settingsExpertLocationToolPrompt: '专家模式实时定位工具提示词',
-  settingsExpertLocationToolPromptDesc:
-    '专家模式开启「允许 AI 主动请求真实位置」（且启用深度思考与智能搜索）时，作为 get_location 工具描述发送给模型；留空则恢复默认描述。',
+  settingsExpertSystemPromptDesc:
+    '专家模式随每轮对话发送的基础系统指令，运行于 Pro 模型；留空则不发送。',
   settingsRpSystemPrompt: 'RP模式提示词',
   settingsRpSystemPromptDesc: '仅在 RP 模式下随每轮对话发送的系统指令，留空则不发送。',
   settingsToolPromptPlaceholder: '输入工具提示词',
@@ -160,6 +158,8 @@ export const zh = {
   settingsAiLocationDescription: 'AI 判断需要时可主动调用设备定位获取当前位置',
   settingsAiLocationRequiresDescription:
     'AI 判断需要时可主动获取当前位置，需同时开启深度思考与智能搜索',
+  settingsAiLocationFastOnlyDescription:
+    '定位工具仅支持快速模式：切换到快速模式，并开启深度思考与智能搜索后可用',
   settingsAiLocationCoarseDescription:
     '当前仅授予大致位置，可能导致定位失败或偏差，建议开启精确位置',
   settingsAiLocationCoarseRequiresDescription:

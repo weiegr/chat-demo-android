@@ -9,8 +9,6 @@ import {
   DEFAULT_READ_LINK_TOOL_PROMPT,
   DEFAULT_RP_SYSTEM_PROMPT,
   DEFAULT_SEARCH_TOOL_PROMPT,
-  setExpertLocationToolPrompt,
-  setExpertSearchToolPrompt,
   setExpertSystemPrompt,
   setFastLocationToolPrompt,
   setFastReadLinkToolPrompt,
@@ -33,8 +31,6 @@ export type PromptTarget =
   | 'fastReadLinkTool'
   | 'fastLocationTool'
   | 'expertSystem'
-  | 'expertSearchTool'
-  | 'expertLocationTool'
   | 'rpSystem'
 
 type PromptConfig = {
@@ -87,22 +83,6 @@ const PROMPT_TARGET_CONFIG: Record<PromptTarget, PromptConfig> = {
     read: () => useSettings.getState().expertSystemPrompt,
     save: setExpertSystemPrompt,
   },
-  expertSearchTool: {
-    titleKey: 'settingsExpertSearchToolPrompt',
-    descKey: 'settingsExpertSearchToolPromptDesc',
-    placeholderKey: 'settingsToolPromptPlaceholder',
-    defaultValue: DEFAULT_SEARCH_TOOL_PROMPT,
-    read: () => useSettings.getState().expertSearchToolPrompt,
-    save: setExpertSearchToolPrompt,
-  },
-  expertLocationTool: {
-    titleKey: 'settingsExpertLocationToolPrompt',
-    descKey: 'settingsExpertLocationToolPromptDesc',
-    placeholderKey: 'settingsToolPromptPlaceholder',
-    defaultValue: DEFAULT_LOCATION_TOOL_PROMPT,
-    read: () => useSettings.getState().expertLocationToolPrompt,
-    save: setExpertLocationToolPrompt,
-  },
   rpSystem: {
     titleKey: 'settingsRpSystemPrompt',
     descKey: 'settingsRpSystemPromptDesc',
@@ -113,7 +93,7 @@ const PROMPT_TARGET_CONFIG: Record<PromptTarget, PromptConfig> = {
   },
 }
 
-/** 系统提示词页面的两个模式分组：快速模式与专家模式各自维护基础提示词和工具提示词 */
+/** 系统提示词页面的两个模式分组：快速模式维护基础与工具提示词，专家模式只有基础提示词 */
 const MODE_PROMPT_GROUPS: { main: PromptTarget; tools: PromptTarget[] }[] = [
   {
     main: 'fastSystem',
@@ -121,8 +101,8 @@ const MODE_PROMPT_GROUPS: { main: PromptTarget; tools: PromptTarget[] }[] = [
   },
   {
     main: 'expertSystem',
-    // v4-pro 不支持 deepseek_read_url，链接阅读提示词条目随之移除
-    tools: ['expertSearchTool', 'expertLocationTool'],
+    // v4-pro 不声明任何服务端/客户端工具，工具提示词无请求侧用途
+    tools: [],
   },
 ]
 

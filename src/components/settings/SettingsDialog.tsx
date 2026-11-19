@@ -26,6 +26,7 @@ import {
 import { useIsMobile } from '../../app/viewport.js'
 import { useChatStore } from '../../services/chat/store.js'
 import {
+  setAutoReadAloud,
   setLocale,
   setThemePreference,
   setTtsVoice,
@@ -38,6 +39,7 @@ import { useTranslate, type TranslationKey, type TranslationMessage } from '../.
 import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
 import { Select } from '../base/Select.js'
+import { Switch } from '../base/Switch.js'
 import { showToast } from '../base/toastState.js'
 import { usePresence } from '../base/usePresence.js'
 import { ApiKeySetting } from './ApiKeyField.js'
@@ -189,6 +191,7 @@ const SettingsContent = () => {
               <div className={styles.mobileCard}>
                 <MobileSystemPromptNavRow onOpen={() => setMobilePage('systemPrompt')} />
                 <MobileTtsVoiceSetting />
+                <MobileAutoReadAloudSetting />
                 <MobileRpModeNavRow onOpen={() => setMobilePage('rpMode')} />
               </div>
             </div>
@@ -216,6 +219,7 @@ const SettingsContent = () => {
                   <ThemeSetting />
                   <LocaleSetting />
                   <TtsVoiceSetting />
+                  <AutoReadAloudSetting />
                   <LocationSetting />
                   <AiLocationSetting />
                   <SystemPromptSetting />
@@ -516,6 +520,22 @@ const MobileTtsVoiceSetting = () => {
   )
 }
 
+/** 移动端自动朗读：开关行，置于朗读音色下方 */
+const MobileAutoReadAloudSetting = () => {
+  const t = useTranslate()
+  const autoReadAloud = useSettings((state) => state.autoReadAloud)
+  return (
+    <div className={styles.mobileNavRow}>
+      <span className={styles.label}>{t('settingsAutoReadAloud')}</span>
+      <Switch
+        checked={autoReadAloud}
+        ariaLabel={t('settingsAutoReadAloud')}
+        onChange={setAutoReadAloud}
+      />
+    </div>
+  )
+}
+
 /** 朗读音色：stella（海星，女声）/ tide（暗潮，男声） */
 const TtsVoiceSetting = () => {
   const t = useTranslate()
@@ -533,6 +553,26 @@ const TtsVoiceSetting = () => {
             { value: 'tide', label: t('settingsTtsVoiceTide') },
           ]}
           onChange={setTtsVoice}
+        />
+      }
+    />
+  )
+}
+
+/** 自动朗读：回答完成后自动朗读回复内容 */
+const AutoReadAloudSetting = () => {
+  const t = useTranslate()
+  const autoReadAloud = useSettings((state) => state.autoReadAloud)
+  return (
+    <SettingCell
+      label={t('settingsAutoReadAloud')}
+      description={t('settingsAutoReadAloudDesc')}
+      status={null}
+      action={
+        <Switch
+          checked={autoReadAloud}
+          ariaLabel={t('settingsAutoReadAloud')}
+          onChange={setAutoReadAloud}
         />
       }
     />

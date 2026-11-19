@@ -36,6 +36,7 @@ import {
 } from './drafts.js'
 import { isTextAttachment, loadInlineTexts } from './inlineFiles.js'
 import { createLatestReminder } from './latestReminder.js'
+import { autoStartReadAloud } from '../speech/readAloud.js'
 import {
   applyEvent,
   canContinueReply,
@@ -54,15 +55,16 @@ import {
   type SessionSummary,
   type UserMessage,
 } from './types.js'
+import { buildReplyView } from './view.js'
 
 /** 保留最近打开的详情；当前会话、生成中及尚未成功保存的会话不淘汰。 */
 const SESSION_CACHE_LIMIT = 5
 /**
- * 扩展模式（high 风控、服务端工具或服务端标题）会按单条消息限 32768 token；
- * RP 模式省略 safety_check、tools 与 title，只保留接口默认检查，支持超长上下文。
+ * 请求安全检查级别：RP 模式省略安全参数（保持长上下文纯净）；
+ * 其余模式统一使用 low —— high 会拦截定位等正常提问，且定位工具要求 low。
  */
 const safetyCheck = (isRpMode: boolean): CreateMessageRequest['safety_check'] =>
-  isRpMode ? undefined : { level: 'high' }
+  isRpMode ? undefined : { level: 'low' }
 /** RP 模式省略服务端 title 时的本地兜底标题字数上限 */
 const LOCAL_TITLE_MAX_CHARS = 24
 /** 服务端判定 file_id 失效后，重新补传并重发的最多次数（不含首次请求） */
@@ -123,19 +125,20 @@ const buildRequestSystem = (
 
 /**
  * 声明本轮可用工具：
- * - RP 模式不声明任何工具，保持长上下文通道纯净；
- * - 标准/专家模式下，read_url 仅在本轮正文含链接时声明，search 开关控制 deepseek_web_search，
- *   客户端定位工具仅在思考 + 搜索均开启时声明（扩展模式服务端约束）。
+ * - RP 模式与专家模式（v4-pro）不声明任何工具；
+ * - 快速模式下，read_url 仅在本轮正文含链接时声明，search 开关控制 deepseek_web_search；
+ *   客户端定位工具仅在快速模式、思考 + 搜索均开启时声明（服务端约束，且缺少推理时模型无法正确安排调用顺序）。
  */
 const requestTools = (
   isRpMode: boolean,
+  isV4Pro: boolean,
   search: boolean,
   hasLink: boolean,
   allowAiLocation: boolean,
   thinking: boolean,
   locationToolDescription: string
 ): NonNullable<CreateMessageRequest['tools']> => {
-  if (isRpMode) {
+  if (isRpMode || isV4Pro) {
     return []
   }
   const tools: NonNullable<CreateMessageRequest['tools']> = []
@@ -199,6 +202,21 @@ const buildSearchContext = (results: SearchApiResult[], locale: Locale): string 
   ]
     .filter(Boolean)
     .join('\n\n')
+}
+
+/**
+ * 自动朗读：回复正常完成且会话为当前活跃会话时触发。
+ * 只读最终正文（与手动朗读按钮一致），续写时截掉前缀已读部分；拒绝回复不读，失败静默。
+ */
+const autoReadReply = (sessionId: string, reply: AssistantMessage, prefix?: AssistantMessage) => {
+  if (sessionId !== useChatStore.getState().activeId || reply.stopReason === 'refusal') {
+    return
+  }
+  const text = buildReplyView(reply, false).answer?.text ?? ''
+  const readText = prefix
+    ? text.slice((buildReplyView(prefix, false).answer?.text ?? '').length)
+    : text
+  autoStartReadAloud(reply.id, readText, () => {})
 }
 
 /** 允许自动补标题的请求；手动重命名后取消本轮标题写入，包含主动清空标题的情况。 */
@@ -1572,6 +1590,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         const safety = safetyCheck(isRpMode)
         const tools = requestTools(
           isRpMode,
+          isV4Pro,
           searchEnabled,
           hasLink,
           allowAiLocation,
@@ -1651,6 +1670,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           titleRequests.delete(controller)
         }
         reply = settleReply(reply, 'done', Date.now())
+        autoReadReply(sessionId, reply, prepared.prefix)
         break
       } catch (error) {
         if (controller.signal.aborted) {
@@ -1698,6 +1718,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         if (error instanceof ApiError && error.kind === 'interrupted' && reply.stopReason) {
           // 已收到 message_delta 的结束原因，只是缺了结尾的 message_stop
           reply = settleReply(reply, 'done', Date.now())
+          autoReadReply(sessionId, reply, prepared.prefix)
         } else if (error instanceof ApiError) {
           reply = settleReply(reply, 'error', Date.now(), {
             kind: error.kind,

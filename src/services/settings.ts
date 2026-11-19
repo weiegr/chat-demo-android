@@ -17,8 +17,9 @@ export const DEFAULT_FAST_SYSTEM_PROMPT = '该助手为DeepSeek Flash，由深�
 /** 专家模式系统提示词默认值；对模型只提档位（Pro），不暴露具体型号 */
 export const DEFAULT_EXPERT_SYSTEM_PROMPT = '该助手为DeepSeek Pro，由深度求索公司创造。'
 
-/** RP 模式系统提示词默认值；默认留空，保持长上下文角色扮演纯净 */
-export const DEFAULT_RP_SYSTEM_PROMPT = ''
+/** RP 模式系统提示词默认值：明确角色扮演边界，可在设置中修改或清空 */
+export const DEFAULT_RP_SYSTEM_PROMPT =
+  '你是 AI RP 助手，专注于沉浸式虚构角色扮演。请始终遵循用户设定的角色、语气与世界观，保持人设和剧情连贯，不擅自跳出角色或代替用户行动；用户未指定设定时，主动配合并推动剧情发展。'
 
 /** 联网搜索工具（deepseek_web_search）默认提示词说明 */
 export const DEFAULT_SEARCH_TOOL_PROMPT = [
@@ -62,13 +63,13 @@ type Settings = {
   locationEnabled: boolean
   allowAiLocation: boolean
   ttsVoice: TtsVoice
+  /** 回答完成后是否自动朗读回复内容 */
+  autoReadAloud: boolean
   fastSystemPrompt: string
   fastSearchToolPrompt: string
   fastReadLinkToolPrompt: string
   fastLocationToolPrompt: string
   expertSystemPrompt: string
-  expertSearchToolPrompt: string
-  expertLocationToolPrompt: string
   rpSystemPrompt: string
   chatMode: ChatMode
   rpModel: ChatModel
@@ -87,8 +88,6 @@ export const getModePrompts = (
     | 'fastReadLinkToolPrompt'
     | 'fastLocationToolPrompt'
     | 'expertSystemPrompt'
-    | 'expertSearchToolPrompt'
-    | 'expertLocationToolPrompt'
     | 'rpSystemPrompt'
   >
 ): ModePrompts => {
@@ -103,10 +102,10 @@ export const getModePrompts = (
   if (mode === 'expert') {
     return {
       systemPrompt: settings.expertSystemPrompt,
-      searchToolPrompt: settings.expertSearchToolPrompt,
-      // v4-pro 不支持 deepseek_read_url，链接阅读提示词在专家模式无请求侧用途
+      // v4-pro 不声明任何服务端/客户端工具，工具提示词在专家模式无请求侧用途
+      searchToolPrompt: '',
       readLinkToolPrompt: '',
-      locationToolPrompt: settings.expertLocationToolPrompt,
+      locationToolPrompt: '',
     }
   }
   return {
@@ -125,13 +124,12 @@ const KEYS = {
   allowAiLocation: 'chat-demo:allow-ai-location',
   themePreference: 'chat-demo:theme-preference',
   ttsVoice: 'chat-demo:tts-voice',
+  autoReadAloud: 'chat-demo:auto-read-aloud',
   fastSystemPrompt: 'chat-demo:fast-system-prompt',
   fastSearchToolPrompt: 'chat-demo:fast-search-tool-prompt',
   fastReadLinkToolPrompt: 'chat-demo:fast-read-link-tool-prompt',
   fastLocationToolPrompt: 'chat-demo:fast-location-tool-prompt',
   expertSystemPrompt: 'chat-demo:expert-system-prompt',
-  expertSearchToolPrompt: 'chat-demo:expert-search-tool-prompt',
-  expertLocationToolPrompt: 'chat-demo:expert-location-tool-prompt',
   rpSystemPrompt: 'chat-demo:rp-system-prompt',
   legacySystemPrompt: 'chat-demo:system-prompt',
   legacyToolPromptsEnabled: 'chat-demo:tool-prompts-enabled',
@@ -231,6 +229,7 @@ export const useSettings = create<Settings>(() => ({
   allowAiLocation: read(KEYS.allowAiLocation) === 'true',
   themePreference: initialThemePreference(),
   ttsVoice: initialTtsVoice(),
+  autoReadAloud: read(KEYS.autoReadAloud) === 'true',
   fastSystemPrompt: read(KEYS.fastSystemPrompt) ?? legacySystemPrompt ?? DEFAULT_FAST_SYSTEM_PROMPT,
   fastSearchToolPrompt: read(KEYS.fastSearchToolPrompt) ?? DEFAULT_SEARCH_TOOL_PROMPT,
   fastReadLinkToolPrompt: read(KEYS.fastReadLinkToolPrompt) ?? DEFAULT_READ_LINK_TOOL_PROMPT,
@@ -238,9 +237,6 @@ export const useSettings = create<Settings>(() => ({
     read(KEYS.fastLocationToolPrompt) ?? legacyLocationToolPrompt ?? DEFAULT_LOCATION_TOOL_PROMPT,
   expertSystemPrompt:
     read(KEYS.expertSystemPrompt) ?? legacySystemPrompt ?? DEFAULT_EXPERT_SYSTEM_PROMPT,
-  expertSearchToolPrompt: read(KEYS.expertSearchToolPrompt) ?? DEFAULT_SEARCH_TOOL_PROMPT,
-  expertLocationToolPrompt:
-    read(KEYS.expertLocationToolPrompt) ?? legacyLocationToolPrompt ?? DEFAULT_LOCATION_TOOL_PROMPT,
   rpSystemPrompt: read(KEYS.rpSystemPrompt) ?? DEFAULT_RP_SYSTEM_PROMPT,
   chatMode: initialChatMode(),
   rpModel: initialRpModel(),
@@ -280,6 +276,11 @@ export const setTtsVoice = (ttsVoice: TtsVoice) => {
   useSettings.setState({ ttsVoice })
 }
 
+export const setAutoReadAloud = (autoReadAloud: boolean) => {
+  write(KEYS.autoReadAloud, String(autoReadAloud))
+  useSettings.setState({ autoReadAloud })
+}
+
 export const setFastSystemPrompt = (fastSystemPrompt: string) => {
   write(KEYS.fastSystemPrompt, fastSystemPrompt)
   useSettings.setState({ fastSystemPrompt })
@@ -303,16 +304,6 @@ export const setFastLocationToolPrompt = (fastLocationToolPrompt: string) => {
 export const setExpertSystemPrompt = (expertSystemPrompt: string) => {
   write(KEYS.expertSystemPrompt, expertSystemPrompt)
   useSettings.setState({ expertSystemPrompt })
-}
-
-export const setExpertSearchToolPrompt = (expertSearchToolPrompt: string) => {
-  write(KEYS.expertSearchToolPrompt, expertSearchToolPrompt)
-  useSettings.setState({ expertSearchToolPrompt })
-}
-
-export const setExpertLocationToolPrompt = (expertLocationToolPrompt: string) => {
-  write(KEYS.expertLocationToolPrompt, expertLocationToolPrompt)
-  useSettings.setState({ expertLocationToolPrompt })
 }
 
 export const setRpSystemPrompt = (rpSystemPrompt: string) => {

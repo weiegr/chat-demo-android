@@ -74,19 +74,15 @@ export const describeReadAloudError = (error: unknown): TranslationMessage | str
 }
 
 /**
- * 开始朗读一条回复的正文；同一条正在朗读时调用等于停止。
- * 必须在点击事件中同步调用：AudioContext 需要用户手势才能出声。
+ * 启动朗读一条回复的正文；由手动按钮与自动朗读共用。
+ * 浏览器内需用户手势才能出声，APK 的 WebView 已设置免手势自动播放。
  */
-export const toggleReadAloud = (
+export const startReadAloud = (
   messageId: string,
   text: string,
   onError: (error: unknown) => void
 ) => {
-  const reading = useReadAloud.getState().messageId
   stopReadAloud()
-  if (reading === messageId) {
-    return
-  }
   const controller = new AbortController()
   const context = new AudioContext({ sampleRate: TTS_SAMPLE_RATE })
   current = { controller, context }
@@ -141,4 +137,36 @@ export const toggleReadAloud = (
       }
     }
   })()
+}
+
+/** 自动朗读：开关开启、无进行中的朗读且正文非空时启动；失败静默交给 onError 调用方 */
+export const autoStartReadAloud = (
+  messageId: string,
+  text: string,
+  onError: (error: unknown) => void
+) => {
+  if (!useSettings.getState().autoReadAloud || !text.trim()) {
+    return
+  }
+  if (useReadAloud.getState().status !== 'idle') {
+    // 不打断正在播放或加载中的手动朗读
+    return
+  }
+  startReadAloud(messageId, text, onError)
+}
+
+/**
+ * 开始朗读一条回复的正文；同一条正在朗读时调用等于停止。
+ * 必须在点击事件中同步调用：浏览器内 AudioContext 需要用户手势才能出声。
+ */
+export const toggleReadAloud = (
+  messageId: string,
+  text: string,
+  onError: (error: unknown) => void
+) => {
+  if (useReadAloud.getState().messageId === messageId) {
+    stopReadAloud()
+    return
+  }
+  startReadAloud(messageId, text, onError)
 }

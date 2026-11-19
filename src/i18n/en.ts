@@ -10,7 +10,7 @@ export const en = {
   welcomeModeTitleExpert: 'Start chatting in Expert mode',
   welcomeModeTitleRp: 'Start chatting in RP mode',
   chatModeFastHint: 'Fast responses with full features,\npowered by Flash',
-  chatModeExpertHint: 'Built for complex tasks, no vision support, powered by Pro',
+  chatModeExpertHint: 'Built for complex tasks, no vision support,\npowered by Pro',
   chatModeRpHint: 'Tailored for roleplay and long context,\nwithout search or global memory',
   chatModeSwitchInNewSessionHint: 'Switch modes in a new chat',
   expandSiderbarButton: 'Open sidebar',
@@ -110,6 +110,8 @@ export const en = {
   backupInvalidFiles: 'The attachment data in this file is corrupted and cannot be imported.',
   settingsLocalePreference: 'Language',
   settingsTtsVoice: 'Read-aloud voice',
+  settingsAutoReadAloud: 'Auto read aloud',
+  settingsAutoReadAloudDesc: 'Automatically read each reply aloud once it finishes',
   settingsTtsVoiceStella: 'Stella (female)',
   settingsTtsVoiceStellaName: 'Stella',
   settingsTtsVoiceStellaDesc: 'Female',
@@ -120,7 +122,7 @@ export const en = {
   settingsSystemPromptPlaceholder: 'Enter a system prompt, leave empty to send none',
   settingsFastSystemPrompt: 'Fast mode prompt',
   settingsFastSystemPromptDesc:
-    'Base system instructions sent with each Fast mode chat; leave empty to omit.',
+    'Base system instructions sent with each Fast mode chat, powered by Flash; leave empty to omit.',
   settingsFastSearchToolPrompt: 'Fast mode search tool prompt',
   settingsFastSearchToolPromptDesc:
     'Search instructions appended in Fast mode when Search is enabled; leave empty to omit.',
@@ -132,13 +134,7 @@ export const en = {
     'Sent as the get_location tool description in Fast mode when AI location is enabled with DeepThink and Search; leave empty to use default.',
   settingsExpertSystemPrompt: 'Expert mode prompt',
   settingsExpertSystemPromptDesc:
-    'Base system instructions sent with each Expert mode chat; leave empty to omit.',
-  settingsExpertSearchToolPrompt: 'Expert mode search tool prompt',
-  settingsExpertSearchToolPromptDesc:
-    'Search instructions appended in Expert mode when Search is enabled; leave empty to omit.',
-  settingsExpertLocationToolPrompt: 'Expert mode location tool prompt',
-  settingsExpertLocationToolPromptDesc:
-    'Sent as the get_location tool description in Expert mode when AI location is enabled with DeepThink and Search; leave empty to use default.',
+    'Base system instructions sent with each Expert mode chat, powered by Pro; leave empty to omit.',
   settingsRpSystemPrompt: 'RP mode prompt',
   settingsRpSystemPromptDesc: 'System instructions sent only in RP mode; leave empty to send none.',
   settingsToolPromptPlaceholder: 'Enter tool prompt',
@@ -168,6 +164,8 @@ export const en = {
   settingsAiLocationDescription: 'Let AI request current device location when needed',
   settingsAiLocationRequiresDescription:
     'Let AI request current device location when needed (requires deep thinking and web search)',
+  settingsAiLocationFastOnlyDescription:
+    'The location tool is available only in Fast mode. Switch to Fast mode and enable DeepThink and Search to use it.',
   settingsAiLocationCoarseDescription:
     'Only approximate location is granted, which may fail or be inaccurate. Enable precise location for better accuracy.',
   settingsAiLocationCoarseRequiresDescription:

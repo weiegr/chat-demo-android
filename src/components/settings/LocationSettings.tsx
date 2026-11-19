@@ -98,10 +98,14 @@ const useAiLocationPermission = (t: ReturnType<typeof useTranslate>) => {
 const getAiLocationDescriptionKey = (
   allowAiLocation: boolean,
   permissionLevel: LocationPermissionLevel,
-  toolsReady: boolean
+  toolsReady: boolean,
+  locationSupported: boolean
 ): TranslationKey => {
   if (!allowAiLocation) {
     return 'settingsAiLocationDescription'
+  }
+  if (!locationSupported) {
+    return 'settingsAiLocationFastOnlyDescription'
   }
   if (permissionLevel === 'none') {
     return toolsReady
@@ -134,7 +138,9 @@ export const AiLocationSetting = () => {
   const descriptionKey = getAiLocationDescriptionKey(
     allowAiLocation,
     permissionLevel,
-    chatMode !== 'rp' && thinking && search
+    // 定位工具只在快速模式下、且思考与搜索均开启时声明（见 requestTools）
+    thinking && search,
+    chatMode === 'fast'
   )
 
   return (
