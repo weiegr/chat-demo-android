@@ -5,6 +5,7 @@ English | [简体中文](README.zh-CN.md)
 An **Android WebView app and static chat client (`API demo`)** built on top of [deepseek-ai/chat-demo](https://github.com/deepseek-ai/chat-demo). No application backend is required: the embedded web app connects directly to the configured DeepSeek API service.
 
 - **App Name**: `API demo`
+- **Current Version**: `1.0.0`
 - **Android Package Name**: `xyz.app566512.apidemo`
 - **Minimum / Target SDK**: Android 8.0+ (`minSdkVersion 26`, `targetSdkVersion 34`)
 - **Signing**: Gradle-free build using `~/.android/debug.keystore`, outputting `dist-apk/chat-demo.apk`
@@ -59,6 +60,7 @@ pnpm build:single
 - Multiple conversations with automatic titles, renaming, and deletion; edit prompts, regenerate replies, and switch between message branches.
 - Streaming replies, deep thinking, smart search, link reading, and source citations; stop generation or continue eligible replies.
 - Attachment uploads (images, documents, and code files), voice input (ASR), and read-aloud playback (TTS) with a live audio spectrum while recording on mobile.
+- Editable system prompt, plus optional advanced tool prompts for rich search/image replies and the real-time location tool, each with one-tap restore to defaults.
 - Markdown, Prism syntax highlighting, KaTeX math, and Mermaid diagrams.
 - Simplified Chinese and English, light and dark themes, location settings, and ZIP chat history import/export.
 
@@ -68,7 +70,8 @@ pnpm build:single
 - **Native Integration**: Edge-to-Edge status/navigation bar safe-area insets (`--safe-top` / `--safe-bottom`), OS dark/light theme synchronization, and Back button handling to dismiss open drawers, menus, or modals first.
 - **Media & Permissions**: Mobile `+` attachment panel integrates native camera capture, system photo picker, generic file chooser, and a quick-select strip of the 10 most recent photos once gallery permission is granted; microphone permission is requested dynamically for voice input.
 - **Downloads Support**: Intercepts `blob:` exports and saves chat history ZIP archives directly to the device's `Download/` folder.
-- **Mobile UI Refinements**: Swipe gestures for the sidebar drawer; three-dot menu on chat list items shown only for the active session on touch devices (hover preserved on desktop); inline bottom-composer editing of user messages and attachments; in-app image preview modal; and mobile card navigation for Settings.
+- **Mobile UI Refinements**: Swipe gestures for the sidebar drawer; long-press context menu on chat list items (hover menu preserved on desktop); inline bottom-composer editing of user messages and attachments; in-app image preview modal; and card-based Settings sub-pages (General / Data / Location / System Prompt) with masked API key view, edit, and clear.
+- **Keyboard Integration**: The WebView shrinks frame by frame with the IME animation so the composer, attachment panel, and keyboard stay in sync; sheets, drawers, and modals no longer steal focus, keeping the keyboard from competing with their enter animations.
 
 ## Data Storage & Backup
 
