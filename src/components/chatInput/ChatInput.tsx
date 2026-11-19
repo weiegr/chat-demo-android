@@ -727,7 +727,8 @@ const Input = ({
                 <span className={styles.toggleLabel}>{t('thinkingSwitch')}</span>
               </button>
             </Tooltip>
-            {isRpMode ? null : (
+            {/* v4-pro 不支持服务端搜索工具，开关随 RP 模式一并隐藏 */}
+            {isRpMode || useOcrModel ? null : (
               <Tooltip content={t('deactivatedSearchTooltip')}>
                 <button
                   type="button"

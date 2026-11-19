@@ -1378,7 +1378,9 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
   const sessionMode = getSession(sessionId)?.mode ?? 'fast'
   const isRpMode = sessionMode === 'rp'
   const model = initial.model ?? resolveModeModel(sessionMode, settingsSnapshot.rpModel)
-  const useOcrForVisual = model === 'deepseek-v4-pro'
+  // v4-pro 无原生识图，且服务端不支持 server-side 工具、title 与 latest_reminder 等扩展能力
+  const isV4Pro = model === 'deepseek-v4-pro'
+  const useOcrForVisual = isV4Pro
   let reply = initial
   let prepared: PreparedRequest = request
   let frame = 0
@@ -1402,10 +1404,12 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           // 附件就绪后获取本轮信息；续写沿用原回答快照，重新生成的快照独立保存。
           const latestReminder = prepared.prefix
             ? prepared.prefix.latestReminder
-            : createLatestReminder({
-                locale: settingsSnapshot.locale,
-                location: settingsSnapshot.locationEnabled ? settingsSnapshot.location : null,
-              })
+            : isV4Pro
+              ? undefined
+              : createLatestReminder({
+                  locale: settingsSnapshot.locale,
+                  location: settingsSnapshot.locationEnabled ? settingsSnapshot.location : null,
+                })
           reply = { ...reply, latestReminder }
           // 只进草稿槽，收尾时随整段回复一起落盘；这里再写一次是整段会话的重复克隆。
           updateReply(sessionId, reply)
@@ -1421,14 +1425,18 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             texts: prepared.texts,
             ocrTexts: prepared.ocrTexts,
             omitServerTools: isRpMode,
+            omitLatestReminder: isV4Pro,
             useOcrForVisual,
           }
         )
         const currentSettings = useSettings.getState()
         const { apiKey } = currentSettings
         const modePrompts = getModePrompts(sessionMode, currentSettings)
-        const hasLink = !isRpMode && LINK_PATTERN.test(prepared.question.content)
-        const searchEnabled = !isRpMode && (initial.search ?? false)
+        // 服务端约束：v4-pro 不支持 server-side 工具（web_search/read_url）与 title 生成，
+        // 请求携带任一项即整体报错，因此连同依赖 search 的定位工具一并停用，标题走本地兜底
+        const serverToolsAllowed = !isRpMode && !isV4Pro
+        const hasLink = serverToolsAllowed && LINK_PATTERN.test(prepared.question.content)
+        const searchEnabled = serverToolsAllowed && (initial.search ?? false)
         const safety = safetyCheck(isRpMode)
         const tools = requestTools(
           isRpMode,
@@ -1438,8 +1446,9 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           initial.thinking ?? false,
           modePrompts.locationToolPrompt
         )
-        // RP 模式省略服务端 title，避免触发单条 32K 限制，首轮结束后写本地兜底标题
-        const askTitle = titleRequests.has(controller) && !isRpMode
+        // RP 模式省略服务端 title（避免触发单条 32K 限制），v4-pro 不支持服务端 title，
+        // 两者首轮结束后均写本地兜底标题
+        const askTitle = titleRequests.has(controller) && serverToolsAllowed
         const events = streamMessage(
           apiKey ?? '',
           {

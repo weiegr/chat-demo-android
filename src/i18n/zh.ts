@@ -8,7 +8,7 @@ export const zh = {
   welcomeModeTitleExpert: '使用专家模式开始对话',
   welcomeModeTitleRp: '使用RP模式开始对话',
   chatModeFastHint: '响应快速，功能完整，\n运行于Flash模型',
-  chatModeExpertHint: '适合复杂问题，无识图功能，运行于Pro模型',
+  chatModeExpertHint: '适合复杂问题，无识图与联网搜索，运行于Pro模型',
   chatModeRpHint: '适合角色扮演，为长上下文打造，\n无搜索、全局记忆功能',
   chatModeSwitchInNewSessionHint: '需要在新会话切换模式',
   expandSiderbarButton: '打开边栏',

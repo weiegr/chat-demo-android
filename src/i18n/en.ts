@@ -10,7 +10,7 @@ export const en = {
   welcomeModeTitleExpert: 'Start chatting in Expert mode',
   welcomeModeTitleRp: 'Start chatting in RP mode',
   chatModeFastHint: 'Fast responses with full features,\npowered by Flash',
-  chatModeExpertHint: 'Built for complex tasks, no vision support, powered by Pro',
+  chatModeExpertHint: 'Built for complex tasks, no vision or web search, powered by Pro',
   chatModeRpHint: 'Tailored for roleplay and long context,\nwithout search or global memory',
   chatModeSwitchInNewSessionHint: 'Switch modes in a new chat',
   expandSiderbarButton: 'Open sidebar',

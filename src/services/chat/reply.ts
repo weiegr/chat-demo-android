@@ -441,21 +441,25 @@ export const toRequestMessages = (
     texts?: Map<string, string>
     ocrTexts?: Map<string, string>
     omitServerTools?: boolean
+    omitLatestReminder?: boolean
     useOcrForVisual?: boolean
   }
 ): MessageParam[] => {
   const texts = options?.texts
   const ocrTexts = options?.ocrTexts
   const omitServerTools = options?.omitServerTools ?? false
+  const omitLatestReminder = options?.omitLatestReminder ?? false
   const useOcrForVisual = options?.useOcrForVisual ?? false
   const messages: MessageParam[] = []
   let previousReminder: string | undefined
   const appendReminder = (reminder: string | undefined) => {
-    // 仅在当前分支首次出现或内容变化时插入快照；缺少快照的消息保持原有内容。
-    if (reminder && reminder !== previousReminder) {
-      messages.push({ role: 'latest_reminder', content: reminder })
-      previousReminder = reminder
+    // 服务端不支持 latest_reminder 的模型（deepseek-v4-pro）整个请求省略该角色；
+    // 其余仅在当前分支首次出现或内容变化时插入快照，缺少快照的消息保持原有内容。
+    if (omitLatestReminder || !reminder || reminder === previousReminder) {
+      return
     }
+    messages.push({ role: 'latest_reminder', content: reminder })
+    previousReminder = reminder
   }
   for (const [user, reply] of getContextRounds(history)) {
     const hasInlineText = user.files.some((file) => texts?.has(file.id))
