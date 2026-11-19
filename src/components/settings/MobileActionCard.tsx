@@ -18,6 +18,7 @@ export const MobileActionCard = ({
   embedded = false,
   disabled = false,
   danger = false,
+  className,
   onAction,
   children,
 }: {
@@ -29,10 +30,17 @@ export const MobileActionCard = ({
   embedded?: boolean
   disabled?: boolean
   danger?: boolean
+  className?: string
   onAction: () => void
   children?: ReactNode
 }) => (
-  <div className={clsx(styles.mobileActionCard, embedded && styles.mobileActionCardEmbedded)}>
+  <div
+    className={clsx(
+      styles.mobileActionCard,
+      embedded && styles.mobileActionCardEmbedded,
+      className
+    )}
+  >
     <button
       type="button"
       className={styles.mobileActionHit}

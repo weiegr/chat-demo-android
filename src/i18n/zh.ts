@@ -1,5 +1,16 @@
 export const zh = {
   welcomeMessageChat250808: '今天有什么可以帮到你？',
+  chatModeLabel: '对话模式',
+  chatModeFast: '快速模式',
+  chatModeExpert: '专家模式',
+  chatModeRp: 'RP模式',
+  welcomeModeTitleFast: '使用快速模式开始对话',
+  welcomeModeTitleExpert: '使用专家模式开始对话',
+  welcomeModeTitleRp: '使用RP模式开始对话',
+  chatModeFastHint: '响应快速，功能完整，\n运行于Flash模型',
+  chatModeExpertHint: '适合复杂问题，无识图功能，运行于Pro模型',
+  chatModeRpHint: '适合角色扮演，为长上下文打造，\n无搜索、全局记忆功能',
+  chatModeSwitchInNewSessionHint: '需要在新会话切换模式',
   expandSiderbarButton: '打开边栏',
   collapseSiderbarButton: '收起边栏',
   newChat: '开启新对话',
@@ -71,6 +82,10 @@ export const zh = {
   replyInvalidApiKey: 'API Key 无效或已被删除，请更换后重试',
   replyInsufficientBalance: '账户余额不足，请充值后重试',
   replyRateLimited: '请求过于频繁，请稍后再试',
+  replyInputTooLong:
+    '本轮消息约 {used} tokens，超过服务端单条输入上限 {max} tokens。请精简本轮内容，或拆成几条发送后重试',
+  replyInputTooLongHint: '。也可以切换至 RP 模式后重试',
+  switchToRpModeAction: '切换至 RP 模式',
   completionServerBusyToast: '服务器繁忙，请稍后再试',
   unknownError: '未知错误',
   replyRefused: '你好，这个问题我暂时无法回答，让我们换个话题再聊聊吧。',
@@ -96,30 +111,41 @@ export const zh = {
   settingsTtsVoiceTideName: '暗潮',
   settingsTtsVoiceTideDesc: '男声',
   settingsSystemPrompt: '系统提示词',
-  settingsSystemPromptDescription: '随每轮对话发送给模型的系统指令，留空则不发送自定义身份指令。',
   settingsSystemPromptPlaceholder: '输入系统提示词，留空则不发送',
-  settingsAdvanced: '高级设置',
-  settingsAdvancedDescription:
-    '开启后可查看并自定义搜索配图、定位工具等附带的系统提示词；关闭后恢复使用内置默认指令。',
-  settingsToolPromptSearchImage: '搜索富文本与配图指令',
-  settingsToolPromptSearchImageDesc:
-    '开启「智能搜索」与「允许在 AI 回复中加入图片」时附加到系统指令中，用于约束图文排版与图片直链；留空则不附加。',
-  settingsToolPromptLocation: '实时定位工具提示',
-  settingsToolPromptLocationDesc:
-    '开启「允许 AI 主动请求真实位置」（且启用深度思考与智能搜索）时，作为 get_location 工具的描述发送给模型；留空则恢复默认描述。',
+  settingsFastSystemPrompt: '快速模式提示词',
+  settingsFastSystemPromptDesc: '快速模式随每轮对话发送的基础系统指令，留空则不发送。',
+  settingsFastSearchToolPrompt: '快速模式搜索工具提示词',
+  settingsFastSearchToolPromptDesc:
+    '快速模式开启「智能搜索」时附带给模型的联网搜索说明，留空则不附带。',
+  settingsFastReadLinkToolPrompt: '快速模式链接阅读工具提示词',
+  settingsFastReadLinkToolPromptDesc:
+    '快速模式检测到消息包含网页链接时附带给模型的阅读链接说明，留空则不附带。',
+  settingsFastLocationToolPrompt: '快速模式实时定位工具提示词',
+  settingsFastLocationToolPromptDesc:
+    '快速模式开启「允许 AI 主动请求真实位置」（且启用深度思考与智能搜索）时，作为 get_location 工具描述发送给模型；留空则恢复默认描述。',
+  settingsExpertSystemPrompt: '专家模式提示词',
+  settingsExpertSystemPromptDesc: '专家模式随每轮对话发送的基础系统指令，留空则不发送。',
+  settingsExpertSearchToolPrompt: '专家模式搜索工具提示词',
+  settingsExpertSearchToolPromptDesc:
+    '专家模式开启「智能搜索」时附带给模型的联网搜索说明，留空则不附带。',
+  settingsExpertReadLinkToolPrompt: '专家模式链接阅读工具提示词',
+  settingsExpertReadLinkToolPromptDesc:
+    '专家模式检测到消息包含网页链接时附带给模型的阅读链接说明，留空则不附带。',
+  settingsExpertLocationToolPrompt: '专家模式实时定位工具提示词',
+  settingsExpertLocationToolPromptDesc:
+    '专家模式开启「允许 AI 主动请求真实位置」（且启用深度思考与智能搜索）时，作为 get_location 工具描述发送给模型；留空则恢复默认描述。',
+  settingsRpSystemPrompt: 'RP模式提示词',
+  settingsRpSystemPromptDesc: '仅在 RP 模式下随每轮对话发送的系统指令，留空则不发送。',
   settingsToolPromptPlaceholder: '输入工具提示词',
   settingsResetDefault: '恢复默认',
   settingsEditAction: '编辑',
   settingsConfigured: '已设置',
-  settingsAiImages: '允许在 AI 回复中加入图片',
-  settingsAiImagesDescription:
-    '开启后，仅当本轮对话明确执行了搜索工具（含联网搜索或图像搜索）时，才会在 AI 回复中触发富文本展示并插入搜索结果中的真实图片；未执行搜索时仅输出纯文本，不会生成图片。外站图片受原站点策略影响可能存在无法加载的情况。',
-  settingsAiImagesRequiresSearchDescription:
-    '开启后，需同时在输入框开启「智能搜索」且 AI 明确执行了搜索工具时，才会在回复中触发富文本图片展示；未开启开关或未执行搜索时仅输出纯文本。外站图片可能因原站点防盗链或链接失效而无法加载。',
-  richImageGalleryLabel: '搜索相关图片',
-  richImageOpenSource: '查看来源网页',
-  richImageLoadFailed: '图片暂时无法加载',
-  richImageViewOriginal: '打开原图链接',
+  settingsRpMode: 'RP模式设置',
+  settingsRpModel: '模型设置',
+  settingsRpModelDescription:
+    '选择 RP 模式使用的模型。Flash 响应更快并支持识图；Pro 适合复杂长文写作，上传图片时自动通过 OCR 识别文字。',
+  settingsRpModelFlash: 'DeepSeek Flash',
+  settingsRpModelPro: 'DeepSeek Pro',
   settingsLocation: '位置信息',
   settingsLocationProvince: '请选择省份/地区',
   settingsLocationCity: '请选择市',

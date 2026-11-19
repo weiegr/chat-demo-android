@@ -2,9 +2,11 @@ import clsx from 'clsx'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
 import type { Session } from '../../services/chat/types.js'
+import { showToast } from '../base/toastState.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
 import { MessageList } from '../messages/MessageList.js'
 import { useUserEdit } from '../messages/userEditState.js'
+import { getChatModeMeta } from './chatModeMeta.js'
 import { MobileHeader } from './MobileHeader.js'
 import styles from './SessionView.module.css'
 
@@ -22,14 +24,28 @@ export const SessionView = ({
   const isMobile = useIsMobile()
   const editing = useUserEdit((state) => state.active?.sessionId === session.id)
   const title = session.title || t('untitledChat')
+  const mode = session.mode ?? 'fast'
+  const modeMeta = getChatModeMeta(mode)
   return (
     <div className={styles.view}>
       {isMobile ? (
-        <MobileHeader title={title} />
+        <MobileHeader title={title} mode={mode} />
       ) : (
         <div className={styles.header}>
-          <div className={clsx(styles.title, siderCollapsed && styles.withCollapsedSider)}>
-            {title}
+          <div className={clsx(styles.titleGroup, siderCollapsed && styles.withCollapsedSider)}>
+            <div className={styles.title}>{title}</div>
+            <button
+              type="button"
+              className={styles.modeBadge}
+              onClick={() =>
+                showToast({ key: 'chatModeSwitchInNewSessionHint' }, { placement: 'center' })
+              }
+            >
+              <span className={styles.modeIcon} aria-hidden="true">
+                {modeMeta.icon}
+              </span>
+              <span className={styles.modeLabel}>{t(modeMeta.labelKey)}</span>
+            </button>
           </div>
         </div>
       )}

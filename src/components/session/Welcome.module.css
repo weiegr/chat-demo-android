@@ -16,11 +16,19 @@
   padding: 0 32px 64px;
 }
 
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  margin-bottom: 24px;
+}
+
 .greeting {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 21px;
+  margin-bottom: 22px;
   font-size: 24px;
   line-height: 32px;
   font-weight: 600;
@@ -28,11 +36,216 @@
   color: var(--dsw-alias-label-primary);
 }
 
+.greetingText {
+  opacity: 1;
+  transition: opacity 0.18s ease;
+}
+
+.modeSwitch {
+  --mode-track-bg: var(--dsw-alias-bg-base);
+  --mode-track-border: var(--dsw-alias-border-l2);
+  --mode-thumb-bg: var(--dsw-static-blue-100);
+  --mode-thumb-border: rgba(57, 100, 254, 0.14);
+  --mode-thumb-shadow: 0 2px 6px rgba(15, 23, 42, 0.06);
+  position: relative;
+  box-sizing: border-box;
+  width: calc(100% - 8px);
+  max-width: 396px;
+  margin: 5px 0;
+  border-radius: 9999px;
+  background-color: var(--mode-track-bg);
+  box-shadow: inset 0 0 0 1px var(--mode-track-border);
+  touch-action: none;
+
+  [data-ds-dark-theme] & {
+    --mode-track-bg: var(--dsw-alias-bg-base);
+    --mode-track-border: var(--dsw-alias-border-l2);
+    --mode-thumb-bg: var(--dsw-alias-button-ghost-active-fill);
+    --mode-thumb-border: rgba(103, 158, 254, 0.24);
+    --mode-thumb-shadow: 0 4px 12px rgba(0, 0, 0, 0.36);
+  }
+}
+
+.modeTrack {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+  width: 100%;
+  touch-action: none;
+  user-select: none;
+}
+
+.modeTrackDragging,
+.modeTrackDragging .modeOption {
+  cursor: grabbing;
+}
+
+/* 与单格等宽的位移层：0..2 精确对应三档，不受内部高亮区外扩像素影响 */
+.modeThumbSlot {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(100% / 3);
+  pointer-events: none;
+  will-change: transform;
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.modeThumbDragging {
+  transition: none;
+}
+
+/* 蓝色高亮区大于外层胶囊范围，上下与左右均适度突出浮于胶囊之上 */
+.modeThumb {
+  position: absolute;
+  top: -5px;
+  bottom: -5px;
+  left: -4px;
+  right: -4px;
+  border-radius: 9999px;
+  background-color: var(--mode-thumb-bg);
+  box-shadow:
+    inset 0 0 0 1px var(--mode-thumb-border),
+    var(--mode-thumb-shadow);
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.modeTrackDragging .modeThumb {
+  cursor: grabbing;
+}
+
+.modeOption {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.2s ease;
+
+  @media (hover: hover) {
+    &:hover:not(.modeOptionActive) {
+      color: var(--dsw-alias-brand-text);
+    }
+  }
+
+  &:focus-visible {
+    box-shadow: inset 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+}
+
+.modeOptionActive {
+  color: var(--dsw-alias-brand-text);
+}
+
+.modeOptionInner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.modeIcon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+
+  svg {
+    display: block;
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.modeLabel {
+  line-height: 20px;
+}
+
+/* 屏幕较窄时自动将图标移到文字下方，避免三选项相互挤压 */
+.stacked {
+  border-radius: 26px;
+
+  .modeThumb {
+    border-radius: 30px;
+  }
+
+  .modeOption {
+    min-height: 54px;
+    padding: 8px 6px;
+    border-radius: 26px;
+    font-size: 13px;
+    line-height: 18px;
+  }
+
+  .modeOptionInner {
+    flex-direction: column-reverse;
+    gap: 4px;
+  }
+
+  .modeLabel {
+    line-height: 18px;
+  }
+}
+
+.modeHint {
+  box-sizing: border-box;
+  width: calc(100% - 8px);
+  max-width: 396px;
+  min-height: 40px;
+  margin: 14px 0 0;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: pre-line;
+  opacity: 1;
+  transition: opacity 0.18s ease;
+}
+
+.modeHintStart {
+  text-align: left;
+}
+
+.modeHintCenter {
+  text-align: center;
+}
+
+.modeHintEnd {
+  text-align: right;
+}
+
+.textHidden {
+  opacity: 0;
+  transition-duration: 0.14s;
+}
+
 @media (max-width: 439px) {
   .greeting {
     font-size: 20px;
     line-height: 28px;
-    font-weight: 500;
+    font-weight: 600;
   }
 }
 
@@ -54,11 +267,25 @@
     }
   }
 
-  .greeting {
+  .hero {
     flex-shrink: 0;
     margin: auto 0;
-    font-size: 22px;
-    line-height: 30px;
+    padding: 0 4px;
+  }
+
+  .greeting {
+    font-size: 21px;
+    line-height: 29px;
     font-weight: 600;
+    margin-bottom: 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modeThumbSlot,
+  .greetingText,
+  .modeHint,
+  .modeOption {
+    transition: none;
   }
 }

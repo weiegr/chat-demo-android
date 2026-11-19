@@ -36,6 +36,7 @@ const userFragments = (message: UserMessage, exportImage: ExportImage): Fragment
       is_image: isImage,
       width: null,
       height: null,
+      ...(file.ocrText !== undefined ? { ocr_text: file.ocrText } : {}),
     }
   })
   return [
@@ -261,6 +262,7 @@ export const toSessionFile = (original: Session, exportImage: ExportImage): Sess
     id: session.id,
     title: session.title || null,
     pinned: false,
+    ...(session.mode ? { mode: session.mode } : {}),
     // 格式要求非空；空会话没有消息可指向，写 0。
     current_message_id: current ? id(current) : 0,
     inserted_at: iso(session.createdAt),

@@ -2,6 +2,17 @@ import type { zh } from './zh.js'
 
 export const en = {
   welcomeMessageChat250808: 'How can I help you?',
+  chatModeLabel: 'Chat mode',
+  chatModeFast: 'Fast',
+  chatModeExpert: 'Expert',
+  chatModeRp: 'RP',
+  welcomeModeTitleFast: 'Start chatting in Fast mode',
+  welcomeModeTitleExpert: 'Start chatting in Expert mode',
+  welcomeModeTitleRp: 'Start chatting in RP mode',
+  chatModeFastHint: 'Fast responses with full features,\npowered by Flash',
+  chatModeExpertHint: 'Built for complex tasks, no vision support, powered by Pro',
+  chatModeRpHint: 'Tailored for roleplay and long context,\nwithout search or global memory',
+  chatModeSwitchInNewSessionHint: 'Switch modes in a new chat',
   expandSiderbarButton: 'Open sidebar',
   collapseSiderbarButton: 'Close sidebar',
   newChat: 'New chat',
@@ -77,6 +88,10 @@ export const en = {
     'The API Key is invalid or has been deleted. Please replace it and try again.',
   replyInsufficientBalance: 'Insufficient account balance. Please top up and try again.',
   replyRateLimited: 'Too many requests. Please try again later.',
+  replyInputTooLong:
+    'This message is about {used} tokens, over the server limit of {max} tokens per message. Shorten it, or split it into several messages and try again.',
+  replyInputTooLongHint: ' You can also switch to RP mode and try again.',
+  switchToRpModeAction: 'Switch to RP mode',
   completionServerBusyToast: 'Server busy, please try again later.',
   unknownError: 'Unknown error',
   replyRefused: "Sorry, that's beyond my current scope. Let's talk about something else.",
@@ -102,31 +117,43 @@ export const en = {
   settingsTtsVoiceTideName: 'Tide',
   settingsTtsVoiceTideDesc: 'Male',
   settingsSystemPrompt: 'System prompt',
-  settingsSystemPromptDescription:
-    'System instructions sent with every conversation; leave empty to omit custom identity prompt.',
   settingsSystemPromptPlaceholder: 'Enter a system prompt, leave empty to send none',
-  settingsAdvanced: 'Advanced settings',
-  settingsAdvancedDescription:
-    'Enable to inspect and customize system instructions attached to tools; disable to fall back to built-in defaults.',
-  settingsToolPromptSearchImage: 'Search rich-text & image instruction',
-  settingsToolPromptSearchImageDesc:
-    'Appended to system instructions when both Search and Allow images in AI replies are enabled; leave empty to omit.',
-  settingsToolPromptLocation: 'Location tool description',
-  settingsToolPromptLocationDesc:
-    'Sent as the get_location tool description when AI location requests are enabled with Thinking and Search; leave empty to use default.',
+  settingsFastSystemPrompt: 'Fast mode prompt',
+  settingsFastSystemPromptDesc:
+    'Base system instructions sent with each Fast mode chat; leave empty to omit.',
+  settingsFastSearchToolPrompt: 'Fast mode search tool prompt',
+  settingsFastSearchToolPromptDesc:
+    'Search instructions appended in Fast mode when Search is enabled; leave empty to omit.',
+  settingsFastReadLinkToolPrompt: 'Fast mode link reader tool prompt',
+  settingsFastReadLinkToolPromptDesc:
+    'Link-reading instructions appended in Fast mode when a message contains a URL; leave empty to omit.',
+  settingsFastLocationToolPrompt: 'Fast mode location tool prompt',
+  settingsFastLocationToolPromptDesc:
+    'Sent as the get_location tool description in Fast mode when AI location is enabled with DeepThink and Search; leave empty to use default.',
+  settingsExpertSystemPrompt: 'Expert mode prompt',
+  settingsExpertSystemPromptDesc:
+    'Base system instructions sent with each Expert mode chat; leave empty to omit.',
+  settingsExpertSearchToolPrompt: 'Expert mode search tool prompt',
+  settingsExpertSearchToolPromptDesc:
+    'Search instructions appended in Expert mode when Search is enabled; leave empty to omit.',
+  settingsExpertReadLinkToolPrompt: 'Expert mode link reader tool prompt',
+  settingsExpertReadLinkToolPromptDesc:
+    'Link-reading instructions appended in Expert mode when a message contains a URL; leave empty to omit.',
+  settingsExpertLocationToolPrompt: 'Expert mode location tool prompt',
+  settingsExpertLocationToolPromptDesc:
+    'Sent as the get_location tool description in Expert mode when AI location is enabled with DeepThink and Search; leave empty to use default.',
+  settingsRpSystemPrompt: 'RP mode prompt',
+  settingsRpSystemPromptDesc: 'System instructions sent only in RP mode; leave empty to send none.',
   settingsToolPromptPlaceholder: 'Enter tool prompt',
   settingsResetDefault: 'Reset to default',
   settingsEditAction: 'Edit',
   settingsConfigured: 'Configured',
-  settingsAiImages: 'Allow images in AI replies',
-  settingsAiImagesDescription:
-    'When enabled, AI replies include rich-text image layouts using verified search results only after a web or image search tool is actually executed. Replies stay text-only when no search is run. External images may fail to load due to source host restrictions.',
-  settingsAiImagesRequiresSearchDescription:
-    'When enabled, turn on Search in the chat bar as well: rich-text image layouts trigger only when the AI actually runs a search tool and retrieves valid images; otherwise replies stay text-only.',
-  richImageGalleryLabel: 'Search images',
-  richImageOpenSource: 'Open source page',
-  richImageLoadFailed: 'Image unavailable',
-  richImageViewOriginal: 'Open image URL',
+  settingsRpMode: 'RP mode settings',
+  settingsRpModel: 'Model',
+  settingsRpModelDescription:
+    'Choose the model used in RP mode. Flash is faster and supports image vision; Pro excels at complex writing and automatically uses OCR for uploaded images.',
+  settingsRpModelFlash: 'DeepSeek Flash',
+  settingsRpModelPro: 'DeepSeek Pro',
   settingsLocation: 'Location',
   settingsLocationProvince: 'Select province/region',
   settingsLocationCity: 'Select city',

@@ -2,7 +2,7 @@ import clsx from 'clsx'
 import { memo, useState, type ReactNode } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { useUploads, type UploadTask } from '../../services/attachments.js'
-import type { DraftAttachment } from '../../services/chat/drafts.js'
+import { shouldSkipDraftUpload, type DraftAttachment } from '../../services/chat/drafts.js'
 import type { FileAttachment } from '../../services/chat/types.js'
 import { IconCloseFill14, IconPhotoErrorFill20, IconRefreshOutline16 } from '../base/icons.js'
 import { Tooltip } from '../base/Tooltip.js'
@@ -12,6 +12,7 @@ import { openImagePreview } from '../messages/imagePreviewState.js'
 import styles from './ChatInput.module.css'
 
 const UPLOADING: UploadTask = { status: 'uploading' }
+const INLINE_READY: UploadTask = { status: 'done', serverId: '' }
 
 /** 未发送的附件只有本地原件，点击时临时开一个地址，留出加载时间再释放 */
 const openLocalFile = (file: File) => {
@@ -24,12 +25,14 @@ const openLocalFile = (file: File) => {
 export const DraftAttachments = memo(function DraftAttachments({
   items,
   existingFiles = [],
+  useOcrModel = false,
   onRetry,
   onRemove,
   onRemoveExisting,
 }: {
   items: DraftAttachment[]
   existingFiles?: FileAttachment[]
+  useOcrModel?: boolean
   onRetry: (id: string) => void
   onRemove: (id: string) => void
   onRemoveExisting?: (id: string) => void
@@ -50,6 +53,7 @@ export const DraftAttachments = memo(function DraftAttachments({
         <AttachmentItem
           key={item.id}
           item={item}
+          useOcrModel={useOcrModel}
           onRetry={() => onRetry(item.id)}
           onRemove={() => onRemove(item.id)}
         />
@@ -139,15 +143,27 @@ const ExistingAttachmentItem = ({
 /** 输入框里的新增附件：图片显示缩略图，其余显示文件卡片 */
 const AttachmentItem = ({
   item,
+  useOcrModel,
   onRetry,
   onRemove,
 }: {
   item: DraftAttachment
+  useOcrModel: boolean
   onRetry: () => void
   onRemove: () => void
 }) => {
   const t = useTranslate()
-  const task = useUploads((state) => state.tasks[item.id] ?? UPLOADING)
+  const skipUpload = shouldSkipDraftUpload(
+    {
+      name: item.file.name,
+      size: item.file.size,
+      isImage: item.isImage,
+    },
+    useOcrModel
+  )
+  const task = useUploads(
+    (state) => state.tasks[item.id] ?? (skipUpload ? INLINE_READY : UPLOADING)
+  )
   const status = task.status
   const error = task.status === 'error' ? t(task.error.key, task.error.params) : undefined
   // 过大、格式不支持等重试无效的失败只提示原因，需删除后再发送

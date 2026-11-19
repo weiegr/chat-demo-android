@@ -97,6 +97,7 @@ const fileEntry: Read<FileEntry> = (value) => {
     is_image: boolean(item.is_image),
     width: nullable(count)(item.width),
     height: nullable(count)(item.height),
+    ...(typeof item.ocr_text === 'string' ? { ocr_text: item.ocr_text } : {}),
   }
 }
 
@@ -256,6 +257,9 @@ export const readSessionFile: Read<SessionFile> = (value) => {
     id: sessionId(item.id),
     title: nullable(string)(item.title),
     pinned: false,
+    ...(item.mode === 'fast' || item.mode === 'expert' || item.mode === 'rp'
+      ? { mode: item.mode }
+      : {}),
     current_message_id: count(item.current_message_id),
     inserted_at: time(item.inserted_at),
     updated_at: time(item.updated_at),

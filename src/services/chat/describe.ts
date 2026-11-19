@@ -1,5 +1,6 @@
 import { isTranslationKey, translate } from '../../i18n/index.js'
-import { classifyStatus } from '../api/errors.js'
+import { classifyStatus, getInputTooLongInfo } from '../api/errors.js'
+import type { ChatMode } from '../settings.js'
 import type { AssistantMessage } from './types.js'
 
 export type Notice = {
@@ -7,7 +8,7 @@ export type Notice = {
   /** 模板答复使用正文样式；其余统一为红色错误提示。 */
   presentation?: 'response'
   /** 需要用户处理的问题附带的操作 */
-  action?: 'apiKey' | 'topUp'
+  action?: 'apiKey' | 'topUp' | 'switchRp'
 }
 
 const getTemplateText = (reply: AssistantMessage) =>
@@ -16,7 +17,7 @@ const getTemplateText = (reply: AssistantMessage) =>
     .join('')
 
 /** 回复出错或未正常结束时展示的提示 */
-export const describeReply = (reply: AssistantMessage): Notice | null => {
+export const describeReply = (reply: AssistantMessage, sessionMode?: ChatMode): Notice | null => {
   if (reply.status === 'error' && reply.error) {
     const { kind, status, localMessage } = reply.error
     // 导入的历史可能来自不同版本；不识别的文案沿用保存时的原文。
@@ -40,8 +41,21 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
         return { text: translate('replyRateLimited') }
       case 'serverBusy':
         return { text: translate('completionServerBusyToast') }
-      default:
+      default: {
+        const tooLong = getInputTooLongInfo(message)
+        if (tooLong) {
+          const isRp = sessionMode === 'rp'
+          const hint = isRp ? '' : translate('replyInputTooLongHint')
+          return {
+            text: `${translate('replyInputTooLong', {
+              used: tooLong.used.toLocaleString('en-US'),
+              max: tooLong.max.toLocaleString('en-US'),
+            })}${hint}`,
+            ...(isRp ? {} : { action: 'switchRp' as const }),
+          }
+        }
         return message ? { text: message } : null
+      }
     }
   }
   const template = getTemplateText(reply)

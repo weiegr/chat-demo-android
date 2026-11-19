@@ -219,6 +219,7 @@ export const MobileSider = () => {
     const onTouchStart = (event: TouchEvent) => {
       if (
         event.touches.length !== 1 ||
+        (event.target instanceof Element && event.target.closest('[data-sider-swipe-ignore]')) ||
         document.querySelector('[role="dialog"][aria-modal="true"]') ||
         document.querySelector('[role="menu"]') ||
         document.querySelector('aside[class*="panel"]')

@@ -21,22 +21,24 @@ import {
   IconStopFill16,
   IconThinkOutline14,
 } from '../base/icons.js'
-import { setSearch, setThinking, useSettings } from '../../services/settings.js'
+import { resolveModeModel, setSearch, setThinking, useSettings } from '../../services/settings.js'
 import { useIsMobile } from '../../app/viewport.js'
-import { saveFiles } from '../../services/chat/db.js'
 import { editMessage, sendMessage, stopReply, useChatStore } from '../../services/chat/store.js'
 import {
   addDraftFiles,
   addDraftFilesWithIds,
   clearSentDraft,
   EMPTY_DRAFT,
+  ensureDraftUploads,
   getDraft,
   prepareDraftMessage,
   removeDraftAttachment,
   retryDraftAttachment,
   setDraftText,
+  shouldSkipDraftUpload,
   useDrafts,
 } from '../../services/chat/drafts.js'
+import { canInlineTextAttachment } from '../../services/chat/inlineFiles.js'
 import { stopReadAloud } from '../../services/speech/readAloud.js'
 import { IconButton } from '../base/IconButton.js'
 import { Tooltip } from '../base/Tooltip.js'
@@ -108,11 +110,35 @@ const Input = ({
   const draft = useDrafts((state) => state.drafts.get(draftKey) ?? EMPTY_DRAFT)
   const { text, attachments } = draft
   const setText = (value: string) => setDraftText(draftKey, value)
+  const globalMode = useSettings((state) => state.chatMode)
+  const rpModel = useSettings((state) => state.rpModel)
+  const sessionMode = useChatStore((state) =>
+    sessionId !== null ? (state.sessionCache[sessionId]?.mode ?? 'fast') : null
+  )
+  const activeMode = sessionMode ?? globalMode
+  const activeModel = resolveModeModel(activeMode, rpModel)
+  const useOcrModel = activeModel === 'deepseek-v4-pro'
+  const isRpMode = activeMode === 'rp'
+
+  useEffect(() => {
+    if (!useOcrModel && attachments.length > 0) {
+      ensureDraftUploads(draftKey, useSettings.getState().apiKey ?? '', false)
+    }
+  }, [useOcrModel, attachments.length, draftKey])
+
   const draftReady = useUploads((state) => {
     if (!activeEdit) {
-      return prepareDraftMessage(draft, state.tasks) !== null
+      return prepareDraftMessage(draft, state.tasks, useOcrModel) !== null
     }
     const allUploaded = draft.attachments.every((item) => {
+      if (
+        shouldSkipDraftUpload(
+          { name: item.file.name, size: item.file.size, isImage: item.isImage },
+          useOcrModel
+        )
+      ) {
+        return true
+      }
       const task = state.tasks[item.id]
       return task?.status === 'done' && Boolean(task.serverId)
     })
@@ -380,13 +406,13 @@ const Input = ({
     const observer = new ResizeObserver(updateLabels)
     observer.observe(toggles)
     return () => observer.disconnect()
-  }, [t])
+  }, [t, isRpMode])
 
   const acceptFiles = (files: File[]) => {
     if (files.length === 0 || useChatStore.getState().importingHistory || !ensureApiKey()) {
       return
     }
-    const error = addDraftFiles(draftKey, files, useSettings.getState().apiKey ?? '')
+    const error = addDraftFiles(draftKey, files, useSettings.getState().apiKey ?? '', useOcrModel)
     if (error) {
       showToast(error)
     }
@@ -448,7 +474,8 @@ const Input = ({
       const { error, ids } = addDraftFilesWithIds(
         draftKey,
         [file],
-        useSettings.getState().apiKey ?? ''
+        useSettings.getState().apiKey ?? '',
+        useOcrModel
       )
       if (error) {
         showToast(error)
@@ -525,13 +552,20 @@ const Input = ({
       const addedFiles = []
       const blobsToSave = []
       for (const attachment of currentDraft.attachments) {
+        const meta = {
+          name: attachment.file.name,
+          size: attachment.file.size,
+          isImage: attachment.isImage,
+        }
+        const inlineText = canInlineTextAttachment(meta)
+        const skipUpload = shouldSkipDraftUpload(meta, useOcrModel)
         const task = tasks[attachment.id]
-        if (task?.status !== 'done' || !task.serverId) {
+        if (!skipUpload && (task?.status !== 'done' || !task.serverId)) {
           return
         }
         addedFiles.push({
           id: attachment.id,
-          serverId: task.serverId,
+          serverId: inlineText ? null : task?.status === 'done' ? task.serverId : null,
           name: attachment.file.name,
           size: attachment.file.size,
           isImage: attachment.isImage,
@@ -544,10 +578,7 @@ const Input = ({
       if ((!nextText && nextFiles.length === 0) || !ensureApiKey()) {
         return
       }
-      if (blobsToSave.length > 0) {
-        void saveFiles(blobsToSave).catch(() => undefined)
-      }
-      if (!editMessage(sessionId, currentEdit.messageId, nextText, nextFiles)) {
+      if (!editMessage(sessionId, currentEdit.messageId, nextText, nextFiles, blobsToSave)) {
         return
       }
       clearSentDraft(draftKey)
@@ -558,7 +589,7 @@ const Input = ({
       return
     }
 
-    if (!prepareDraftMessage(getDraft(sessionId), useUploads.getState().tasks)) {
+    if (!prepareDraftMessage(getDraft(sessionId), useUploads.getState().tasks, useOcrModel)) {
       return
     }
     // 文本与上传完成态由提交动作读取最新快照，不使用上一次渲染的草稿。
@@ -626,6 +657,7 @@ const Input = ({
         <DraftAttachments
           items={attachments}
           existingFiles={activeEdit?.files}
+          useOcrModel={useOcrModel}
           onRetry={retryFile}
           onRemove={removeFile}
           onRemoveExisting={removeUserEditExistingFile}
@@ -695,19 +727,21 @@ const Input = ({
                 <span className={styles.toggleLabel}>{t('thinkingSwitch')}</span>
               </button>
             </Tooltip>
-            <Tooltip content={t('deactivatedSearchTooltip')}>
-              <button
-                type="button"
-                className={clsx(styles.toggle, search && styles.selected)}
-                aria-label={t('search')}
-                aria-pressed={search}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => setSearch(!search)}
-              >
-                <IconGlobeLanguageOutline14 active={search} />
-                <span className={styles.toggleLabel}>{t('search')}</span>
-              </button>
-            </Tooltip>
+            {isRpMode ? null : (
+              <Tooltip content={t('deactivatedSearchTooltip')}>
+                <button
+                  type="button"
+                  className={clsx(styles.toggle, search && styles.selected)}
+                  aria-label={t('search')}
+                  aria-pressed={search}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => setSearch(!search)}
+                >
+                  <IconGlobeLanguageOutline14 active={search} />
+                  <span className={styles.toggleLabel}>{t('search')}</span>
+                </button>
+              </Tooltip>
+            )}
           </div>
           <div className={styles.right}>
             {isMobile ? (

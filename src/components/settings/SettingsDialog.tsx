@@ -26,7 +26,6 @@ import {
 import { useIsMobile } from '../../app/viewport.js'
 import { useChatStore } from '../../services/chat/store.js'
 import {
-  setAllowAiImages,
   setLocale,
   setThemePreference,
   setTtsVoice,
@@ -39,7 +38,6 @@ import { useTranslate, type TranslationKey, type TranslationMessage } from '../.
 import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
 import { Select } from '../base/Select.js'
-import { Switch } from '../base/Switch.js'
 import { showToast } from '../base/toastState.js'
 import { usePresence } from '../base/usePresence.js'
 import { ApiKeySetting } from './ApiKeyField.js'
@@ -51,6 +49,7 @@ import {
   MobileLocationPage,
 } from './LocationSettings.js'
 import { MobileActionCard } from './MobileActionCard.js'
+import { MobileRpModeNavRow, MobileRpModePage, RpModeSetting } from './RpModeSettings.js'
 import {
   MobileSystemPromptNavRow,
   MobileSystemPromptPage,
@@ -82,9 +81,9 @@ const SettingsContent = () => {
   const isMobile = useIsMobile()
   // 打开时按调用方指定的分组选中，之后在弹窗内切换
   const [section, setSection] = useState(() => useSettingsDialog.getState().section)
-  const [mobilePage, setMobilePage] = useState<'main' | 'data' | 'location' | 'systemPrompt'>(
-    'main'
-  )
+  const [mobilePage, setMobilePage] = useState<
+    'main' | 'data' | 'location' | 'systemPrompt' | 'rpMode'
+  >('main')
   // 切换分组不丢失导入状态
   const historyImport = useHistoryImport()
   const historyUrlImport = useHistoryUrlImport()
@@ -100,7 +99,9 @@ const SettingsContent = () => {
         ? 'settingsLocation'
         : mobilePage === 'systemPrompt'
           ? 'settingsSystemPrompt'
-          : 'settings'
+          : mobilePage === 'rpMode'
+            ? 'settingsRpMode'
+            : 'settings'
   return (
     <>
       <Modal
@@ -158,6 +159,8 @@ const SettingsContent = () => {
             <MobileLocationPage />
           ) : mobilePage === 'systemPrompt' ? (
             <MobileSystemPromptPage />
+          ) : mobilePage === 'rpMode' ? (
+            <MobileRpModePage />
           ) : (
             <div className={styles.content}>
               <div className={styles.mobileGroupTitle}>
@@ -186,7 +189,7 @@ const SettingsContent = () => {
               <div className={styles.mobileCard}>
                 <MobileSystemPromptNavRow onOpen={() => setMobilePage('systemPrompt')} />
                 <MobileTtsVoiceSetting />
-                <AiImagesSetting />
+                <MobileRpModeNavRow onOpen={() => setMobilePage('rpMode')} />
               </div>
             </div>
           )
@@ -216,7 +219,7 @@ const SettingsContent = () => {
                   <LocationSetting />
                   <AiLocationSetting />
                   <SystemPromptSetting />
-                  <AiImagesSetting />
+                  <RpModeSetting />
                 </>
               ) : (
                 <>
@@ -533,30 +536,6 @@ const TtsVoiceSetting = () => {
         />
       }
     />
-  )
-}
-
-/** 允许在 AI 回复中加入图片：仅在明确执行搜索工具后触发富文本图文展示 */
-const AiImagesSetting = () => {
-  const t = useTranslate()
-  const allowAiImages = useSettings((state) => state.allowAiImages)
-  const search = useSettings((state) => state.search)
-  const description = t(
-    search ? 'settingsAiImagesDescription' : 'settingsAiImagesRequiresSearchDescription'
-  )
-
-  return (
-    <div className={clsx(styles.cell, styles.switchHeader)}>
-      <div className={styles.labelRow}>
-        <span className={styles.label}>{t('settingsAiImages')}</span>
-        <InfoModalButton ariaLabel={t('settingsAiImages')} description={description} />
-      </div>
-      <Switch
-        checked={allowAiImages}
-        ariaLabel={t('settingsAiImages')}
-        onChange={setAllowAiImages}
-      />
-    </div>
   )
 }
 

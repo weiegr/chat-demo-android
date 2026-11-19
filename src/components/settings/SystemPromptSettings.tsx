@@ -3,69 +3,139 @@ import { useEffect, useRef, useState } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import {
-  DEFAULT_IMAGE_SEARCH_TOOL_PROMPT,
   DEFAULT_LOCATION_TOOL_PROMPT,
+  DEFAULT_READ_LINK_TOOL_PROMPT,
+  DEFAULT_RP_SYSTEM_PROMPT,
+  DEFAULT_SEARCH_TOOL_PROMPT,
   DEFAULT_SYSTEM_PROMPT,
-  setImageSearchToolPrompt,
-  setLocationToolPrompt,
-  setSystemPrompt,
-  setToolPromptsEnabled,
+  setExpertLocationToolPrompt,
+  setExpertReadLinkToolPrompt,
+  setExpertSearchToolPrompt,
+  setExpertSystemPrompt,
+  setFastLocationToolPrompt,
+  setFastReadLinkToolPrompt,
+  setFastSearchToolPrompt,
+  setFastSystemPrompt,
+  setRpSystemPrompt,
   useSettings,
 } from '../../services/settings.js'
 import { Button } from '../base/Button.js'
 import { IconChevronRightOutline14 } from '../base/icons.js'
 import { Modal } from '../base/Modal.js'
-import { Switch } from '../base/Switch.js'
 import { usePresence } from '../base/usePresence.js'
 import { InfoModalButton } from './InfoModalButton.js'
 import { MobileActionCard } from './MobileActionCard.js'
 import styles from './Settings.module.css'
 
-type PromptTarget = 'system' | 'imageSearch' | 'location'
+export type PromptTarget =
+  | 'fastSystem'
+  | 'fastSearchTool'
+  | 'fastReadLinkTool'
+  | 'fastLocationTool'
+  | 'expertSystem'
+  | 'expertSearchTool'
+  | 'expertReadLinkTool'
+  | 'expertLocationTool'
+  | 'rpSystem'
 
-type ToolPromptTarget = Exclude<PromptTarget, 'system'>
+type PromptConfig = {
+  titleKey: TranslationKey
+  descKey: TranslationKey
+  placeholderKey: TranslationKey
+  defaultValue: string
+  read: () => string
+  save: (value: string) => void
+}
 
-const PROMPT_TARGET_CONFIG: Record<
-  PromptTarget,
-  {
-    titleKey: TranslationKey
-    descKey: TranslationKey
-    placeholderKey: TranslationKey
-    defaultValue: string
-    read: () => string
-    save: (value: string) => void
-  }
-> = {
-  system: {
-    titleKey: 'settingsSystemPrompt',
-    descKey: 'settingsSystemPromptDescription',
+const PROMPT_TARGET_CONFIG: Record<PromptTarget, PromptConfig> = {
+  fastSystem: {
+    titleKey: 'settingsFastSystemPrompt',
+    descKey: 'settingsFastSystemPromptDesc',
     placeholderKey: 'settingsSystemPromptPlaceholder',
     defaultValue: DEFAULT_SYSTEM_PROMPT,
-    read: () => useSettings.getState().systemPrompt,
-    save: setSystemPrompt,
+    read: () => useSettings.getState().fastSystemPrompt,
+    save: setFastSystemPrompt,
   },
-  imageSearch: {
-    titleKey: 'settingsToolPromptSearchImage',
-    descKey: 'settingsToolPromptSearchImageDesc',
+  fastSearchTool: {
+    titleKey: 'settingsFastSearchToolPrompt',
+    descKey: 'settingsFastSearchToolPromptDesc',
     placeholderKey: 'settingsToolPromptPlaceholder',
-    defaultValue: DEFAULT_IMAGE_SEARCH_TOOL_PROMPT,
-    read: () => useSettings.getState().imageSearchToolPrompt,
-    save: setImageSearchToolPrompt,
+    defaultValue: DEFAULT_SEARCH_TOOL_PROMPT,
+    read: () => useSettings.getState().fastSearchToolPrompt,
+    save: setFastSearchToolPrompt,
   },
-  location: {
-    titleKey: 'settingsToolPromptLocation',
-    descKey: 'settingsToolPromptLocationDesc',
+  fastReadLinkTool: {
+    titleKey: 'settingsFastReadLinkToolPrompt',
+    descKey: 'settingsFastReadLinkToolPromptDesc',
+    placeholderKey: 'settingsToolPromptPlaceholder',
+    defaultValue: DEFAULT_READ_LINK_TOOL_PROMPT,
+    read: () => useSettings.getState().fastReadLinkToolPrompt,
+    save: setFastReadLinkToolPrompt,
+  },
+  fastLocationTool: {
+    titleKey: 'settingsFastLocationToolPrompt',
+    descKey: 'settingsFastLocationToolPromptDesc',
     placeholderKey: 'settingsToolPromptPlaceholder',
     defaultValue: DEFAULT_LOCATION_TOOL_PROMPT,
-    read: () => useSettings.getState().locationToolPrompt,
-    save: setLocationToolPrompt,
+    read: () => useSettings.getState().fastLocationToolPrompt,
+    save: setFastLocationToolPrompt,
+  },
+  expertSystem: {
+    titleKey: 'settingsExpertSystemPrompt',
+    descKey: 'settingsExpertSystemPromptDesc',
+    placeholderKey: 'settingsSystemPromptPlaceholder',
+    defaultValue: DEFAULT_SYSTEM_PROMPT,
+    read: () => useSettings.getState().expertSystemPrompt,
+    save: setExpertSystemPrompt,
+  },
+  expertSearchTool: {
+    titleKey: 'settingsExpertSearchToolPrompt',
+    descKey: 'settingsExpertSearchToolPromptDesc',
+    placeholderKey: 'settingsToolPromptPlaceholder',
+    defaultValue: DEFAULT_SEARCH_TOOL_PROMPT,
+    read: () => useSettings.getState().expertSearchToolPrompt,
+    save: setExpertSearchToolPrompt,
+  },
+  expertReadLinkTool: {
+    titleKey: 'settingsExpertReadLinkToolPrompt',
+    descKey: 'settingsExpertReadLinkToolPromptDesc',
+    placeholderKey: 'settingsToolPromptPlaceholder',
+    defaultValue: DEFAULT_READ_LINK_TOOL_PROMPT,
+    read: () => useSettings.getState().expertReadLinkToolPrompt,
+    save: setExpertReadLinkToolPrompt,
+  },
+  expertLocationTool: {
+    titleKey: 'settingsExpertLocationToolPrompt',
+    descKey: 'settingsExpertLocationToolPromptDesc',
+    placeholderKey: 'settingsToolPromptPlaceholder',
+    defaultValue: DEFAULT_LOCATION_TOOL_PROMPT,
+    read: () => useSettings.getState().expertLocationToolPrompt,
+    save: setExpertLocationToolPrompt,
+  },
+  rpSystem: {
+    titleKey: 'settingsRpSystemPrompt',
+    descKey: 'settingsRpSystemPromptDesc',
+    placeholderKey: 'settingsSystemPromptPlaceholder',
+    defaultValue: DEFAULT_RP_SYSTEM_PROMPT,
+    read: () => useSettings.getState().rpSystemPrompt,
+    save: setRpSystemPrompt,
   },
 }
 
-const TOOL_PROMPT_TARGETS: ToolPromptTarget[] = ['imageSearch', 'location']
+/** 系统提示词页面的两个模式分组：快速模式与专家模式各自维护基础提示词和工具提示词 */
+const MODE_PROMPT_GROUPS: { main: PromptTarget; tools: PromptTarget[] }[] = [
+  {
+    main: 'fastSystem',
+    tools: ['fastSearchTool', 'fastReadLinkTool', 'fastLocationTool'],
+  },
+  {
+    main: 'expertSystem',
+    tools: ['expertSearchTool', 'expertReadLinkTool', 'expertLocationTool'],
+  },
+]
 
-/** 二级提示词编辑弹窗/底部抽屉：供系统提示词与各工具提示词共用 */
-const PromptEditorModal = ({
+/** 二级提示词编辑弹窗/底部抽屉：供快速模式、专家模式、各工具及 RP 模式提示词共用 */
+export const PromptEditorModal = ({
   target,
   onClose,
 }: {
@@ -75,7 +145,7 @@ const PromptEditorModal = ({
   const t = useTranslate()
   const isMobile = useIsMobile()
 
-  const lastTargetRef = useRef<PromptTarget>('system')
+  const lastTargetRef = useRef<PromptTarget>('fastSystem')
   if (target) {
     lastTargetRef.current = target
   }
@@ -182,138 +252,91 @@ export const MobileSystemPromptNavRow = ({ onOpen }: { onOpen: () => void }) => 
   )
 }
 
-/** 移动端独立的「系统提示词」子页面：顶部系统提示词单卡 + 下方高级设置工具提示词折叠卡片 */
+/** 移动端独立的「系统提示词」子页面：按快速模式、专家模式拆分为两张卡片，各自展示基础提示词与工具提示词 */
 export const MobileSystemPromptPage = () => {
   const t = useTranslate()
-  const toolPromptsEnabled = useSettings((state) => state.toolPromptsEnabled)
   const [editorTarget, setEditorTarget] = useState<PromptTarget | null>(null)
 
   return (
     <>
       <div className={clsx(styles.content, styles.mobileDataContent)}>
-        <MobileActionCard
-          label={t('settingsSystemPrompt')}
-          description={t('settingsSystemPromptDescription')}
-          right={
-            <span className={styles.mobileNavRight}>
-              <IconChevronRightOutline14 />
-            </span>
-          }
-          onAction={() => setEditorTarget('system')}
-        />
-
-        <div className={styles.mobileCard}>
-          <div
-            className={clsx(
-              styles.cell,
-              styles.locationSwitchCell,
-              toolPromptsEnabled && styles.locationSwitchCellOpen
-            )}
-          >
-            <div className={styles.switchHeader}>
-              <div className={styles.labelRow}>
-                <span className={styles.label}>{t('settingsAdvanced')}</span>
-                <InfoModalButton
-                  ariaLabel={t('settingsAdvanced')}
-                  description={t('settingsAdvancedDescription')}
-                />
-              </div>
-              <Switch
-                checked={toolPromptsEnabled}
-                ariaLabel={t('settingsAdvanced')}
-                onChange={setToolPromptsEnabled}
+        {MODE_PROMPT_GROUPS.map((group) => {
+          const mainCfg = PROMPT_TARGET_CONFIG[group.main]
+          return (
+            <div key={group.main} className={styles.mobileCard}>
+              <MobileActionCard
+                embedded
+                className={styles.modePromptMainRow}
+                label={t(mainCfg.titleKey)}
+                description={t(mainCfg.descKey)}
+                right={
+                  <span className={styles.mobileNavRight}>
+                    <IconChevronRightOutline14 />
+                  </span>
+                }
+                onAction={() => setEditorTarget(group.main)}
               />
-            </div>
-            <div
-              className={clsx(
-                styles.locationCollapse,
-                toolPromptsEnabled && styles.locationCollapseOpen
-              )}
-              aria-hidden={!toolPromptsEnabled}
-            >
-              <div className={styles.locationCollapseClip}>
-                <div className={styles.advancedToolList}>
-                  {TOOL_PROMPT_TARGETS.map((item) => {
-                    const cfg = PROMPT_TARGET_CONFIG[item]
-                    return (
-                      <MobileActionCard
-                        key={item}
-                        embedded
-                        label={t(cfg.titleKey)}
-                        description={t(cfg.descKey)}
-                        right={
-                          <span className={styles.mobileNavRight}>
-                            <IconChevronRightOutline14 />
-                          </span>
-                        }
-                        onAction={() => setEditorTarget(item)}
-                      />
-                    )
-                  })}
-                </div>
+              <div className={styles.modePromptSubList}>
+                {group.tools.map((item) => {
+                  const cfg = PROMPT_TARGET_CONFIG[item]
+                  return (
+                    <MobileActionCard
+                      key={item}
+                      embedded
+                      className={styles.modePromptSubRow}
+                      label={t(cfg.titleKey)}
+                      description={t(cfg.descKey)}
+                      right={
+                        <span className={styles.mobileNavRight}>
+                          <IconChevronRightOutline14 />
+                        </span>
+                      }
+                      onAction={() => setEditorTarget(item)}
+                    />
+                  )
+                })}
               </div>
             </div>
-          </div>
-        </div>
+          )
+        })}
       </div>
       <PromptEditorModal target={editorTarget} onClose={() => setEditorTarget(null)} />
     </>
   )
 }
 
-/** 桌面端「系统提示词」与「高级设置」工具提示词入口 */
+/** 桌面端「系统提示词」：拆分为快速模式与专家模式，各自列出基础提示词及对应工具提示词 */
 export const SystemPromptSetting = () => {
   const t = useTranslate()
-  const toolPromptsEnabled = useSettings((state) => state.toolPromptsEnabled)
   const [editorTarget, setEditorTarget] = useState<PromptTarget | null>(null)
 
   return (
     <>
-      <div className={clsx(styles.cell, styles.row)}>
-        <div className={styles.text}>
-          <div className={styles.labelRow}>
-            <span className={styles.label}>{t('settingsSystemPrompt')}</span>
-            <InfoModalButton
-              ariaLabel={t('settingsSystemPrompt')}
-              description={t('settingsSystemPromptDescription')}
-            />
-          </div>
-        </div>
-        <Button
-          variant="outlined"
-          size="m"
-          className={styles.cellButton}
-          onClick={() => setEditorTarget('system')}
-        >
-          {t('settingsEditAction')}
-        </Button>
-      </div>
-
-      <div className={clsx(styles.cell, styles.locationSwitchCell)}>
-        <div className={styles.switchHeader}>
-          <div className={styles.labelRow}>
-            <span className={styles.label}>{t('settingsAdvanced')}</span>
-            <InfoModalButton
-              ariaLabel={t('settingsAdvanced')}
-              description={t('settingsAdvancedDescription')}
-            />
-          </div>
-          <Switch
-            checked={toolPromptsEnabled}
-            ariaLabel={t('settingsAdvanced')}
-            onChange={setToolPromptsEnabled}
-          />
-        </div>
-        <div
-          className={clsx(
-            styles.locationCollapse,
-            toolPromptsEnabled && styles.locationCollapseOpen
-          )}
-          aria-hidden={!toolPromptsEnabled}
-        >
-          <div className={styles.locationCollapseClip}>
+      {MODE_PROMPT_GROUPS.map((group) => {
+        const mainCfg = PROMPT_TARGET_CONFIG[group.main]
+        return (
+          <div key={group.main}>
+            <div className={clsx(styles.cell, styles.row)}>
+              <div className={styles.text}>
+                <div className={styles.labelRow}>
+                  <span className={styles.label}>{t(mainCfg.titleKey)}</span>
+                  <InfoModalButton
+                    ariaLabel={t(mainCfg.titleKey)}
+                    description={t(mainCfg.descKey)}
+                  />
+                </div>
+              </div>
+              <Button
+                variant="outlined"
+                size="m"
+                className={styles.cellButton}
+                onClick={() => setEditorTarget(group.main)}
+              >
+                {t('settingsEditAction')}
+              </Button>
+            </div>
             <div className={styles.desktopToolList}>
-              {TOOL_PROMPT_TARGETS.map((item) => {
+              {group.tools.map((item) => {
                 const cfg = PROMPT_TARGET_CONFIG[item]
                 return (
                   <div key={item} className={clsx(styles.cell, styles.row)}>
@@ -336,8 +359,8 @@ export const SystemPromptSetting = () => {
               })}
             </div>
           </div>
-        </div>
-      </div>
+        )
+      })}
 
       <PromptEditorModal target={editorTarget} onClose={() => setEditorTarget(null)} />
     </>

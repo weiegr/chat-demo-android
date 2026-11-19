@@ -20,7 +20,9 @@ declare const styles: {
   readonly mobileActionRight: string
   readonly mobileActionDangerLabel: string
   readonly mobileActionLabelDisabled: string
-  readonly advancedToolList: string
+  readonly modePromptMainRow: string
+  readonly modePromptSubList: string
+  readonly modePromptSubRow: string
   readonly desktopToolList: string
   readonly mobileGroupTitle: string
   readonly mobileCard: string
@@ -115,5 +117,6 @@ declare const styles: {
   readonly importConfirmText: string
   readonly deleteConfirm: string
   readonly deleteActions: string
+  readonly version: string
 }
 export = styles
