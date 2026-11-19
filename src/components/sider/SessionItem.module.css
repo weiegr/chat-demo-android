@@ -10,6 +10,9 @@
   line-height: 22px;
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
   /* 会话上千条时只布局屏幕内的条目；高度固定，滚动条不会跳动 */
   content-visibility: auto;
   contain-intrinsic-size: auto 40px;
@@ -21,6 +24,10 @@
     .action {
       display: flex;
     }
+  }
+
+  &.longPressed {
+    background-color: var(--dsw-specific-sidebar-nav-item-hover);
   }
 
   @media (hover: hover) {

@@ -1,6 +1,5 @@
 export const zh = {
   welcomeMessageChat250808: '今天有什么可以帮到你？',
-  contentCaveat: '内容由 AI 生成，请仔细甄别',
   expandSiderbarButton: '打开边栏',
   collapseSiderbarButton: '收起边栏',
   newChat: '开启新对话',
@@ -97,8 +96,21 @@ export const zh = {
   settingsTtsVoiceTideName: '暗潮',
   settingsTtsVoiceTideDesc: '男声',
   settingsSystemPrompt: '系统提示词',
-  settingsSystemPromptDescription: '随每轮对话发送给模型的系统指令',
+  settingsSystemPromptDescription: '随每轮对话发送给模型的系统指令，留空则不发送自定义身份指令。',
   settingsSystemPromptPlaceholder: '输入系统提示词，留空则不发送',
+  settingsAdvanced: '高级设置',
+  settingsAdvancedDescription:
+    '开启后可查看并自定义搜索配图、定位工具等附带的系统提示词；关闭后恢复使用内置默认指令。',
+  settingsToolPromptSearchImage: '搜索富文本与配图指令',
+  settingsToolPromptSearchImageDesc:
+    '开启「智能搜索」与「允许在 AI 回复中加入图片」时附加到系统指令中，用于约束图文排版与图片直链；留空则不附加。',
+  settingsToolPromptLocation: '实时定位工具提示',
+  settingsToolPromptLocationDesc:
+    '开启「允许 AI 主动请求真实位置」（且启用深度思考与智能搜索）时，作为 get_location 工具的描述发送给模型；留空则恢复默认描述。',
+  settingsToolPromptPlaceholder: '输入工具提示词',
+  settingsResetDefault: '恢复默认',
+  settingsEditAction: '编辑',
+  settingsConfigured: '已设置',
   settingsAiImages: '允许在 AI 回复中加入图片',
   settingsAiImagesDescription:
     '开启后，仅当本轮对话明确执行了搜索工具（含联网搜索或图像搜索）时，才会在 AI 回复中触发富文本展示并插入搜索结果中的真实图片；未执行搜索时仅输出纯文本，不会生成图片。外站图片受原站点策略影响可能存在无法加载的情况。',
@@ -152,6 +164,11 @@ export const zh = {
   avatarMenuSettingsDialogThemeSelectLightOption: '浅色',
   avatarMenuSettingsDialogThemeSelectDarkOption: '深色',
   avatarMenuSettingsDialogThemeSelectSystemOption: '跟随系统',
+  apiKeyLabel: 'API Key',
+  apiKeyDescription: '从 DeepSeek API 开放平台获取的API Key',
+  apiKeyStatusSet: '已配置',
+  apiKeyStatusUnset: '未设置',
+  apiKeyClear: '清除',
   apiKeyStart: '输入 API Key 开始使用',
   apiKeyEdit: '修改 API Key',
   apiKeyPlaceholder: '请输入 API Key',

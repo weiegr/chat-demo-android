@@ -51,6 +51,7 @@ body.change-theme *::after {
   #root {
     height: 100%;
     overflow: hidden;
+    overflow: clip;
     overscroll-behavior-y: none;
   }
 }

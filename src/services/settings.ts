@@ -10,7 +10,15 @@ export type ThemePreference = 'light' | 'dark' | 'system'
 /** 系统提示词默认值；可在设置中修改或清空（清空后请求不带 system 内容） */
 export const DEFAULT_SYSTEM_PROMPT = '该助手为DeepSeek，由深度求索公司创造。'
 
-/** 本机设置，存 localStorage：API Key、语言、主题、位置与 AI 定位权限、允许回复插图、朗读音色、系统提示词、深度思考与智能搜索开关、侧边栏收起状态 */
+/** 搜索配图与富文本排版默认约束指令 */
+export const DEFAULT_IMAGE_SEARCH_TOOL_PROMPT =
+  '排版与配图约束：仅当你在本轮回复中明确调用了搜索工具并获取到真实检索结果时，方可采用图文混排富文本格式（合理使用小标题、分点、表格或引用），并可将搜索结果中真实存在且可直接访问的 HTTP/HTTPS 图片直链以独立成段的 Markdown 图片语法（![图片说明](图片URL)）插入对应段落中。严禁在未调用搜索工具时输出任何图片，严禁凭记忆编造或猜测图片 URL；若检索结果中没有可用的直接图片 URL，请仅使用纯文本作答。'
+
+/** 实时定位工具默认描述提示词 */
+export const DEFAULT_LOCATION_TOOL_PROMPT =
+  "Get the user's real-time physical geographic location (latitude, longitude, and resolved address when available). Call this tool only when the user's request depends on their actual current location (such as local weather, nearby places, current city, or directions)."
+
+/** 本机设置，存 localStorage：API Key、语言、主题、位置与 AI 定位权限、允许回复插图、朗读音色、系统提示词、高级工具提示词、深度思考与智能搜索开关、侧边栏收起状态 */
 type Settings = {
   apiKey: string | null
   locale: Locale
@@ -21,6 +29,9 @@ type Settings = {
   allowAiImages: boolean
   ttsVoice: TtsVoice
   systemPrompt: string
+  toolPromptsEnabled: boolean
+  imageSearchToolPrompt: string
+  locationToolPrompt: string
   thinking: boolean
   search: boolean
   siderCollapsed: boolean
@@ -36,6 +47,9 @@ const KEYS = {
   themePreference: 'chat-demo:theme-preference',
   ttsVoice: 'chat-demo:tts-voice',
   systemPrompt: 'chat-demo:system-prompt',
+  toolPromptsEnabled: 'chat-demo:tool-prompts-enabled',
+  imageSearchToolPrompt: 'chat-demo:image-search-tool-prompt',
+  locationToolPrompt: 'chat-demo:location-tool-prompt',
   thinking: 'chat-demo:thinking',
   search: 'chat-demo:search',
   siderCollapsed: 'chat-demo:sider-collapsed',
@@ -121,6 +135,9 @@ export const useSettings = create<Settings>(() => ({
   themePreference: initialThemePreference(),
   ttsVoice: initialTtsVoice(),
   systemPrompt: initialSystemPrompt(),
+  toolPromptsEnabled: read(KEYS.toolPromptsEnabled) === 'true',
+  imageSearchToolPrompt: read(KEYS.imageSearchToolPrompt) ?? DEFAULT_IMAGE_SEARCH_TOOL_PROMPT,
+  locationToolPrompt: read(KEYS.locationToolPrompt) ?? DEFAULT_LOCATION_TOOL_PROMPT,
   thinking: read(KEYS.thinking) === 'true',
   search: read(KEYS.search) === 'true',
   siderCollapsed: read(KEYS.siderCollapsed) === 'true',
@@ -165,6 +182,21 @@ export const setTtsVoice = (ttsVoice: TtsVoice) => {
 export const setSystemPrompt = (systemPrompt: string) => {
   write(KEYS.systemPrompt, systemPrompt)
   useSettings.setState({ systemPrompt })
+}
+
+export const setToolPromptsEnabled = (toolPromptsEnabled: boolean) => {
+  write(KEYS.toolPromptsEnabled, String(toolPromptsEnabled))
+  useSettings.setState({ toolPromptsEnabled })
+}
+
+export const setImageSearchToolPrompt = (imageSearchToolPrompt: string) => {
+  write(KEYS.imageSearchToolPrompt, imageSearchToolPrompt)
+  useSettings.setState({ imageSearchToolPrompt })
+}
+
+export const setLocationToolPrompt = (locationToolPrompt: string) => {
+  write(KEYS.locationToolPrompt, locationToolPrompt)
+  useSettings.setState({ locationToolPrompt })
 }
 
 export const setApiKey = (apiKey: string | null) => {

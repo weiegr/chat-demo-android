@@ -6,6 +6,8 @@
 }
 
 .header {
+  position: relative;
+  z-index: 17;
   display: flex;
   align-items: center;
   flex-shrink: 0;
@@ -40,6 +42,7 @@
   width: calc(var(--message-list-max-width) - 64px);
   max-width: calc(100% - 32px);
   margin: auto auto 0;
+  padding-bottom: 24px;
   background: linear-gradient(
     to bottom,
     transparent 0%,
@@ -48,22 +51,21 @@
   );
 }
 
-.caveat {
-  width: 100%;
-  padding: 6px 0;
-  font-size: 11px;
-  line-height: 16px;
-  text-align: center;
-  color: var(--dsw-alias-label-tertiary);
-  user-select: none;
-}
-
 @media not all and (min-width: 768px) {
   .inputContainer {
     position: relative;
     bottom: auto;
     flex-shrink: 0;
     margin: 0 auto;
-    padding-bottom: var(--safe-bottom);
+    padding-bottom: calc(12px + var(--safe-bottom));
+
+    [data-ime-open='true'] & {
+      padding-bottom: calc(6px + var(--safe-bottom));
+    }
   }
+}
+
+.inputContainerEditing {
+  z-index: auto;
+  background: transparent;
 }

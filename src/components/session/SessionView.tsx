@@ -4,6 +4,7 @@ import { useTranslate } from '../../i18n/index.js'
 import type { Session } from '../../services/chat/types.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
 import { MessageList } from '../messages/MessageList.js'
+import { useUserEdit } from '../messages/userEditState.js'
 import { MobileHeader } from './MobileHeader.js'
 import styles from './SessionView.module.css'
 
@@ -19,6 +20,7 @@ export const SessionView = ({
 }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
+  const editing = useUserEdit((state) => state.active?.sessionId === session.id)
   const title = session.title || t('untitledChat')
   return (
     <div className={styles.view}>
@@ -35,9 +37,8 @@ export const SessionView = ({
         session={session}
         streaming={streaming}
         footer={
-          <div className={styles.inputContainer}>
+          <div className={clsx(styles.inputContainer, editing && styles.inputContainerEditing)}>
             <ChatInput sessionId={session.id} />
-            <div className={styles.caveat}>{t('contentCaveat')}</div>
           </div>
         }
       />

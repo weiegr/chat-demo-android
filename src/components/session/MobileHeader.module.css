@@ -1,10 +1,13 @@
 .header {
+  position: relative;
+  z-index: 17;
   display: flex;
   align-items: center;
   flex-shrink: 0;
   box-sizing: border-box;
   min-height: calc(52px + var(--safe-top));
   padding: calc(4px + var(--safe-top)) 8px 4px;
+  background: var(--dsw-alias-bg-base);
 }
 
 .title {

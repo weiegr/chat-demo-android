@@ -48,6 +48,8 @@ export type AnchoredOptions = {
    * 旧位置绘制一帧再回弹，所以需要这个同步入口。
    */
   measureKey?: unknown
+  /** 可选外部锚点引用（如整行长按场景，无需把触发条套进 span.anchor） */
+  externalAnchorRef?: RefObject<HTMLElement | null>
 }
 
 const clampLeft = (left: number, width: number) =>
@@ -94,6 +96,7 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
     minSpace = 160,
     measureFirstChild = false,
     measureKey,
+    externalAnchorRef,
   }: AnchoredOptions = {}
 ) => {
   const anchorRef = useRef<T | null>(null) as MutableRefObject<T | null>
@@ -115,13 +118,10 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
   }, [])
 
   /** 触发元素自身不产生盒子时（如 display: contents），用它第一个子元素测量 */
-  const getAnchor = useCallback(
-    () =>
-      measureFirstChild
-        ? (anchorRef.current?.firstElementChild as HTMLElement | null)
-        : anchorRef.current,
-    [anchorRef, measureFirstChild]
-  )
+  const getAnchor = useCallback(() => {
+    const base = externalAnchorRef?.current ?? anchorRef.current
+    return measureFirstChild ? (base?.firstElementChild as HTMLElement | null) : base
+  }, [anchorRef, externalAnchorRef, measureFirstChild])
 
   // 测量只在浮层打开且已挂载后进行，ref 对象稳定，回调不随渲染重建
   const update = useCallback(() => {

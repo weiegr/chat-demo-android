@@ -1,5 +1,13 @@
 import clsx from 'clsx'
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from 'react'
 import {
   IconCameraOutline20,
   IconCheckOutline16,
@@ -33,12 +41,14 @@ import { stopReadAloud } from '../../services/speech/readAloud.js'
 import { IconButton } from '../base/IconButton.js'
 import { Tooltip } from '../base/Tooltip.js'
 import { ensureApiKey } from '../settings/settingsDialogState.js'
+import { dismissKeyboard } from '../sider/mobileSiderState.js'
 import { DragMask, useFileDrop } from './DragMask.js'
 import { showToast } from '../base/toastState.js'
 import { ACCEPT, resolveMimeType, useUploads } from '../../services/attachments.js'
 import {
   cancelUserEdit,
   getEditDraftKey,
+  removeUserEditExistingFile,
   useUserEdit,
   type ActiveUserEdit,
 } from '../messages/userEditState.js'
@@ -62,6 +72,7 @@ interface AndroidMediaBridge {
   hasGalleryPermission?: () => boolean
   requestGalleryPermission?: () => void
   requestRecentPhotos?: (limit: number) => void
+  getKeyboardHeightCss?: () => number
 }
 
 const getAndroidHost = (): AndroidMediaBridge | undefined =>
@@ -122,7 +133,10 @@ const Input = ({
   const albumInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const togglesRef = useRef<HTMLDivElement>(null)
+  const attachPanelRef = useRef<HTMLDivElement>(null)
+  const attachDismissCleanupRef = useRef<(() => void) | null>(null)
   const [attachMenuOpen, setAttachMenuOpen] = useState(false)
+  const [attachDismissMode, setAttachDismissMode] = useState<'idle' | 'to-ime'>('idle')
   const [galleryGranted, setGalleryGranted] = useState(
     () => getAndroidHost()?.hasGalleryPermission?.() ?? false
   )
@@ -130,19 +144,191 @@ const Input = ({
   const [pendingPhotoId, setPendingPhotoId] = useState<string | null>(null)
   const [mediaAttachmentMap, setMediaAttachmentMap] = useState<Record<string, string>>({})
 
+  const clearAttachToImeStyles = (panel: HTMLDivElement | null) => {
+    if (!panel) {
+      return
+    }
+    panel.style.removeProperty('--attach-start-h')
+    panel.style.removeProperty('--attach-start-vh')
+    panel.style.removeProperty('--attach-ime-ratio')
+    panel.style.removeProperty('height')
+    panel.style.removeProperty('transition')
+  }
+
+  const cancelAttachToIme = useCallback(() => {
+    attachDismissCleanupRef.current?.()
+    attachDismissCleanupRef.current = null
+    clearAttachToImeStyles(attachPanelRef.current)
+    setAttachDismissMode('idle')
+  }, [])
+
+  const closeAttachMenu = useCallback(() => {
+    cancelAttachToIme()
+    setAttachMenuOpen(false)
+  }, [cancelAttachToIme])
+
+  /**
+   * 附件菜单打开时点击文本框切输入法：
+   * 内层原地渐隐，外层高度直接由 CSS calc() 与 100dvh / --app-viewport-height 在同一 Layout Pass
+   * 内按比例耦合收拢，彻底消除跨线程动画时差导致的先冲过头/先下坠整屏闪动。
+   */
+  const dismissAttachToKeyboard = useCallback(() => {
+    cancelAttachToIme()
+    const panel = attachPanelRef.current
+    const panelHeight = panel?.getBoundingClientRect().height ?? 0
+    if (!panel || panelHeight <= 0) {
+      setAttachMenuOpen(false)
+      return
+    }
+    const androidHost = getAndroidHost()
+    const hasNativeHost = Boolean(androidHost)
+    const getCurrentHeight = () =>
+      hasNativeHost ? window.innerHeight : (window.visualViewport?.height ?? window.innerHeight)
+    const startHeight = getCurrentHeight()
+    const knownImeCss = androidHost?.getKeyboardHeightCss?.() ?? 0
+    const expectedRaise =
+      knownImeCss > panelHeight
+        ? knownImeCss
+        : Math.max(panelHeight + 48, Math.round(startHeight * 0.36))
+    const initialRatio = Math.min(0.95, panelHeight / expectedRaise)
+
+    panel.style.setProperty('--attach-start-h', `${panelHeight}px`)
+    panel.style.setProperty('--attach-start-vh', `${startHeight}px`)
+    panel.style.setProperty('--attach-ime-ratio', initialRatio.toFixed(4))
+    setAttachDismissMode('to-ime')
+    setAttachMenuOpen(false)
+
+    let finished = false
+    let fallingBack = false
+    let noImeTimer = 0
+    let settleTimer = 0
+    let collapseTimer = 0
+
+    const finish = () => {
+      if (finished) {
+        return
+      }
+      finished = true
+      cleanupAll()
+      clearAttachToImeStyles(panel)
+      // 交还 idle 时先钉住过渡：此刻面板高度已是 0，但 grid-template-rows 还是
+      // minmax(0,1fr)，允许过渡的话 0fr 会以内容高度为起点补一段动画，
+      // 面板先弹回满高再塌下去，把输入区顶起一次（观感上整屏闪一下）。
+      // 过渡在下次展开时恢复。
+      panel.style.transition = 'none'
+      setAttachDismissMode('idle')
+      attachDismissCleanupRef.current = null
+    }
+
+    const onTransitionEnd = (event: TransitionEvent) => {
+      if (event.target === panel && event.propertyName === 'height') {
+        finish()
+      }
+    }
+
+    const cleanupListeners = () => {
+      window.clearTimeout(noImeTimer)
+      window.clearTimeout(settleTimer)
+      window.removeEventListener('android-ime-start', onNativeImeStart)
+      window.removeEventListener('android-ime-shown', onNativeImeShown)
+      window.visualViewport?.removeEventListener('resize', onViewportChange)
+      window.removeEventListener('resize', onViewportChange)
+    }
+
+    const cleanupAll = () => {
+      cleanupListeners()
+      window.clearTimeout(collapseTimer)
+      panel.removeEventListener('transitionend', onTransitionEnd)
+    }
+
+    // 兜底收尾：当无软键盘弹起（如物理键盘）或键盘过矮留有残余高度时平滑收至 0
+    const collapseRemaining = (durationMs: number) => {
+      if (finished || fallingBack) {
+        return
+      }
+      const remaining = panel.getBoundingClientRect().height
+      if (remaining <= 2) {
+        finish()
+        return
+      }
+      fallingBack = true
+      cleanupListeners()
+      panel.style.height = `${remaining}px`
+      void panel.getBoundingClientRect()
+      panel.style.transition = `height ${durationMs}ms cubic-bezier(0.22, 1, 0.36, 1)`
+      panel.style.height = '0px'
+      panel.addEventListener('transitionend', onTransitionEnd)
+      collapseTimer = window.setTimeout(finish, durationMs + 40)
+    }
+
+    const onNativeImeStart = (event: Event) => {
+      window.clearTimeout(noImeTimer)
+      const detail = (event as CustomEvent<{ durationMs?: number; targetRaiseCss?: number }>).detail
+      const targetRaiseCss = detail?.targetRaiseCss ?? 0
+      // 动画尚未开始首帧时用系统上报的精确目标键盘高度校准比例，使最后一帧恰好归零
+      if (
+        !fallingBack &&
+        targetRaiseCss > panelHeight &&
+        Math.abs(getCurrentHeight() - startHeight) <= 2
+      ) {
+        const exactRatio = Math.min(0.98, panelHeight / targetRaiseCss)
+        panel.style.setProperty('--attach-ime-ratio', exactRatio.toFixed(4))
+      }
+      const durationMs =
+        typeof detail?.durationMs === 'number' && detail.durationMs > 0 ? detail.durationMs : 260
+      window.clearTimeout(settleTimer)
+      settleTimer = window.setTimeout(() => collapseRemaining(100), durationMs + 160)
+    }
+
+    const onNativeImeShown = () => {
+      collapseRemaining(100)
+    }
+
+    const onViewportChange = () => {
+      const raised = startHeight - getCurrentHeight()
+      if (raised > 4) {
+        window.clearTimeout(noImeTimer)
+        window.clearTimeout(settleTimer)
+        settleTimer = window.setTimeout(() => collapseRemaining(100), 180)
+      }
+    }
+
+    window.addEventListener('android-ime-start', onNativeImeStart, { once: true })
+    window.addEventListener('android-ime-shown', onNativeImeShown, { once: true })
+    window.visualViewport?.addEventListener('resize', onViewportChange)
+    window.addEventListener('resize', onViewportChange)
+
+    // 若长时间无软键盘弹起（如外接硬件键盘或桌面模拟器），温和收拢占位高度
+    noImeTimer = window.setTimeout(
+      () => {
+        if (startHeight - getCurrentHeight() <= 4) {
+          collapseRemaining(160)
+        }
+      },
+      hasNativeHost ? 360 : 180
+    )
+
+    attachDismissCleanupRef.current = () => {
+      finished = true
+      cleanupAll()
+    }
+  }, [cancelAttachToIme])
+
+  useEffect(() => () => cancelAttachToIme(), [cancelAttachToIme])
+
   const editingId = activeEdit?.messageId
   useEffect(() => {
     if (!editingId) {
       return
     }
-    setAttachMenuOpen(false)
+    closeAttachMenu()
     const textarea = textareaRef.current
     if (textarea) {
       textarea.focus({ preventScroll: true })
       const len = textarea.value.length
       textarea.setSelectionRange(len, len)
     }
-  }, [editingId])
+  }, [editingId, closeAttachMenu])
 
   useEffect(() => {
     const handlePermission = (event: Event) => {
@@ -172,12 +358,12 @@ const Input = ({
     }
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setAttachMenuOpen(false)
+        closeAttachMenu()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isMobile, attachMenuOpen])
+  }, [isMobile, attachMenuOpen, closeAttachMenu])
 
   useLayoutEffect(() => {
     const toggles = togglesRef.current
@@ -208,7 +394,7 @@ const Input = ({
   const handleFilesSelected = (event: ChangeEvent<HTMLInputElement>) => {
     acceptFiles(Array.from(event.target.files ?? []))
     event.target.value = ''
-    setAttachMenuOpen(false)
+    closeAttachMenu()
   }
   const openPicker = (mode: 'camera' | 'gallery' | 'file', input: HTMLInputElement | null) => {
     if (useChatStore.getState().importingHistory || !ensureApiKey()) {
@@ -216,22 +402,23 @@ const Input = ({
     }
     getAndroidHost()?.setNextPickerMode?.(mode)
     input?.click()
-    setAttachMenuOpen(false)
+    closeAttachMenu()
   }
   const toggleAttachMenu = () => {
-    setAttachMenuOpen((prev) => {
-      const next = !prev
-      if (next) {
-        textareaRef.current?.blur()
-        const host = getAndroidHost()
-        const granted = host?.hasGalleryPermission?.() ?? false
-        setGalleryGranted(granted)
-        if (granted) {
-          host?.requestRecentPhotos?.(RECENT_PHOTOS_LIMIT)
-        }
+    cancelAttachToIme()
+    const next = !attachMenuOpen
+    if (next) {
+      // 恢复 finish() 钉住的过渡，让展开动画生效；此刻面板高度为 0，恢复不会补出多余动画
+      attachPanelRef.current?.style.removeProperty('transition')
+      dismissKeyboard()
+      const host = getAndroidHost()
+      const granted = host?.hasGalleryPermission?.() ?? false
+      setGalleryGranted(granted)
+      if (granted) {
+        host?.requestRecentPhotos?.(RECENT_PHOTOS_LIMIT)
       }
-      return next
-    })
+    }
+    setAttachMenuOpen(next)
   }
   const toggleRecentPhoto = async (photo: RecentPhotoItem) => {
     if (useChatStore.getState().importingHistory || !ensureApiKey()) {
@@ -366,7 +553,7 @@ const Input = ({
       clearSentDraft(draftKey)
       cancelUserEdit()
       stopReadAloud()
-      setAttachMenuOpen(false)
+      closeAttachMenu()
       textareaRef.current?.blur()
       return
     }
@@ -379,7 +566,7 @@ const Input = ({
       return
     }
     stopReadAloud()
-    setAttachMenuOpen(false)
+    closeAttachMenu()
     if (isMobile) {
       textareaRef.current?.blur()
     } else {
@@ -410,9 +597,13 @@ const Input = ({
   ]
 
   return (
-    <div className={styles.root}>
+    <div className={clsx(styles.root, activeEdit && styles.rootEditing)}>
       <div
-        className={clsx(styles.wrapper, sessionId === null ? styles.home : styles.session)}
+        className={clsx(
+          styles.wrapper,
+          sessionId === null ? styles.home : styles.session,
+          activeEdit && styles.editing
+        )}
         onClick={(event) => {
           if (event.target === event.currentTarget) {
             textareaRef.current?.focus({ preventScroll: true })
@@ -432,7 +623,13 @@ const Input = ({
             </button>
           </div>
         ) : null}
-        <DraftAttachments items={attachments} onRetry={retryFile} onRemove={removeFile} />
+        <DraftAttachments
+          items={attachments}
+          existingFiles={activeEdit?.files}
+          onRetry={retryFile}
+          onRemove={removeFile}
+          onRemoveExisting={removeUserEditExistingFile}
+        />
         <div className={styles.textareaWrapper}>
           <textarea
             ref={textareaRef}
@@ -445,13 +642,19 @@ const Input = ({
             value={text}
             onChange={(event) => setText(event.target.value)}
             onFocus={() => {
-              if (isMobile) {
-                setAttachMenuOpen(false)
+              if (isMobile && attachMenuOpen) {
+                dismissAttachToKeyboard()
               }
             }}
             onMouseDown={(event) => {
-              // 首次点击时手动聚焦，避免 Safari 把整个页面滚到输入框位置。
-              if (isMobile && event.button === 0 && document.activeElement !== event.currentTarget) {
+              // 仅在移动浏览器（如 Safari）首次点击时手动聚焦，避免整页滚动；
+              // Android 原生 WebView 容器已裁剪溢流，保留原生轻触聚焦与光标落点。
+              if (
+                isMobile &&
+                !getAndroidHost() &&
+                event.button === 0 &&
+                document.activeElement !== event.currentTarget
+              ) {
                 event.preventDefault()
                 event.currentTarget.focus({ preventScroll: true })
               }
@@ -484,6 +687,8 @@ const Input = ({
                 className={clsx(styles.toggle, thinking && styles.selected)}
                 aria-label={t('thinkingSwitch')}
                 aria-pressed={thinking}
+                // 保持当前输入焦点不丢失，避免切换开关时系统收起输入法
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => setThinking(!thinking)}
               >
                 <IconThinkOutline14 active={thinking} />
@@ -496,6 +701,7 @@ const Input = ({
                 className={clsx(styles.toggle, search && styles.selected)}
                 aria-label={t('search')}
                 aria-pressed={search}
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => setSearch(!search)}
               >
                 <IconGlobeLanguageOutline14 active={search} />
@@ -581,6 +787,7 @@ const Input = ({
                     (!useChatStore.getState().importingHistory && ensureApiKey())
                   ) {
                     setAttachMenuOpen(false)
+                    cancelAttachToIme()
                     void voice.toggle()
                   }
                 }}
@@ -592,7 +799,12 @@ const Input = ({
       </div>
       {isMobile ? (
         <div
-          className={clsx(styles.attachPanel, attachMenuOpen && styles.attachPanelOpen)}
+          ref={attachPanelRef}
+          className={clsx(
+            styles.attachPanel,
+            attachMenuOpen && styles.attachPanelOpen,
+            attachDismissMode === 'to-ime' && styles.attachPanelToIme
+          )}
           data-open={attachMenuOpen ? 'true' : undefined}
           aria-hidden={!attachMenuOpen}
         >

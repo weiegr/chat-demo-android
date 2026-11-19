@@ -48,6 +48,10 @@
     max-width: none;
     margin: 0;
     padding: 0 12px calc(16px + var(--safe-bottom));
+
+    [data-ime-open='true'] & {
+      padding-bottom: calc(8px + var(--safe-bottom));
+    }
   }
 
   .greeting {

@@ -78,10 +78,6 @@
   color: var(--dsw-alias-label-primary);
   font-size: 14px;
   line-height: 22px;
-
-  & + & {
-    box-shadow: inset 0 1px 0 0 var(--dsw-alias-border-l2-darkmode-thin);
-  }
 }
 
 .row {
@@ -384,40 +380,8 @@
   }
 }
 
-/** 系统提示词：标题占满一行，输入框另起一行 */
-.systemPromptCell {
-  flex-wrap: wrap;
-}
-
-.systemPromptCell .text {
-  flex: 1 0 100%;
-  padding-right: 8px;
-}
-
-.systemPromptInput {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 74px;
-  padding: 8px 14px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
-  outline: none;
-  background: transparent;
-  color: var(--dsw-alias-label-primary);
-  font: inherit;
-  font-size: 14px;
-  line-height: 22px;
-  resize: none;
-  caret-color: var(--dsw-alias-brand-text);
-  transition: border-color var(--ds-transition-duration) var(--ds-ease-in-out);
-
-  &:focus {
-    border-color: var(--dsw-alias-brand-primary);
-  }
-
-  &::placeholder {
-    color: var(--dsw-alias-label-caption);
-  }
+.desktopToolList {
+  padding-left: 16px;
 }
 
 @media not all and (min-width: 768px) {
@@ -503,12 +467,14 @@
     padding: 0 16px;
   }
 
-  .mobileLocationContent .cell:not(.locationSwitchCell) {
-    min-height: 56px;
+  .mobileCard .cell:not(.locationSwitchCell) {
+    min-height: 44px;
+    padding: 9px 0;
   }
 
-  .mobileLocationContent .locationSwitchCell {
-    min-height: 56px;
+  .mobileCard .locationSwitchCell {
+    min-height: 44px;
+    padding: 9px 0;
     transition: padding-bottom 0.2s cubic-bezier(0.22, 1, 0.36, 1);
 
     &.locationSwitchCellOpen {
@@ -516,10 +482,15 @@
     }
   }
 
-  /* 复合选择器压过 .mobileNavRow 的同权重覆盖；上下与 Switch 保持 12px 等距 */
+  /* 复合选择器压过 .mobileNavRow 的同权重覆盖，展开项平滑衔接，无内分割线 */
   .mobileNavRow.mobileSubActionRow {
-    margin-top: 12px;
-    box-shadow: inset 0 1px 0 0 var(--dsw-alias-border-l2-darkmode-thin);
+    margin-top: 2px;
+  }
+
+  .advancedToolList {
+    display: flex;
+    flex-direction: column;
+    margin-top: 2px;
   }
 
   .labelRow .label {
@@ -547,6 +518,7 @@
     position: relative;
     display: flex;
     align-items: center;
+    gap: 10px;
     box-sizing: border-box;
     width: 100%;
     min-height: 44px;
@@ -557,6 +529,18 @@
 
     [data-ds-dark-theme] & {
       background-color: var(--dsw-alias-bg-layer-2);
+    }
+  }
+
+  .mobileActionCardEmbedded {
+    width: calc(100% + 32px);
+    margin: 0 -16px;
+    padding: 11px 16px;
+    border-radius: 0;
+    background-color: transparent;
+
+    [data-ds-dark-theme] & {
+      background-color: transparent;
     }
   }
 
@@ -590,6 +574,7 @@
     position: relative;
     z-index: 1;
     display: flex;
+    flex: 1;
     flex-direction: column;
     gap: 4px;
     min-width: 0;
@@ -598,6 +583,15 @@
     .infoButton {
       pointer-events: auto;
     }
+  }
+
+  .mobileActionRight {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    pointer-events: none;
   }
 
   .mobileActionDangerLabel {
@@ -616,16 +610,18 @@
   }
 
   .mobileCard {
-    padding: 4px 16px;
+    padding: 0 16px;
     border-radius: 16px;
     background-color: var(--dsw-alias-bg-base);
+    overflow: hidden;
 
     [data-ds-dark-theme] & {
       background-color: var(--dsw-alias-bg-layer-2);
     }
 
     .cell.switchHeader {
-      min-height: 56px;
+      min-height: 44px;
+      padding: 9px 0;
     }
   }
 
@@ -635,8 +631,8 @@
     justify-content: space-between;
     box-sizing: border-box;
     width: 100%;
-    min-height: 56px;
-    padding: 12px 0;
+    min-height: 44px;
+    padding: 11px 0;
     border: none;
     background: none;
     color: var(--dsw-alias-label-primary);
@@ -645,12 +641,7 @@
     line-height: 22px;
     text-align: left;
     cursor: pointer;
-
-    .cell + &,
-    & + .cell,
-    & + & {
-      box-shadow: inset 0 1px 0 0 var(--dsw-alias-border-l2-darkmode-thin);
-    }
+    -webkit-tap-highlight-color: transparent;
   }
 
   .mobileNavRight {
@@ -725,7 +716,7 @@
   flex-shrink: 0;
   width: 100%;
   height: 44px;
-  margin: 8px 0 8px;
+  margin: 4px 0 12px;
   border: none;
   border-radius: 100px;
   background-color: var(--dsw-alias-button-primary-fill);
@@ -915,6 +906,56 @@
 
 .urlModal {
   width: 420px;
+}
+
+.promptModal {
+  width: 480px;
+}
+
+.promptStage {
+  padding: 20px 0 24px;
+}
+
+.apiKeyModalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.promptEditorBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.promptTextarea {
+  min-height: 148px;
+  max-height: 46dvh;
+  resize: vertical;
+  overflow-y: auto;
+}
+
+.promptEditorFooterMeta {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.promptResetButton {
+  padding: 2px 4px;
+  border: none;
+  background: none;
+  color: var(--dsw-alias-brand-text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+
+  &:disabled {
+    color: var(--dsw-alias-label-caption);
+    cursor: default;
+  }
 }
 
 .urlInput {

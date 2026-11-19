@@ -90,6 +90,8 @@
 @media (max-width: 767px) {
   .overlay {
     padding: 64px 12px 12px;
+    /* 与弹窗遮罩同理：移动端整屏毛玻璃在淡入动画里逐帧重算，直接去掉只留暗色底 */
+    backdrop-filter: none;
   }
 
   .image {

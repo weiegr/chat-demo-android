@@ -2,7 +2,6 @@ import type { zh } from './zh.js'
 
 export const en = {
   welcomeMessageChat250808: 'How can I help you?',
-  contentCaveat: 'AI-generated, for reference only',
   expandSiderbarButton: 'Open sidebar',
   collapseSiderbarButton: 'Close sidebar',
   newChat: 'New chat',
@@ -103,8 +102,22 @@ export const en = {
   settingsTtsVoiceTideName: 'Tide',
   settingsTtsVoiceTideDesc: 'Male',
   settingsSystemPrompt: 'System prompt',
-  settingsSystemPromptDescription: 'System instructions sent with every conversation.',
+  settingsSystemPromptDescription:
+    'System instructions sent with every conversation; leave empty to omit custom identity prompt.',
   settingsSystemPromptPlaceholder: 'Enter a system prompt, leave empty to send none',
+  settingsAdvanced: 'Advanced settings',
+  settingsAdvancedDescription:
+    'Enable to inspect and customize system instructions attached to tools; disable to fall back to built-in defaults.',
+  settingsToolPromptSearchImage: 'Search rich-text & image instruction',
+  settingsToolPromptSearchImageDesc:
+    'Appended to system instructions when both Search and Allow images in AI replies are enabled; leave empty to omit.',
+  settingsToolPromptLocation: 'Location tool description',
+  settingsToolPromptLocationDesc:
+    'Sent as the get_location tool description when AI location requests are enabled with Thinking and Search; leave empty to use default.',
+  settingsToolPromptPlaceholder: 'Enter tool prompt',
+  settingsResetDefault: 'Reset to default',
+  settingsEditAction: 'Edit',
+  settingsConfigured: 'Configured',
   settingsAiImages: 'Allow images in AI replies',
   settingsAiImagesDescription:
     'When enabled, AI replies include rich-text image layouts using verified search results only after a web or image search tool is actually executed. Replies stay text-only when no search is run. External images may fail to load due to source host restrictions.',
@@ -159,6 +172,11 @@ export const en = {
   avatarMenuSettingsDialogThemeSelectLightOption: 'Light',
   avatarMenuSettingsDialogThemeSelectDarkOption: 'Dark',
   avatarMenuSettingsDialogThemeSelectSystemOption: 'System',
+  apiKeyLabel: 'API Key',
+  apiKeyDescription: 'API Key obtained from the DeepSeek API Open Platform',
+  apiKeyStatusSet: 'Configured',
+  apiKeyStatusUnset: 'Not set',
+  apiKeyClear: 'Clear',
   apiKeyStart: 'Enter an API Key to get started',
   apiKeyEdit: 'Edit API Key',
   apiKeyPlaceholder: 'Enter API Key',

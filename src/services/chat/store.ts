@@ -5,7 +5,11 @@ import type { ChatModel, ClientToolDefinition, CreateMessageRequest } from '../a
 import { extractFileIds, getFileErrorCode, isRetryableApiError } from '../api/errors.js'
 import { cancelUpload, describeUploadError, uploadAttachment, useUploads } from '../attachments.js'
 import { GeolocationError, getCurrentPosition } from '../geolocation.js'
-import { useSettings } from '../settings.js'
+import {
+  DEFAULT_IMAGE_SEARCH_TOOL_PROMPT,
+  DEFAULT_LOCATION_TOOL_PROMPT,
+  useSettings,
+} from '../settings.js'
 import { appendBranch, getVisibleMessages, normalizeSession, selectVersion } from './branches.js'
 import * as db from './db.js'
 import {
@@ -48,10 +52,9 @@ const FILE_RETRY_BASE_DELAY = 1000
 /** 单次提问内客户端工具（如真实定位）连续调用次数上限 */
 const MAX_TOOL_ROUNDS = 5
 
-const GET_LOCATION_TOOL: ClientToolDefinition = {
+const buildLocationTool = (description: string): ClientToolDefinition => ({
   name: 'get_location',
-  description:
-    "Get the user's real-time physical geographic location (latitude, longitude, and resolved address when available). Call this tool only when the user's request depends on their actual current location (such as local weather, nearby places, current city, or directions).",
+  description: description.trim() || DEFAULT_LOCATION_TOOL_PROMPT,
   input_schema: {
     type: 'object',
     properties: {
@@ -61,27 +64,30 @@ const GET_LOCATION_TOOL: ClientToolDefinition = {
       },
     },
   },
-}
-
-const RICH_IMAGE_SEARCH_INSTRUCTION =
-  '排版与配图约束：仅当你在本轮回复中明确调用了搜索工具并获取到真实检索结果时，方可采用图文混排富文本格式（合理使用小标题、分点、表格或引用），并可将搜索结果中真实存在且可直接访问的 HTTP/HTTPS 图片直链以独立成段的 Markdown 图片语法（![图片说明](图片URL)）插入对应段落中。严禁在未调用搜索工具时输出任何图片，严禁凭记忆编造或猜测图片 URL；若检索结果中没有可用的直接图片 URL，请仅使用纯文本作答。'
+})
 
 const buildRequestSystem = (
   basePrompt: string,
-  { search, allowAiImages }: { search: boolean; allowAiImages: boolean }
+  {
+    search,
+    allowAiImages,
+    imageSearchInstruction,
+  }: { search: boolean; allowAiImages: boolean; imageSearchInstruction: string }
 ): string => {
-  if (!allowAiImages || !search) {
+  const instruction = imageSearchInstruction.trim()
+  if (!allowAiImages || !search || !instruction) {
     return basePrompt
   }
   const trimmed = basePrompt.trim()
-  return trimmed ? `${trimmed}\n\n${RICH_IMAGE_SEARCH_INSTRUCTION}` : RICH_IMAGE_SEARCH_INSTRUCTION
+  return trimmed ? `${trimmed}\n\n${instruction}` : instruction
 }
 
 /** 阅读链接始终开启，智能搜索与允许 AI 定位开关控制额外声明的工具。 */
 const requestTools = (
   search: boolean,
   allowAiLocation: boolean,
-  thinking: boolean
+  thinking: boolean,
+  locationToolDescription: string
 ): CreateMessageRequest['tools'] => {
   const tools: CreateMessageRequest['tools'] = [
     { type: 'deepseek_read_url', name: 'deepseek_read_url' },
@@ -91,7 +97,7 @@ const requestTools = (
   }
   // 服务端约束：客户端工具只能在思考模式下与 deepseek_web_search 一同声明，缺一返回 400
   if (allowAiLocation && thinking && search) {
-    tools.push(GET_LOCATION_TOOL)
+    tools.push(buildLocationTool(locationToolDescription))
   }
   return tools
 }
@@ -1059,7 +1065,7 @@ const executeClientTool = async (
   block: ClientToolUseBlock,
   signal: AbortSignal
 ): Promise<ClientToolResultBlock> => {
-  if (block.name !== GET_LOCATION_TOOL.name) {
+  if (block.name !== 'get_location') {
     return {
       type: 'client_tool_result',
       tool_use_id: block.id,
@@ -1181,7 +1187,14 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           reply.latestReminder,
           toolRound > 0 ? reply : undefined
         )
-        const { systemPrompt, allowAiImages, apiKey } = useSettings.getState()
+        const {
+          systemPrompt,
+          allowAiImages,
+          toolPromptsEnabled,
+          imageSearchToolPrompt,
+          locationToolPrompt,
+          apiKey,
+        } = useSettings.getState()
         const events = streamMessage(
           apiKey ?? '',
           {
@@ -1189,6 +1202,9 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             system: buildRequestSystem(systemPrompt, {
               search: initial.search ?? false,
               allowAiImages,
+              imageSearchInstruction: toolPromptsEnabled
+                ? imageSearchToolPrompt
+                : DEFAULT_IMAGE_SEARCH_TOOL_PROMPT,
             }),
             messages,
             thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
@@ -1196,7 +1212,8 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             tools: requestTools(
               initial.search ?? false,
               allowAiLocation,
-              initial.thinking ?? false
+              initial.thinking ?? false,
+              toolPromptsEnabled ? locationToolPrompt : DEFAULT_LOCATION_TOOL_PROMPT
             ),
             ...(titleRequests.has(controller) ? { title: { enabled: true } } : {}),
           },

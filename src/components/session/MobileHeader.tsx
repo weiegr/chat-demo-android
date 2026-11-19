@@ -15,7 +15,7 @@ export const MobileHeader = ({ title }: { title?: string }) => {
         tone="primary"
         icon={<IconMenuOutline20 />}
         aria-label={t('expandSiderbarButton')}
-        onClick={openMobileSider}
+        onClick={() => openMobileSider()}
       />
       <div className={styles.title}>{title ?? ''}</div>
       <IconButton

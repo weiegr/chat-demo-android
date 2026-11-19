@@ -1,11 +1,13 @@
 import clsx from 'clsx'
-import { memo } from 'react'
+import { memo, useState, type ReactNode } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { useUploads, type UploadTask } from '../../services/attachments.js'
 import type { DraftAttachment } from '../../services/chat/drafts.js'
-import { IconCloseFill14, IconRefreshOutline16 } from '../base/icons.js'
+import type { FileAttachment } from '../../services/chat/types.js'
+import { IconCloseFill14, IconPhotoErrorFill20, IconRefreshOutline16 } from '../base/icons.js'
 import { Tooltip } from '../base/Tooltip.js'
 import { FileCard } from '../files/FileCard.js'
+import { useFileUrl } from '../files/useFileUrl.js'
 import { openImagePreview } from '../messages/imagePreviewState.js'
 import styles from './ChatInput.module.css'
 
@@ -18,21 +20,32 @@ const openLocalFile = (file: File) => {
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
 
-/** 列表只随草稿附件变化更新；每张卡片独立订阅自己的上传状态。 */
+/** 列表只随草稿或正在编辑的消息附件变化更新；每张新上传卡片独立订阅上传状态。 */
 export const DraftAttachments = memo(function DraftAttachments({
   items,
+  existingFiles = [],
   onRetry,
   onRemove,
+  onRemoveExisting,
 }: {
   items: DraftAttachment[]
+  existingFiles?: FileAttachment[]
   onRetry: (id: string) => void
   onRemove: (id: string) => void
+  onRemoveExisting?: (id: string) => void
 }) {
-  if (items.length === 0) {
+  if (items.length === 0 && existingFiles.length === 0) {
     return null
   }
   return (
     <div className={styles.attachments}>
+      {existingFiles.map((file) => (
+        <ExistingAttachmentItem
+          key={`existing:${file.id}`}
+          file={file}
+          onRemove={onRemoveExisting ? () => onRemoveExisting(file.id) : undefined}
+        />
+      ))}
       {items.map((item) => (
         <AttachmentItem
           key={item.id}
@@ -45,7 +58,85 @@ export const DraftAttachments = memo(function DraftAttachments({
   )
 })
 
-/** 输入框里的文件：图片显示缩略图，其余显示文件卡片 */
+/** 图片缩略图通用外壳：预览图 + 状态蒙层 + 右上角移除按钮 */
+const ImageTileShell = ({
+  name,
+  title,
+  imageUrl,
+  failed,
+  invalidRemove,
+  onRemove,
+  children,
+}: {
+  name: string
+  title: string
+  imageUrl: string | undefined
+  failed?: boolean
+  invalidRemove?: boolean
+  onRemove?: () => void
+  children?: ReactNode
+}) => {
+  const t = useTranslate()
+  const [brokenUrl, setBrokenUrl] = useState<string | null>(null)
+  const isBroken = Boolean(imageUrl && brokenUrl === imageUrl)
+  return (
+    <div className={clsx(styles.attachment, failed && styles.attachmentFailed)} title={title}>
+      <button
+        type="button"
+        className={styles.preview}
+        title={name}
+        disabled={!imageUrl || isBroken}
+        onClick={() => imageUrl && !isBroken && openImagePreview(imageUrl, name)}
+      >
+        {imageUrl ? (
+          isBroken ? (
+            <span className={styles.brokenIcon} role="img" aria-label={name}>
+              <IconPhotoErrorFill20 />
+            </span>
+          ) : (
+            <img src={imageUrl} alt={name} onError={() => setBrokenUrl(imageUrl)} />
+          )
+        ) : null}
+      </button>
+      {children}
+      {onRemove ? (
+        <button
+          type="button"
+          className={clsx(styles.remove, invalidRemove && styles.invalidRemove)}
+          aria-label={t('removeAttachment')}
+          onClick={onRemove}
+        >
+          <IconCloseFill14 />
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+/** 正在编辑的用户消息原有附件：本地有图则按缩略图呈现，否则展示文件卡片 */
+const ExistingAttachmentItem = ({
+  file,
+  onRemove,
+}: {
+  file: FileAttachment
+  onRemove?: () => void
+}) => {
+  const url = useFileUrl(file.id)
+  if (file.isImage && url !== null) {
+    return <ImageTileShell name={file.name} title={file.name} imageUrl={url} onRemove={onRemove} />
+  }
+  return (
+    <FileCard
+      name={file.name}
+      size={file.size}
+      status="done"
+      onRemove={onRemove}
+      onOpen={url ? () => window.open(url, '_blank', 'noreferrer') : undefined}
+    />
+  )
+}
+
+/** 输入框里的新增附件：图片显示缩略图，其余显示文件卡片 */
 const AttachmentItem = ({
   item,
   onRetry,
@@ -67,18 +158,14 @@ const AttachmentItem = ({
   const showReason = failed && error !== undefined && error !== t('uploadFileStatusFailed')
   const previewUrl = item.previewUrl
   return previewUrl ? (
-    <div
-      className={clsx(styles.attachment, failed && styles.attachmentFailed)}
+    <ImageTileShell
+      name={item.file.name}
       title={error ?? item.file.name}
+      imageUrl={previewUrl}
+      failed={failed}
+      invalidRemove={failed && !retry}
+      onRemove={onRemove}
     >
-      <button
-        type="button"
-        className={styles.preview}
-        title={item.file.name}
-        onClick={() => openImagePreview(previewUrl, item.file.name)}
-      >
-        <img src={previewUrl} alt={item.file.name} />
-      </button>
       {status === 'uploading' ? <div className={styles.uploading} /> : null}
       {failed && retry ? (
         <Tooltip content={retryLabel}>
@@ -93,15 +180,7 @@ const AttachmentItem = ({
           {showReason ? <span className={styles.failedReason}>{error}</span> : null}
         </div>
       ) : null}
-      <button
-        type="button"
-        className={clsx(styles.remove, failed && !retry && styles.invalidRemove)}
-        aria-label={t('removeAttachment')}
-        onClick={onRemove}
-      >
-        <IconCloseFill14 />
-      </button>
-    </div>
+    </ImageTileShell>
   ) : (
     <FileCard
       name={item.file.name}

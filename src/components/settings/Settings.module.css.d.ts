@@ -14,10 +14,14 @@ declare const styles: {
   readonly mobileCardHint: string
   readonly mobileCardHintError: string
   readonly mobileActionCard: string
+  readonly mobileActionCardEmbedded: string
   readonly mobileActionHit: string
   readonly mobileActionBody: string
+  readonly mobileActionRight: string
   readonly mobileActionDangerLabel: string
   readonly mobileActionLabelDisabled: string
+  readonly advancedToolList: string
+  readonly desktopToolList: string
   readonly mobileGroupTitle: string
   readonly mobileCard: string
   readonly mobileNavRow: string
@@ -43,6 +47,13 @@ declare const styles: {
   readonly urlStage: string
   readonly urlModal: string
   readonly urlInput: string
+  readonly promptModal: string
+  readonly promptStage: string
+  readonly apiKeyModalBody: string
+  readonly promptEditorBody: string
+  readonly promptTextarea: string
+  readonly promptEditorFooterMeta: string
+  readonly promptResetButton: string
   readonly sheetVisible: string
   readonly wheelStage: string
   readonly wheelHighlight: string
@@ -98,8 +109,6 @@ declare const styles: {
   readonly apiKeyMask: string
   readonly divider: string
   readonly confirm: string
-  readonly systemPromptCell: string
-  readonly systemPromptInput: string
   readonly cellButton: string
   readonly mobileConfirm: string
   readonly importConfirm: string

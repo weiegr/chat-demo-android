@@ -197,7 +197,7 @@ export const MessageList = ({
         stickyRef.current = false
       }
       scrollTopRef.current = el.scrollTop
-      setShowScrollButton(!nearBottom)
+      setShowScrollButton(!stickyRef.current && !nearBottom)
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
@@ -216,11 +216,7 @@ export const MessageList = ({
               data-long={messages.length > LONG_LIST_THRESHOLD ? 'true' : undefined}
             >
               {editingUserMessage ? (
-                <div
-                  data-open="true"
-                  className={styles.editMask}
-                  onClick={cancelUserEdit}
-                />
+                <div data-open="true" className={styles.editMask} onClick={cancelUserEdit} />
               ) : null}
               {messages.map((message, index) =>
                 message.role === 'user' ? (
@@ -261,7 +257,7 @@ export const MessageList = ({
               )}
             </div>
           </div>
-          {isMobile && showScrollButton ? (
+          {isMobile && showScrollButton && !editingUserMessage ? (
             <button
               type="button"
               className={styles.scrollBottomButton}
