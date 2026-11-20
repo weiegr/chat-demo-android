@@ -27,6 +27,7 @@ import { useIsMobile } from '../../app/viewport.js'
 import { useChatStore } from '../../services/chat/store.js'
 import {
   setAutoReadAloud,
+  setAllowVideoUpload,
   setLocale,
   setThemePreference,
   setTtsVoice,
@@ -194,6 +195,7 @@ const SettingsContent = () => {
                 <MobileAutoReadAloudSetting />
                 <MobileRpModeNavRow onOpen={() => setMobilePage('rpMode')} />
               </div>
+              {__BETA__ ? <BetaSettings isMobile /> : null}
             </div>
           )
         ) : (
@@ -224,6 +226,7 @@ const SettingsContent = () => {
                   <AiLocationSetting />
                   <SystemPromptSetting />
                   <RpModeSetting />
+                  {__BETA__ ? <BetaSettings /> : null}
                 </>
               ) : (
                 <>
@@ -576,6 +579,29 @@ const AutoReadAloudSetting = () => {
         />
       }
     />
+  )
+}
+
+const BetaSettings = ({ isMobile = false }: { isMobile?: boolean }) => {
+  const t = useTranslate()
+  const allowVideoUpload = useSettings((state) => state.allowVideoUpload)
+  const label = t('settingsAllowVideoUpload')
+  return (
+    <section aria-label="beta">
+      <div className={isMobile ? styles.mobileGroupTitle : styles.betaGroupTitle}>beta</div>
+      <div className={isMobile ? styles.mobileCard : undefined}>
+        <div className={clsx(styles.cell, styles.switchHeader)}>
+          <div className={styles.labelRow}>
+            <span className={styles.label}>{label}</span>
+            <InfoModalButton
+              ariaLabel={t('videoQuickModeOnly')}
+              description={t('videoQuickModeOnly')}
+            />
+          </div>
+          <Switch checked={allowVideoUpload} ariaLabel={label} onChange={setAllowVideoUpload} />
+        </div>
+      </div>
+    </section>
   )
 }
 

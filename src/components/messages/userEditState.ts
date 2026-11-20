@@ -1,11 +1,12 @@
 import { create } from 'zustand'
 import { clearDraft, setDraftText } from '../../services/chat/drafts.js'
-import type { FileAttachment, UserMessage } from '../../services/chat/types.js'
+import type { FileAttachment, UserMessage, VideoAttachment } from '../../services/chat/types.js'
 
 export type ActiveUserEdit = {
   sessionId: string
   messageId: string
   files: FileAttachment[]
+  video?: VideoAttachment
 }
 
 export const getEditDraftKey = (sessionId: string, messageId: string) =>
@@ -28,21 +29,27 @@ export const startUserEdit = (sessionId: string, message: UserMessage) => {
       sessionId,
       messageId: message.id,
       files: message.files,
+      video: message.video,
     },
   })
 }
 
 export const removeUserEditExistingFile = (fileId: string) => {
-  useUserEdit.setState((state) =>
-    state.active
-      ? {
-          active: {
-            ...state.active,
-            files: state.active.files.filter((file) => file.id !== fileId),
-          },
-        }
-      : state
-  )
+  useUserEdit.setState((state) => {
+    const active = state.active
+    if (!active) {
+      return state
+    }
+    const video = active.video?.id === fileId ? active.video : undefined
+    const ids = video?.frameIds ?? [fileId]
+    return {
+      active: {
+        ...active,
+        video: video ? undefined : active.video,
+        files: active.files.filter((file) => !ids.includes(file.id)),
+      },
+    }
+  })
 }
 
 export const cancelUserEdit = () => {

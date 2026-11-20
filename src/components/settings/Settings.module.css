@@ -171,6 +171,12 @@
   min-height: 60px;
 }
 
+.betaGroupTitle {
+  padding-top: 16px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .switchHeader {
   display: flex;
   align-items: center;

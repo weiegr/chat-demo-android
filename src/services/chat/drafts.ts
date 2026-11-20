@@ -11,8 +11,9 @@ import {
   validateFiles,
   type UploadTask,
 } from '../attachments.js'
+import { canUploadVideo, type ChatMode } from '../settings.js'
 import { canInlineTextAttachment } from './inlineFiles.js'
-import type { FileAttachment } from './types.js'
+import type { FileAttachment, VideoAttachment } from './types.js'
 
 export type DraftAttachment = {
   /** 本地标识，也是 IndexedDB 原件与上传任务的 key */
@@ -22,7 +23,9 @@ export type DraftAttachment = {
   previewUrl: string | null
 }
 
-type Draft = { text: string; attachments: DraftAttachment[] }
+export type DraftVideo = VideoAttachment & { file: File }
+
+type Draft = { text: string; attachments: DraftAttachment[]; video?: DraftVideo }
 
 export const EMPTY_DRAFT: Draft = { text: '', attachments: [] }
 
@@ -70,12 +73,12 @@ const upload = (attachment: DraftAttachment, apiKey: string) => {
   ).catch(() => {})
 }
 
-/** 整批校验通过后才创建预览和开始上传，返回校验错误与新增附件 ID。 */
-export const addDraftFilesWithIds = (
+const appendDraftFiles = (
   sessionId: string | null,
   files: File[],
   apiKey: string,
-  useOcrModel = false
+  useOcrModel = false,
+  video?: Omit<DraftVideo, 'frameIds'>
 ): { error: TranslationMessage | null; ids: string[] } => {
   if (files.length === 0) {
     return { error: null, ids: [] }
@@ -90,10 +93,15 @@ export const addDraftFilesWithIds = (
       id: createId(),
       file,
       isImage: image,
-      previewUrl: image ? URL.createObjectURL(file) : null,
+      previewUrl: image && !video ? URL.createObjectURL(file) : null,
     }
   })
-  updateDraft(sessionId, (draft) => ({ ...draft, attachments: [...draft.attachments, ...added] }))
+  const ids = added.map((item) => item.id)
+  updateDraft(sessionId, (draft) => ({
+    ...draft,
+    attachments: [...draft.attachments, ...added],
+    ...(video ? { video: { ...video, frameIds: ids } } : {}),
+  }))
   // 纯文本附件与 Pro 模型下的 OCR 附件发送时本地读取/识别，无需提前占用 Files API 配额。
   added.forEach((attachment) => {
     if (
@@ -105,7 +113,37 @@ export const addDraftFilesWithIds = (
       upload(attachment, apiKey)
     }
   })
-  return { error: null, ids: added.map((item) => item.id) }
+  return { error: null, ids }
+}
+
+/** 整批校验通过后才创建预览和开始上传，返回校验错误与新增附件 ID。 */
+export const addDraftFilesWithIds = (
+  sessionId: string | null,
+  files: File[],
+  apiKey: string,
+  useOcrModel = false
+) => appendDraftFiles(sessionId, files, apiKey, useOcrModel)
+
+export const addDraftVideoFrames = (
+  sessionId: string | null,
+  source: File,
+  frames: File[],
+  apiKey: string,
+  mode: ChatMode
+): TranslationMessage | null => {
+  if (!canUploadVideo(mode)) {
+    return { key: 'videoEnableToSend' }
+  }
+  if (getDraft(sessionId).video) {
+    return { key: 'videoLimitOne' }
+  }
+  return appendDraftFiles(sessionId, frames, apiKey, false, {
+    id: createId(),
+    name: source.name,
+    size: source.size,
+    mimeType: source.type,
+    file: source,
+  }).error
 }
 
 /** 整批校验通过后才创建预览和开始上传。 */
@@ -126,8 +164,10 @@ export const ensureDraftUploads = (
     return
   }
   const tasks = useUploads.getState().tasks
-  for (const attachment of getDraft(sessionId).attachments) {
+  const draft = getDraft(sessionId)
+  for (const attachment of draft.attachments) {
     if (
+      !draft.video?.frameIds.includes(attachment.id) &&
       !tasks[attachment.id] &&
       !shouldSkipDraftUpload(
         { name: attachment.file.name, size: attachment.file.size, isImage: attachment.isImage },
@@ -142,10 +182,12 @@ export const ensureDraftUploads = (
 export const retryDraftAttachment = (
   sessionId: string | null,
   attachmentId: string,
-  apiKey: string
+  apiKey: string,
+  videoAllowed: boolean
 ) => {
-  const attachment = getDraft(sessionId).attachments.find((item) => item.id === attachmentId)
-  if (attachment) {
+  const draft = getDraft(sessionId)
+  const attachment = draft.attachments.find((item) => item.id === attachmentId)
+  if (attachment && (videoAllowed || !draft.video?.frameIds.includes(attachment.id))) {
     upload(attachment, apiKey)
   }
 }
@@ -154,10 +196,11 @@ export const retryDraftAttachment = (
 export const prepareDraftMessage = (
   draft: Draft,
   tasks: Record<string, UploadTask>,
-  useOcrModel = false
+  useOcrModel: boolean,
+  videoAllowed: boolean
 ) => {
   const text = draft.text.trim()
-  if (!text && draft.attachments.length === 0) {
+  if ((!text && draft.attachments.length === 0) || (draft.video && !videoAllowed)) {
     return null
   }
   const files: (FileAttachment & { blob: Blob })[] = []
@@ -183,7 +226,7 @@ export const prepareDraftMessage = (
       blob: attachment.file,
     })
   }
-  return { text, files }
+  return { text, files, video: draft.video }
 }
 
 const releaseAttachment = (attachment: DraftAttachment, cancel: boolean) => {
@@ -196,14 +239,16 @@ const releaseAttachment = (attachment: DraftAttachment, cancel: boolean) => {
 }
 
 export const removeDraftAttachment = (sessionId: string | null, attachmentId: string) => {
-  const attachment = getDraft(sessionId).attachments.find((item) => item.id === attachmentId)
-  if (!attachment) {
-    return
-  }
-  releaseAttachment(attachment, true)
+  const draft = getDraft(sessionId)
+  const video = draft.video
+  const ids = video?.id === attachmentId ? video.frameIds : [attachmentId]
+  draft.attachments
+    .filter((item) => ids.includes(item.id))
+    .forEach((item) => releaseAttachment(item, true))
   updateDraft(sessionId, (draft) => ({
     ...draft,
-    attachments: draft.attachments.filter((item) => item.id !== attachmentId),
+    video: video?.id === attachmentId ? undefined : draft.video,
+    attachments: draft.attachments.filter((item) => !ids.includes(item.id)),
   }))
 }
 

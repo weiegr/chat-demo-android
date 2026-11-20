@@ -2,6 +2,7 @@ package xyz.app566512.apidemo;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.app.DownloadManager;
 import android.content.ClipData;
 import android.content.ContentUris;
@@ -109,7 +110,7 @@ public class MainActivity extends Activity {
     private long lastLocationPermissionRequestAt = 0L;
     private boolean lastLocationPermissionHadCoarse = false;
     private Uri pendingCameraUri;
-    private String nextPickerMode = "file";
+    private volatile String nextPickerMode = "file";
     private volatile String cachedUserAgent = "Mozilla/5.0";
     private int safeTopCss = 24;
     private int safeBottomCss = 0;
@@ -266,6 +267,9 @@ public class MainActivity extends Activity {
                 }
                 if ("gallery".equals(mode)) {
                     return launchGalleryChooser(fileChooserParams);
+                }
+                if ("video".equals(mode)) {
+                    return launchVideoChooser();
                 }
                 return launchGenericFileChooser(fileChooserParams);
             }
@@ -559,6 +563,27 @@ public class MainActivity extends Activity {
             cancelFileCallback();
             return false;
         }
+    }
+
+    private boolean launchVideoChooser() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            try {
+                Intent intent = new Intent(MediaStore.ACTION_PICK_IMAGES);
+                intent.setType("video/*");
+                startActivityForResult(intent, REQ_FILE_CHOOSER);
+                return true;
+            } catch (ActivityNotFoundException ignored) {
+            }
+        }
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("video/*");
+        try {
+            startActivityForResult(intent, REQ_FILE_CHOOSER);
+        } catch (ActivityNotFoundException ignored) {
+            cancelFileCallback();
+        }
+        return true;
     }
 
     private boolean launchGenericFileChooser(WebChromeClient.FileChooserParams params) {
@@ -1569,7 +1594,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void setNextPickerMode(String mode) {
-            if ("camera".equals(mode) || "gallery".equals(mode) || "file".equals(mode)) {
+            if ("camera".equals(mode) || "gallery".equals(mode) || "file".equals(mode) || "video".equals(mode)) {
                 nextPickerMode = mode;
             } else {
                 nextPickerMode = "file";

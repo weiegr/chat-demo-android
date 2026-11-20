@@ -18,6 +18,7 @@ import {
 import { cancelUpload, describeUploadError, uploadAttachment, useUploads } from '../attachments.js'
 import { GeolocationError, getCurrentPosition } from '../geolocation.js'
 import {
+  canUploadVideo,
   DEFAULT_LOCATION_TOOL_PROMPT,
   getModePrompts,
   resolveModeModel,
@@ -158,7 +159,8 @@ const requestTools = (
 /** RP 模式省略服务端 title 时的本地兜底标题：优先取提问正文，无正文时取首个附件名 */
 const buildLocalTitle = (question: UserMessage): string => {
   const fromContent = question.content.replace(/\s+/g, ' ').trim()
-  const raw = fromContent || question.files[0]?.name.replace(/\.[^.]+$/, '').trim() || ''
+  const attachmentName = question.video?.name ?? question.files[0]?.name
+  const raw = fromContent || attachmentName?.replace(/\.[^.]+$/, '').trim() || ''
   return Array.from(raw).slice(0, LOCAL_TITLE_MAX_CHARS).join('').trim()
 }
 
@@ -291,6 +293,9 @@ const sessionAccess = new Map<string, number>()
 const unsavedSessions = new Set<string>()
 /** 保存失败时保留原件，重试成功后才释放。 */
 const pendingFiles = new Map<string, db.StoredFile[]>()
+
+export const loadSessionAttachment = async (sessionId: string, id: string) =>
+  pendingFiles.get(sessionId)?.find((file) => file.id === id)?.blob ?? (await db.loadFile(id))
 const deletingSessions = new Set<string>()
 const deletionTasks = new Set<Promise<boolean>>()
 const streamFlushes = new Map<string, () => void>()
@@ -799,12 +804,13 @@ export const sendMessage = (targetSessionId: string | null) => {
   const prepared = prepareDraftMessage(
     getDraft(targetSessionId),
     useUploads.getState().tasks,
-    model === 'deepseek-v4-pro'
+    model === 'deepseek-v4-pro',
+    canUploadVideo(mode, settings)
   )
   if (!prepared) {
     return false
   }
-  const { text, files } = prepared
+  const { text, files, video } = prepared
   const now = Date.now()
   if (sessionId === null) {
     const session: Session = {
@@ -829,6 +835,13 @@ export const sendMessage = (targetSessionId: string | null) => {
     return false
   }
   const history = getVisibleMessages(current)
+  const videoMetadata = video && {
+    id: video.id,
+    name: video.name,
+    size: video.size,
+    mimeType: video.mimeType,
+    frameIds: video.frameIds,
+  }
   const question: UserMessage = {
     id: createId(),
     role: 'user',
@@ -841,19 +854,21 @@ export const sendMessage = (targetSessionId: string | null) => {
       isImage,
       mimeType,
     })),
+    ...(videoMetadata && { video: videoMetadata }),
     createdAt: now,
   }
   const reply = createReply(mode, model)
-  updateSession(sessionId, (session) => ({
-    ...appendBranch(session, history.at(-1)?.id ?? null, [question, reply]),
-    updatedAt: now,
-  }))
   if (files.length > 0) {
     pendingFiles.set(sessionId, [
       ...(pendingFiles.get(sessionId) ?? []),
       ...files.map(({ id, blob }) => ({ id, blob })),
+      ...(video ? [{ id: video.id, blob: video.file }] : []),
     ])
   }
+  updateSession(sessionId, (session) => ({
+    ...appendBranch(session, history.at(-1)?.id ?? null, [question, reply]),
+    updatedAt: now,
+  }))
   persist(sessionId)
   clearSentDraft(targetSessionId)
   void streamReply(sessionId, reply, { history, question })
@@ -910,7 +925,12 @@ export const editMessage = (
   if (previous?.role !== 'user') {
     return false
   }
-  const nextFiles = files ?? previous.files
+  let nextFiles = files ?? previous.files
+  const video = previous.video
+  const keepVideo = video?.frameIds.every((id) => nextFiles.some((file) => file.id === id))
+  if (video && !keepVideo) {
+    nextFiles = nextFiles.filter((file) => !video.frameIds.includes(file.id))
+  }
   if (!text && nextFiles.length === 0) {
     return false
   }
@@ -919,6 +939,7 @@ export const editMessage = (
     role: 'user',
     content: text,
     files: nextFiles,
+    ...(keepVideo && { video }),
     createdAt: Date.now(),
   }
   const mode = session.mode ?? 'fast'

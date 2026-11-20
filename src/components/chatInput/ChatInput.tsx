@@ -20,8 +20,15 @@ import {
   IconSendOutline16,
   IconStopFill16,
   IconThinkOutline14,
+  IconVideoOutline20,
 } from '../base/icons.js'
-import { resolveModeModel, setSearch, setThinking, useSettings } from '../../services/settings.js'
+import {
+  canUploadVideo,
+  resolveModeModel,
+  setSearch,
+  setThinking,
+  useSettings,
+} from '../../services/settings.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { editMessage, sendMessage, stopReply, useChatStore } from '../../services/chat/store.js'
 import {
@@ -56,6 +63,7 @@ import {
 } from '../messages/userEditState.js'
 import { DraftAttachments } from './DraftAttachments.js'
 import { useVoiceInput } from './useVoiceInput.js'
+import { useVideoInput } from './useVideoInput.js'
 import { VoiceButton } from './VoiceButton.js'
 import { Spectrum } from './Spectrum.js'
 import { useTranslate } from '../../i18n/index.js'
@@ -69,8 +77,10 @@ interface RecentPhotoItem {
   thumb: string
 }
 
+type PickerMode = 'camera' | 'gallery' | 'file' | 'video'
+
 interface AndroidMediaBridge {
-  setNextPickerMode?: (mode: 'camera' | 'gallery' | 'file') => void
+  setNextPickerMode?: (mode: PickerMode) => void
   hasGalleryPermission?: () => boolean
   requestGalleryPermission?: () => void
   requestRecentPhotos?: (limit: number) => void
@@ -118,6 +128,10 @@ const Input = ({
   const activeMode = sessionMode ?? globalMode
   const activeModel = resolveModeModel(activeMode, rpModel)
   const useOcrModel = activeModel === 'deepseek-v4-pro'
+  const videoAllowed = useSettings((settings) => canUploadVideo(activeMode, settings))
+  const video = useVideoInput(draftKey, sessionId)
+  const videoEntry = videoAllowed && activeEdit === null
+  const videoBlocked = !videoAllowed && Boolean(draft.video)
   const isRpMode = activeMode === 'rp'
 
   useEffect(() => {
@@ -128,7 +142,7 @@ const Input = ({
 
   const draftReady = useUploads((state) => {
     if (!activeEdit) {
-      return prepareDraftMessage(draft, state.tasks, useOcrModel) !== null
+      return prepareDraftMessage(draft, state.tasks, useOcrModel, videoAllowed) !== null
     }
     const allUploaded = draft.attachments.every((item) => {
       if (
@@ -156,6 +170,7 @@ const Input = ({
   const search = useSettings((state) => state.search)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
+  const videoInputRef = useRef<HTMLInputElement>(null)
   const albumInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const togglesRef = useRef<HTMLDivElement>(null)
@@ -422,12 +437,15 @@ const Input = ({
     event.target.value = ''
     closeAttachMenu()
   }
-  const openPicker = (mode: 'camera' | 'gallery' | 'file', input: HTMLInputElement | null) => {
+  const openPicker = (mode: PickerMode, input: HTMLInputElement | null) => {
+    if (!input || (mode === 'video' && !video.canSelect())) {
+      return
+    }
     if (useChatStore.getState().importingHistory || !ensureApiKey()) {
       return
     }
     getAndroidHost()?.setNextPickerMode?.(mode)
-    input?.click()
+    input.click()
     closeAttachMenu()
   }
   const toggleAttachMenu = () => {
@@ -495,10 +513,10 @@ const Input = ({
   const retryFile = useCallback(
     (id: string) => {
       if (!useChatStore.getState().importingHistory && ensureApiKey()) {
-        retryDraftAttachment(draftKey, id, useSettings.getState().apiKey ?? '')
+        retryDraftAttachment(draftKey, id, useSettings.getState().apiKey ?? '', videoAllowed)
       }
     },
-    [draftKey]
+    [draftKey, videoAllowed]
   )
   const removeFile = useCallback(
     (id: string) => {
@@ -539,10 +557,19 @@ const Input = ({
   const recording = voice.status === 'recording'
 
   // 排队、上传中或上传失败的附件都留在输入框，全部上传成功后才能发送
-  const canSend = !importingHistory && !streaming && voice.status === 'idle' && draftReady
+  const canSend =
+    !importingHistory &&
+    !streaming &&
+    voice.status === 'idle' &&
+    video.progress === null &&
+    draftReady
 
   const send = () => {
-    if (useChatStore.getState().importingHistory || voice.status !== 'idle') {
+    if (
+      useChatStore.getState().importingHistory ||
+      voice.status !== 'idle' ||
+      video.isProcessing()
+    ) {
       return
     }
     const currentEdit = useUserEdit.getState().active
@@ -589,7 +616,7 @@ const Input = ({
       return
     }
 
-    if (!prepareDraftMessage(getDraft(sessionId), useUploads.getState().tasks, useOcrModel)) {
+    if (!prepareDraftMessage(getDraft(sessionId), useUploads.getState().tasks, useOcrModel, videoAllowed)) {
       return
     }
     // 文本与上传完成态由提交动作读取最新快照，不使用上一次渲染的草稿。
@@ -607,12 +634,19 @@ const Input = ({
 
   const hasNativeGallery = Boolean(getAndroidHost())
   const attachActions = [
-    {
-      key: 'camera',
-      icon: <IconCameraOutline20 />,
-      label: t('attachCamera'),
-      onClick: () => openPicker('camera', cameraInputRef.current),
-    },
+    videoEntry
+      ? {
+          key: 'video',
+          icon: <IconVideoOutline20 />,
+          label: t('attachVideo'),
+          onClick: () => openPicker('video', videoInputRef.current),
+        }
+      : {
+          key: 'camera',
+          icon: <IconCameraOutline20 />,
+          label: t('attachCamera'),
+          onClick: () => openPicker('camera', cameraInputRef.current),
+        },
     {
       key: 'gallery',
       icon: <IconImageOutline20 />,
@@ -656,12 +690,25 @@ const Input = ({
         ) : null}
         <DraftAttachments
           items={attachments}
+          sessionId={sessionId}
           existingFiles={activeEdit?.files}
+          existingVideo={activeEdit?.video}
+          video={draft.video}
           useOcrModel={useOcrModel}
+          videoAllowed={videoAllowed}
           onRetry={retryFile}
           onRemove={removeFile}
           onRemoveExisting={removeUserEditExistingFile}
         />
+        {video.progress !== null ? (
+          <div className={styles.videoStatus}>
+            <span role="status">{t('videoProcessing', { progress: video.progress })}</span>
+            <button type="button" className={styles.videoAction} onClick={video.cancel}>
+              {t('cancel')}
+            </button>
+          </div>
+        ) : null}
+        {videoBlocked ? <div className={styles.videoStatus}>{t('videoEnableToSend')}</div> : null}
         <div className={styles.textareaWrapper}>
           <textarea
             ref={textareaRef}
@@ -778,6 +825,19 @@ const Input = ({
               hidden
               onChange={handleFilesSelected}
             />
+            {__BETA__ && isMobile && activeEdit === null ? (
+              <input
+                ref={videoInputRef}
+                type="file"
+                accept="video/*"
+                hidden
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? [])
+                  event.target.value = ''
+                  void video.add(files)
+                }}
+              />
+            ) : null}
             <input
               ref={albumInputRef}
               type="file"

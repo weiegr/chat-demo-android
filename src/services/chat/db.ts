@@ -61,7 +61,9 @@ const storedSummary = (session: Session): StoredSessionSummary => ({
   fileIds: [
     ...new Set(
       session.messages.flatMap((message) =>
-        message.role === 'user' ? message.files.map((file) => file.id) : []
+        message.role === 'user'
+          ? [...message.files.map((file) => file.id), ...(message.video ? [message.video.id] : [])]
+          : []
       )
     ),
   ],

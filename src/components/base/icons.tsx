@@ -670,6 +670,18 @@ export const IconCameraOutline20 = () => (
   </svg>
 )
 
+export const IconVideoOutline20 = () => (
+  <svg width={20} height={20} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+    <rect x={2.5} y={4.5} width={10} height={11} rx={2} stroke="currentColor" strokeWidth={1.5} />
+    <path
+      d="m12.5 8 4.2-2.5a.5.5 0 0 1 .8.43v8.14a.5.5 0 0 1-.8.43L12.5 12"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
 export const IconImageOutline20 = () => (
   <svg width={20} height={20} viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path

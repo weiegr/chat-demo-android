@@ -29,6 +29,15 @@ export type FileAttachment = {
   ocrText?: string
 }
 
+/** 视频原件仅用于本地预览，模型使用 files 中由 frameIds 标记的抽帧拼图。 */
+export type VideoAttachment = {
+  id: string
+  name: string
+  size: number
+  mimeType: string
+  frameIds: string[]
+}
+
 /** 本地消息的分支关系；字段缺省时按线性消息列表处理。 */
 type MessageBranch = {
   parentId?: string | null
@@ -41,6 +50,7 @@ export type UserMessage = MessageBranch & {
   role: 'user'
   content: string
   files: FileAttachment[]
+  video?: VideoAttachment
   createdAt: number
 }
 

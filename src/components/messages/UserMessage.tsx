@@ -2,6 +2,7 @@ import clsx from 'clsx'
 import { memo } from 'react'
 import { retryUpload } from '../../services/chat/store.js'
 import type { UserMessage as UserMessageType } from '../../services/chat/types.js'
+import { StoredVideoTile } from '../files/VideoTile.js'
 import {
   BranchSwitcher,
   type MessageVersions,
@@ -33,14 +34,15 @@ export const UserMessage = memo(function UserMessage({
   const isEditing = useUserEdit(
     (state) => state.active?.sessionId === sessionId && state.active.messageId === message.id
   )
-  const files = message.files
+  const video = message.video
+  const files = video ? message.files.filter((file) => !video.frameIds.includes(file.id)) : message.files
 
   return (
     <div
       data-editing={isEditing ? 'true' : undefined}
       className={clsx(styles.container, isFirst && styles.isFirst)}
     >
-      {files.length > 0 ? (
+      {files.length > 0 || video ? (
         <div
           className={clsx(
             styles.files,
@@ -48,6 +50,7 @@ export const UserMessage = memo(function UserMessage({
             isEditing && !message.content && styles.editingTarget
           )}
         >
+          {video ? <StoredVideoTile video={video} sessionId={sessionId} /> : null}
           {files.map((file) => (
             <MessageFile
               key={file.id}

@@ -12,8 +12,8 @@ import type {
   SessionIndexEntry,
 } from './format.js'
 
-/** 返回图片原件在 ZIP 里的条目名；无原件或非图片附件返回 null，仅导出元数据。 */
-export type ExportImage = (file: { id: string; name: string; isImage: boolean }) => string | null
+/** 返回原件在 ZIP 里的条目名；无原件时只导出元数据。 */
+type ExportOriginal = (file: { id: string; name: string }) => string | null
 
 const iso = (ms: number) => new Date(ms).toISOString()
 
@@ -23,7 +23,7 @@ const isoOrNull = (value: string | null) => {
   return Number.isFinite(ms) ? iso(ms) : null
 }
 
-const userFragments = (message: UserMessage, exportImage: ExportImage): Fragment[] => {
+const userFragments = (message: UserMessage, exportOriginal: ExportOriginal): Fragment[] => {
   const files = message.files.map((file): FileEntry => {
     const isImage = file.isImage
     return {
@@ -32,7 +32,7 @@ const userFragments = (message: UserMessage, exportImage: ExportImage): Fragment
       file_size: file.size,
       token_usage: null,
       inserted_at: iso(message.createdAt),
-      export_path: exportImage({ id: file.id, name: file.name, isImage }),
+      export_path: isImage ? exportOriginal(file) : null,
       is_image: isImage,
       width: null,
       height: null,
@@ -228,7 +228,7 @@ const numberMessages = (messages: Message[]) => {
   return { ordered, ids }
 }
 
-export const toSessionFile = (original: Session, exportImage: ExportImage): SessionFile => {
+export const toSessionFile = (original: Session, exportOriginal: ExportOriginal): SessionFile => {
   const session = normalizeSession(original)
   const { ordered, ids } = numberMessages(session.messages)
   const id = (message: Message) => ids.get(message.id) ?? fail('backupInvalidBranches')
@@ -254,7 +254,10 @@ export const toSessionFile = (original: Session, exportImage: ExportImage): Sess
       accumulated_token_usage: message.role === 'user' ? 0 : contextTokens(message),
       inserted_at: iso(message.createdAt),
       fragments:
-        message.role === 'user' ? userFragments(message, exportImage) : assistantFragments(message),
+        message.role === 'user' ? userFragments(message, exportOriginal) : assistantFragments(message),
+      ...(message.role === 'user' && message.video && {
+        video: { ...message.video, export_path: exportOriginal(message.video) },
+      }),
     }
   })
   const current = getVisibleMessages(session).at(-1)

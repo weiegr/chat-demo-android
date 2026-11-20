@@ -18,8 +18,8 @@ import { sessionFilesDir } from './paths.js'
 
 export type LocalSession = {
   session: Session
-  /** 本会话目录下应存在的图片：ZIP 条目名 → 文件 ID */
-  images: Map<string, string>
+  /** 原件的 ZIP 条目名。图片 MIME 由读取端探测，视频沿用归档类型。 */
+  originals: Map<string, { id: string; videoType?: string }>
 }
 
 const time = (value: string) => Date.parse(value)
@@ -44,13 +44,40 @@ const toFile = (file: FileEntry): FileAttachment => ({
   ...(file.ocr_text !== undefined ? { ocrText: file.ocr_text } : {}),
 })
 
-const toUser = (message: ChatMessage): UserMessage => ({
-  id: String(message.id),
-  role: 'user',
-  createdAt: time(message.inserted_at),
-  content: message.fragments.map((item) => (item.type === 'REQUEST' ? item.content : '')).join(''),
-  files: message.fragments.flatMap((item) => (item.type === 'FILE' ? item.files.map(toFile) : [])),
-})
+const toUser = (message: ChatMessage): UserMessage => {
+  const files = message.fragments.flatMap((item) =>
+    item.type === 'FILE' ? item.files.map(toFile) : []
+  )
+  const video = message.video
+  if (
+    video &&
+    (!video.id ||
+      video.frameIds.length === 0 ||
+      new Set(video.frameIds).size !== video.frameIds.length ||
+      files.some((file) => file.id === video.id) ||
+      video.frameIds.some((id) => !files.some((file) => file.id === id && file.isImage)))
+  ) {
+    fail('backupInvalidFiles')
+  }
+  return {
+    id: String(message.id),
+    role: 'user',
+    createdAt: time(message.inserted_at),
+    content: message.fragments
+      .map((item) => (item.type === 'REQUEST' ? item.content : ''))
+      .join(''),
+    files,
+    ...(video && {
+      video: {
+        id: video.id,
+        name: video.name,
+        size: video.size,
+        mimeType: video.mimeType,
+        frameIds: video.frameIds,
+      },
+    }),
+  }
+}
 
 /** 归档不带原调用 ID，以消息和片段位置生成稳定 ID，调用与结果共用。 */
 const toolBlocks = (
@@ -282,7 +309,7 @@ const buildTree = (file: SessionFile): Pick<Session, 'messages' | 'rootMessageId
   return { messages, rootMessageId: current.id }
 }
 
-/** 转换单个会话，并列出本会话目录下需要从 ZIP 读取的图片。 */
+/** 转换单个会话，并列出本会话目录下需要从 ZIP 读取的原件。 */
 export const toLocalSession = (file: SessionFile): LocalSession => {
   const session: Session = {
     id: file.id,
@@ -293,31 +320,40 @@ export const toLocalSession = (file: SessionFile): LocalSession => {
     ...(file.mode ? { mode: file.mode } : {}),
     ...buildTree(file),
   }
-  const images = new Map<string, string>()
+  const originals: LocalSession['originals'] = new Map()
+  const addOriginal = (exportPath: string | null, id: string, videoType?: string) => {
+    if (exportPath === null) {
+      return
+    }
+    const path = exportPath.normalize('NFC')
+    const existing = originals.get(path)
+    if (
+      !path.startsWith(sessionFilesDir(file.id)) ||
+      (existing && (existing.id !== id || existing.videoType !== videoType))
+    ) {
+      fail('backupInvalidFiles')
+    }
+    originals.set(path, { id, videoType })
+  }
   for (const message of file.messages) {
+    const video = message.video
+    if (video) {
+      addOriginal(
+        video.export_path,
+        video.id,
+        video.mimeType.startsWith('video/') ? video.mimeType : ''
+      )
+    }
     for (const item of message.fragments) {
       if (item.type !== 'FILE') {
         continue
       }
       for (const entry of item.files) {
-        if (!entry.is_image) {
-          continue
+        if (entry.is_image) {
+          addOriginal(entry.export_path, entry.id)
         }
-        // 读取端把条目名规范为 NFC，引用也按同样规则比较。
-        const path = entry.export_path?.normalize('NFC')
-        if (path === undefined) {
-          continue
-        }
-        // 图片只能在本会话目录下，同一条目不能对应不同文件。
-        if (
-          !path.startsWith(sessionFilesDir(file.id)) ||
-          (images.get(path) ?? entry.id) !== entry.id
-        ) {
-          fail('backupInvalidFiles')
-        }
-        images.set(path, entry.id)
       }
     }
   }
-  return { session, images }
+  return { session, originals }
 }

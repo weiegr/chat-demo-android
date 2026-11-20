@@ -201,10 +201,12 @@ const fragment: Read<Fragment | null> = (value) => {
 
 const message: Read<ChatMessage> = (value) => {
   const item = record(value)
+  const role = oneOf('USER', 'ASSISTANT')(item.role)
+  const video = role === 'USER' && item.video !== undefined ? record(item.video) : null
   return {
     id: count(item.id),
     parent_id: nullable(count)(item.parent_id),
-    role: oneOf('USER', 'ASSISTANT')(item.role),
+    role,
     status: oneOf(
       'WIP',
       'FINISHED',
@@ -219,6 +221,16 @@ const message: Read<ChatMessage> = (value) => {
     accumulated_token_usage: count(item.accumulated_token_usage),
     inserted_at: time(item.inserted_at),
     fragments: list(fragment)(item.fragments).filter((item): item is Fragment => item !== null),
+    ...(video && {
+      video: {
+        id: string(video.id),
+        name: string(video.name),
+        size: count(video.size),
+        mimeType: string(video.mimeType),
+        frameIds: list(string)(video.frameIds),
+        export_path: nullable(string)(video.export_path),
+      },
+    }),
   }
 }
 

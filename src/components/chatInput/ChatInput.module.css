@@ -114,6 +114,25 @@
   cursor: default;
 }
 
+.videoStatus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px 0;
+  font-size: 13px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.videoAction {
+  padding: 4px;
+  border: none;
+  background: none;
+  color: var(--dsw-alias-brand-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
 .attachment {
   position: relative;
   flex-shrink: 0;
