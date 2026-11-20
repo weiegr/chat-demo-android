@@ -248,26 +248,28 @@ export const MobileSystemPromptPage = () => {
                 }
                 onAction={() => setEditorTarget(group.main)}
               />
-              <div className={styles.modePromptSubList}>
-                {group.tools.map((item) => {
-                  const cfg = PROMPT_TARGET_CONFIG[item]
-                  return (
-                    <MobileActionCard
-                      key={item}
-                      embedded
-                      className={styles.modePromptSubRow}
-                      label={t(cfg.titleKey)}
-                      description={t(cfg.descKey)}
-                      right={
-                        <span className={styles.mobileNavRight}>
-                          <IconChevronRightOutline14 />
-                        </span>
-                      }
-                      onAction={() => setEditorTarget(item)}
-                    />
-                  )
-                })}
-              </div>
+              {group.tools.length > 0 ? (
+                <div className={styles.modePromptSubList}>
+                  {group.tools.map((item) => {
+                    const cfg = PROMPT_TARGET_CONFIG[item]
+                    return (
+                      <MobileActionCard
+                        key={item}
+                        embedded
+                        className={styles.modePromptSubRow}
+                        label={t(cfg.titleKey)}
+                        description={t(cfg.descKey)}
+                        right={
+                          <span className={styles.mobileNavRight}>
+                            <IconChevronRightOutline14 />
+                          </span>
+                        }
+                        onAction={() => setEditorTarget(item)}
+                      />
+                    )
+                  })}
+                </div>
+              ) : null}
             </div>
           )
         })}
@@ -307,29 +309,34 @@ export const SystemPromptSetting = () => {
                 {t('settingsEditAction')}
               </Button>
             </div>
-            <div className={styles.desktopToolList}>
-              {group.tools.map((item) => {
-                const cfg = PROMPT_TARGET_CONFIG[item]
-                return (
-                  <div key={item} className={clsx(styles.cell, styles.row)}>
-                    <div className={styles.text}>
-                      <div className={styles.labelRow}>
-                        <span className={styles.label}>{t(cfg.titleKey)}</span>
-                        <InfoModalButton ariaLabel={t(cfg.titleKey)} description={t(cfg.descKey)} />
+            {group.tools.length > 0 ? (
+              <div className={styles.desktopToolList}>
+                {group.tools.map((item) => {
+                  const cfg = PROMPT_TARGET_CONFIG[item]
+                  return (
+                    <div key={item} className={clsx(styles.cell, styles.row)}>
+                      <div className={styles.text}>
+                        <div className={styles.labelRow}>
+                          <span className={styles.label}>{t(cfg.titleKey)}</span>
+                          <InfoModalButton
+                            ariaLabel={t(cfg.titleKey)}
+                            description={t(cfg.descKey)}
+                          />
+                        </div>
                       </div>
+                      <Button
+                        variant="outlined"
+                        size="m"
+                        className={styles.cellButton}
+                        onClick={() => setEditorTarget(item)}
+                      >
+                        {t('settingsEditAction')}
+                      </Button>
                     </div>
-                    <Button
-                      variant="outlined"
-                      size="m"
-                      className={styles.cellButton}
-                      onClick={() => setEditorTarget(item)}
-                    >
-                      {t('settingsEditAction')}
-                    </Button>
-                  </div>
-                )
-              })}
-            </div>
+                  )
+                })}
+              </div>
+            ) : null}
           </div>
         )
       })}

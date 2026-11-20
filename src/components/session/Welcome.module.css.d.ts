@@ -3,18 +3,26 @@ declare const styles: {
   readonly welcome: string
   readonly hero: string
   readonly greeting: string
-  readonly logo: string
   readonly greetingText: string
   readonly modeSwitch: string
   readonly modeTrack: string
+  readonly modeTrackDragging: string
+  readonly modeThumbSlot: string
   readonly modeThumb: string
   readonly modeOption: string
   readonly modeOptionActive: string
+  readonly modeActiveLayer: string
+  readonly modeOptionOverlay: string
   readonly modeOptionInner: string
   readonly modeIcon: string
   readonly modeLabel: string
   readonly stacked: string
-  readonly modeHint: string
+  readonly modeHintViewport: string
+  readonly modeHintStage: string
+  readonly modeHintItem: string
+  readonly modeHintStart: string
+  readonly modeHintCenter: string
+  readonly modeHintEnd: string
   readonly textHidden: string
 }
 export = styles

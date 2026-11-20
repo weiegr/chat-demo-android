@@ -248,7 +248,7 @@ export const zh = {
   deactivatedSearchTooltip: '按需搜索网页',
   search: '智能搜索',
   bypassSearch: '旁路搜索',
-  bypassSearchTooltip: '发送前先搜索网页，结果随提问一起提交',
+  bypassSearchTooltip: '需要查证时搜索网页，结果随提问一起提交',
   uploadFile: '上传文件',
   attachCamera: '拍照',
   attachAlbum: '相册',

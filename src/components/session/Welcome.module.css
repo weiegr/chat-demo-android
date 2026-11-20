@@ -81,24 +81,19 @@
   cursor: grabbing;
 }
 
-/* 与单格等宽的位移层：0..2 精确对应三档，不受内部高亮区外扩像素影响 */
+/* 与单格等宽的位移层：0..2 精确对应三档，由 JS 统一按 progress 驱动以与高亮裁剪和提示语同帧同步 */
 .modeThumbSlot {
   position: absolute;
-  z-index: 0;
+  z-index: 1;
   top: 0;
   bottom: 0;
   left: 0;
   width: calc(100% / 3);
   pointer-events: none;
   will-change: transform;
-  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.modeThumbDragging {
-  transition: none;
-}
-
-/* 蓝色高亮区大于外层胶囊范围，上下与左右均适度突出浮于胶囊之上 */
+/* 蓝色高亮区大于外层胶囊范围，上下与左右均适度突出浮于胶囊之上；不透明背景天然遮盖底层默认文字 */
 .modeThumb {
   position: absolute;
   top: -5px;
@@ -110,17 +105,11 @@
   box-shadow:
     inset 0 0 0 1px var(--mode-thumb-border),
     var(--mode-thumb-shadow);
-  pointer-events: auto;
-  cursor: grab;
-}
-
-.modeTrackDragging .modeThumb {
-  cursor: grabbing;
+  pointer-events: none;
 }
 
 .modeOption {
   position: relative;
-  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -144,18 +133,64 @@
   transition: color 0.2s ease;
 
   @media (hover: hover) {
-    &:hover:not(.modeOptionActive) {
+    .modeTrack:not(.modeTrackDragging) &:hover:not(.modeOptionActive) {
       color: var(--dsw-alias-brand-text);
     }
   }
 
-  &:focus-visible {
+  &:focus-visible::after {
+    content: '';
+    position: absolute;
+    z-index: 3;
+    inset: 0;
+    border-radius: inherit;
     box-shadow: inset 0 0 0 2px var(--dsw-alias-button-primary-fill);
+    pointer-events: none;
   }
 }
 
 .modeOptionActive {
+  cursor: grab;
+}
+
+/* 与底层选项像素级重合的蓝色覆盖层，按滑块胶囊精确轮廓 clip-path 裁切，落入胶囊内的文字与图标实时变蓝 */
+.modeActiveLayer {
+  --mode-clip-left: 0;
+  --mode-clip-right: 0.666667;
+  --mode-clip-radius: 9999px;
+  position: absolute;
+  z-index: 2;
+  top: -5px;
+  right: -4px;
+  bottom: -5px;
+  left: -4px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+  box-sizing: border-box;
+  padding: 5px 4px;
+  pointer-events: none;
+  user-select: none;
+  will-change: clip-path;
+  clip-path: inset(
+    0px calc((100% - 8px) * var(--mode-clip-right)) 0px calc((100% - 8px) * var(--mode-clip-left))
+      round var(--mode-clip-radius)
+  );
+}
+
+.modeOptionOverlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 10px;
   color: var(--dsw-alias-brand-text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
 }
 
 .modeOptionInner {
@@ -191,12 +226,20 @@
     border-radius: 30px;
   }
 
-  .modeOption {
+  .modeActiveLayer {
+    --mode-clip-radius: 30px;
+  }
+
+  .modeOption,
+  .modeOptionOverlay {
     min-height: 54px;
     padding: 8px 6px;
-    border-radius: 26px;
     font-size: 13px;
     line-height: 18px;
+  }
+
+  .modeOption {
+    border-radius: 26px;
   }
 
   .modeOptionInner {
@@ -209,19 +252,55 @@
   }
 }
 
-.modeHint {
+/* 提示语滑动视口：内容区与模式滑块等宽对齐，左右外扩 4px 与胶囊外沿齐平并用于边缘柔和渐隐 */
+.modeHintViewport {
+  --hint-edge-fade: 4px;
+  position: relative;
   box-sizing: border-box;
-  width: calc(100% - 8px);
-  max-width: 396px;
+  width: 100%;
+  max-width: 404px;
   min-height: 40px;
   margin: 14px 0 0;
+  padding: 0 var(--hint-edge-fade);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--hint-edge-fade),
+    #000 calc(100% - var(--hint-edge-fade)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--hint-edge-fade),
+    #000 calc(100% - var(--hint-edge-fade)),
+    transparent 100%
+  );
+}
+
+.modeHintStage {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+}
+
+.modeHintItem {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: 100%;
+  margin: 0;
   padding: 0 2px;
   font-size: 13px;
   line-height: 20px;
   color: var(--dsw-alias-label-tertiary);
   white-space: pre-line;
-  opacity: 1;
-  transition: opacity 0.18s ease;
+  visibility: hidden;
+  will-change: transform;
 }
 
 .modeHintStart {
@@ -282,9 +361,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .modeThumbSlot,
   .greetingText,
-  .modeHint,
   .modeOption {
     transition: none;
   }
