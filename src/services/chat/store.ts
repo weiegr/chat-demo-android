@@ -3,7 +3,7 @@ import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
 import { isOcrSupportedAttachment, recognizeFileText } from '../api/ocr.js'
 import {
-  rewriteSearchQuery,
+  planSearchQuery,
   searchWeb,
   truncateSearchQuery,
   type SearchApiResult,
@@ -161,6 +161,19 @@ const buildLocalTitle = (question: UserMessage): string => {
   const raw = fromContent || question.files[0]?.name.replace(/\.[^.]+$/, '').trim() || ''
   return Array.from(raw).slice(0, LOCAL_TITLE_MAX_CHARS).join('').trim()
 }
+
+/**
+ * 旁路搜索的附件判断上下文：本轮提问各附件的文件名 + 内联/OCR 文本片段。
+ * 供 flash 判断“这是什么”类指代问句是否有可检索对象，并让查询词结合附件关键信息。
+ */
+const buildSearchAttachmentContext = (prepared: PreparedRequest): string =>
+  prepared.question.files
+    .map((file) => {
+      const text = prepared.texts?.get(file.id) ?? prepared.ocrTexts?.get(file.id) ?? ''
+      const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 200)
+      return snippet ? `${file.name}：${snippet}` : file.name
+    })
+    .join('\n')
 
 /**
  * 搜索结果按 URL 去重：来源面板按 URL 首次出现登记角标编号，
@@ -1464,6 +1477,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
     let toolRound = 0
     /** 旁路搜索注入文本；附件重传重试时沿用首轮结果，不重复搜索 */
     let searchContext: string | undefined
+    let searchPlanned = false
     for (let attempt = 0; ; attempt += 1) {
       /** 附件补齐或 OCR 前出错属于预处理失败，主对话请求还没有发出 */
       let preparing = toolRound === 0
@@ -1484,82 +1498,92 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           reply = { ...reply, latestReminder }
           // 只进草稿槽，收尾时随整段回复一起落盘；这里再写一次是整段会话的重复克隆。
           updateReply(sessionId, reply)
-          // 旁路搜索：先改写查询词再调独立搜索接口，结果以伪工具块驱动既有引用展示，
-          // 同时注入提问让模型基于结果作答。守卫空 blocks 避免附件重传重试时重复搜索。
-          if (bypassSearch && reply.blocks.length === 0 && prepared.question.content.trim()) {
+          // 仅在确认需要联网后搜索，沿用现有引用展示与上下文注入。
+          if (
+            bypassSearch &&
+            !searchPlanned &&
+            reply.blocks.length === 0 &&
+            prepared.question.content.trim()
+          ) {
+            searchPlanned = true
             const questionText = prepared.question.content
+            const attachmentContext = buildSearchAttachmentContext(prepared)
             const searchApiKey = useSettings.getState().apiKey ?? ''
-            let query = truncateSearchQuery(questionText)
-            try {
-              query = await rewriteSearchQuery(searchApiKey, questionText, controller.signal)
-            } catch (error) {
+            const query = await planSearchQuery(
+              searchApiKey,
+              questionText,
+              attachmentContext,
+              controller.signal
+            ).catch((error: unknown) => {
               if (controller.signal.aborted) {
                 throw error
               }
-              // 改写失败降级：直接用原问题截断作为查询词
-            }
-            const toolUseId = `bypass-search-${createId()}`
-            reply = {
-              ...reply,
-              blocks: [
-                ...reply.blocks,
-                {
-                  type: 'server_tool_use',
-                  id: toolUseId,
-                  name: 'deepseek_web_search',
-                  input: { action: 'search', queries: [query] },
-                  caller: { type: 'direct' },
-                  kind: 'search',
-                },
-              ],
-            }
-            updateReply(sessionId, reply)
-            let results: SearchApiResult[] | null = null
-            try {
-              results = dedupeSearchResults(
-                await searchWeb(
-                  searchApiKey,
-                  { query, oriQuestion: truncateSearchQuery(questionText) },
-                  controller.signal
+              return null
+            })
+            if (query !== null) {
+              const toolUseId = `bypass-search-${createId()}`
+              reply = {
+                ...reply,
+                blocks: [
+                  ...reply.blocks,
+                  {
+                    type: 'server_tool_use',
+                    id: toolUseId,
+                    name: 'deepseek_web_search',
+                    input: { action: 'search', queries: [query] },
+                    caller: { type: 'direct' },
+                    kind: 'search',
+                  },
+                ],
+              }
+              updateReply(sessionId, reply)
+              let results: SearchApiResult[] | null = null
+              try {
+                results = dedupeSearchResults(
+                  await searchWeb(
+                    searchApiKey,
+                    { query, oriQuestion: truncateSearchQuery(questionText) },
+                    controller.signal
+                  )
                 )
-              )
-            } catch (error) {
-              if (controller.signal.aborted) {
-                throw error
+              } catch (error) {
+                if (controller.signal.aborted) {
+                  throw error
+                }
+                // 搜索失败：结果块记错误项展示「暂不可用」，请求继续（无搜索上下文）
               }
-              // 搜索失败：结果块记错误项展示「暂不可用」，请求继续（无搜索上下文）
-            }
-            reply = {
-              ...reply,
-              blocks: [
-                ...reply.blocks,
-                {
-                  type: 'web_search_tool_result',
-                  tool_use_id: toolUseId,
-                  content: results
-                    ? results.map((item) => ({
-                        type: 'web_search_result' as const,
-                        title: item.title,
-                        url: item.url,
-                        snippet: item.snippet,
-                        site_icon: item.site_icon,
-                        site_name: item.site_name,
-                        encrypted_content: '',
-                        page_age: item.date,
-                      }))
-                    : [
-                        {
-                          type: 'web_search_tool_result_error' as const,
-                          error_code: 'unavailable' as const,
-                        },
-                      ],
-                  kind: 'search' as const,
-                },
-              ],
-            }
-            updateReply(sessionId, reply)
-            if (results && results.length > 0) {
-              searchContext = buildSearchContext(results, settingsSnapshot.locale)
+              reply = {
+                ...reply,
+                blocks: [
+                  ...reply.blocks,
+                  {
+                    type: 'web_search_tool_result',
+                    tool_use_id: toolUseId,
+                    content: results
+                      ? results.map((item) => ({
+                          type: 'web_search_result' as const,
+                          title: item.title,
+                          url: item.url,
+                          snippet: item.snippet,
+                          site_icon: item.site_icon,
+                          site_name: item.site_name,
+                          encrypted_content: '',
+                          page_age: item.date,
+                        }))
+                      : [
+                          {
+                            type: 'web_search_tool_result_error' as const,
+                            error_code: 'unavailable' as const,
+                          },
+                        ],
+                    kind: 'search' as const,
+                  },
+                ],
+              }
+              updateReply(sessionId, reply)
+              if (results && results.length > 0) {
+                searchContext = buildSearchContext(results, settingsSnapshot.locale)
+              }
             }
           }
         }

@@ -258,7 +258,7 @@ export const en = {
   deactivatedSearchTooltip: 'Search the web when necessary',
   search: 'Search',
   bypassSearch: 'Bypass search',
-  bypassSearchTooltip: 'Search the web before sending and attach the results',
+  bypassSearchTooltip: 'Search the web when needed and attach the results',
   uploadFile: 'Upload files',
   attachCamera: 'Camera',
   attachAlbum: 'Album',
