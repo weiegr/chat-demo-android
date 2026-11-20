@@ -52,27 +52,45 @@ export const useMobileViewport = (enabled: boolean) => {
       return
     }
     const viewport = window.visualViewport
+    const hasNativeHost = Boolean((window as Window & { AndroidHost?: unknown }).AndroidHost)
+    // Android 原生层通过外层 FrameLayout 真实缩减 WebView 物理高度并托底导航栏安全区，
+    // 100dvh 与原生动画逐帧同步，跳过 JS 改写 --app-viewport-height 以避免键盘收起时因
+    // innerHeight 与 visualViewport 错帧更新引发页面回弹。
+    if (hasNativeHost) {
+      return
+    }
     const inputSelector = 'textarea, input:not([type="file"])'
     let animationFrame = 0
+    let baseWidth = window.innerWidth
+    let baseHeight = viewport?.height ?? window.innerHeight
     const reset = () => {
       frame.style.removeProperty('--app-viewport-height')
       frame.style.removeProperty('--app-viewport-top')
+      delete document.documentElement.dataset.imeOpen
     }
     const update = () => {
       // 双指缩放由浏览器处理，保持当前布局尺寸。
       if (viewport && viewport.scale !== 1) {
         return
       }
+      const width = window.innerWidth
+      const height = viewport?.height ?? window.innerHeight
+      if (Math.abs(width - baseWidth) > 20 || height > baseHeight) {
+        baseWidth = width
+        baseHeight = height
+      }
       // 失焦后直接恢复 CSS 的全高布局，不等 Safari 收键盘后的 resize。
       if (!document.activeElement?.matches(inputSelector)) {
         reset()
         return
       }
-      frame.style.setProperty(
-        '--app-viewport-height',
-        `${viewport?.height ?? window.innerHeight}px`
-      )
+      frame.style.setProperty('--app-viewport-height', `${height}px`)
       frame.style.setProperty('--app-viewport-top', `${viewport?.offsetTop ?? 0}px`)
+      if (baseHeight - height > 80) {
+        document.documentElement.dataset.imeOpen = 'true'
+      } else {
+        delete document.documentElement.dataset.imeOpen
+      }
     }
     const scheduleFrame = () => {
       cancelAnimationFrame(animationFrame)

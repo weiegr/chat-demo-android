@@ -19,7 +19,7 @@ chat_sessions/{session_id}_files/{file_id}_{file_name}  全部图片原件
 
 ## 导入与替换
 
-1. 用户确认覆盖后，先读取首个条目检查格式与版本；不符合时直接失败，不中止正在生成的回答。
+1. 支持本地 ZIP 上传（`importHistory`）与下载链接直接导入（`importHistoryFromUrl`；Android WebView 下通过 `/__android_proxy__` 原生同源代理拉取）；用户确认覆盖后，先读取首个条目检查格式与版本；不符合时直接失败，不中止正在生成的回答。
 2. 检查通过后停止生成，导入期间禁止修改会话。逐条解析会话并写入 IndexedDB 暂存区，按 `FILE.is_image` 保留图片身份，再读取图片原件并回填 MIME。图片按文件 ID 去重；字节识别仅补充具体 MIME，无法识别时仍按图片处理。
 3. 校验索引与会话一一对应、消息树和 ZIP 完整性后，在同一个事务中用暂存内容替换全部本地会话与附件。校验或提交失败时保留原有记录；中断遗留的暂存在下次导入前清理。
 
@@ -29,7 +29,7 @@ chat_sessions/{session_id}_files/{file_id}_{file_name}  全部图片原件
 
 ## 展示与上下文
 
-- 展示提问、正文、思考、附件，以及搜索、打开网页、页内查找步骤。搜索状态和查找词存在时用于展示；`READ_LINK` 有合法 URL 时展示链接与标题，仅含签名的记录用于请求上下文。展示链接仅接受 HTTP / HTTPS。
+- 展示提问、正文、思考、附件，以及搜索、打开网页、页内查找步骤。搜索状态与查找词存在时用于展示；`READ_LINK` 有合法 URL 时展示链接与标题，仅含签名的记录用于请求上下文。展示链接仅接受 HTTP / HTTPS。
 - `TIP`、`CONTENT_RISK`、`PARTIAL_FILE_READ`、`TOOL_IMAGE_SEARCH` 等没有对应展示的内容直接丢弃，不显示占位或提示；工具分组等未映射到本地消息的元数据也不保留。完整转换规则见 [toLocal.ts](./toLocal.ts)。
 - `FINISHED` 转成已完成，`INCOMPLETE` / `WIP` 转成已停止，`FAILED` / `CONTEXT_LENGTH_EXCEEDED` / `TIMEOUT` 转成错误，`CONTENT_FILTER` 转成拒绝。思考与搜索开关保存在回复中。
 - 错误回复的模板文案显示为红字和感叹号提示，正文和思考独立展示。拒绝及其他非错误模板使用正文样式，拒绝回复丢弃普通正文和思考，可复制模板，不能重新生成。模板统一单独展示，不混入工具步骤前的说明文字。
@@ -40,7 +40,7 @@ chat_sessions/{session_id}_files/{file_id}_{file_name}  全部图片原件
 
 ## 导出范围
 
-导出完整消息树与当前分支，只附带本地存在的图片原件；非图片附件仅有元数据。所有消息都从当前正式消息转换为归档片段，包含搜索状态、页内查找词、模板正文、思考用时，以及成功阅读链接结果的签名、URL 和标题。导入后修改的内容、状态和附件以当前值为准，不回写原始归档。具体映射见 [toArchive.ts](./toArchive.ts)。
+导出完整消息树与当前分支，只附带本地存在的图片原件；非图片附件仅有元数据。所有消息都从当前正式消息转换为归档片段，包含搜索状态、页内查找词、模板正文、思考用时、成功阅读链接结果的签名/URL/标题，以及可选的会话模式（`mode`）与附件 OCR 文本缓存（`ocr_text`）。导入后修改的内容、状态和附件以当前值为准，不回写原始归档。具体映射见 [toArchive.ts](./toArchive.ts)。
 
 本地错误和拒绝提示以导出时的界面语言写入 `TEMPLATE_RESPONSE`，导入后保留文案且不参与上下文；正常空回复和达到长度上限的回复不补造提示。已有模板原样保留，重复导出不会重复追加这些提示。
 
@@ -58,4 +58,4 @@ chat_sessions/{session_id}_files/{file_id}_{file_name}  全部图片原件
 | [zipReader.ts](./zipReader.ts)、[zipWriter.ts](./zipWriter.ts)                 | ZIP 读写及路径、大小、CRC 校验 |
 | [../backup.ts](../backup.ts)                                                   | 导入导出入口与串行队列         |
 
-支持单卷 ZIP32 的 STORE / DEFLATE，导出使用 STORE。ZIP64、加密、分卷及非 UTF-8 的非 ASCII 文件名不支持；条目名统一按 NFC 比较。不另设业务大小上限，但受 ZIP32 容量和浏览器资源限制，导出会生成完整下载 Blob。
+支持单卷 ZIP32 的 STORE / DEFLATE，导出使用 STORE。ZIP64、加密、分卷及非 UTF-8 的非 ASCII 文件名不支持；条目名统一按 NFC 比较。不另设业务大小上限，但受 ZIP32 容量和浏览器资源限制，导出会生成完整 ZIP 数据（Web 端触发浏览器下载；Android 端调用 `saveExportFile` 写入系统下载目录并返回真实路径供前端记录与跳转查看）。

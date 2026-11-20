@@ -1,21 +1,82 @@
 .header {
+  position: relative;
+  z-index: 17;
   display: flex;
   align-items: center;
   flex-shrink: 0;
   box-sizing: border-box;
   min-height: calc(52px + var(--safe-top));
   padding: calc(4px + var(--safe-top)) 8px 4px;
+  background: var(--dsw-alias-bg-base);
+}
+
+.titleGroup {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  min-width: 0;
+  margin: 0 8px;
 }
 
 .title {
-  flex: 1;
-  min-width: 0;
-  margin: 0 8px;
+  width: 100%;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   font-size: 16px;
-  line-height: 24px;
+  line-height: 22px;
   font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.modeBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% + 8px);
+  margin: 0 -4px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.14s ease;
+
+  &:active {
+    opacity: 0.68;
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+}
+
+.modeIcon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--dsw-alias-brand-text);
+
+  svg {
+    display: block;
+    width: 12px;
+    height: 12px;
+  }
+}
+
+.modeLabel {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
   color: var(--dsw-alias-label-primary);
 }

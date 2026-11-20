@@ -2,6 +2,13 @@
   display: inline-flex;
 }
 
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 899;
+  background: transparent;
+}
+
 .menu {
   position: fixed;
   z-index: 900;
@@ -14,6 +21,27 @@
     0 0 1px rgba(0, 0, 0, 0.2),
     0 0 4px rgba(0, 0, 0, 0.02),
     0 12px 32px rgba(0, 0, 0, 0.08);
+}
+
+.menuContext {
+  min-width: 196px;
+  padding: 4px 0;
+  border-radius: 16px;
+  box-shadow:
+    0 0 1px rgba(0, 0, 0, 0.14),
+    0 12px 36px rgba(0, 0, 0, 0.14);
+
+  .option {
+    gap: 12px;
+    padding: 11px 16px;
+    border-radius: 0;
+    font-size: 15px;
+    line-height: 22px;
+  }
+
+  .option + .option {
+    border-top: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  }
 }
 
 .option {

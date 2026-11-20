@@ -82,3 +82,14 @@
     transition: none;
   }
 }
+
+/*
+ * 移动端整屏 backdrop-filter 会在遮罩淡入的每一帧重算背景模糊（1080p 屏上是上千万像素的
+ * 采样+模糊），底部抽屉（DeepSeek 链接导入、系统/工具提示词编辑等）打开时稳定掉帧。
+ * 移动端只保留遮罩色。
+ */
+@media not all and (min-width: 768px) {
+  .overlay {
+    backdrop-filter: none;
+  }
+}

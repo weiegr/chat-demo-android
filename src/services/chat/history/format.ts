@@ -1,3 +1,5 @@
+import type { ChatMode } from '../../settings.js'
+
 /**
  * 历史会话导出产物（deepseek_data-*.zip）的类型定义。
  *
@@ -29,6 +31,8 @@ export type SessionFile = {
   id: string
   title: string | null
   pinned: boolean
+  /** 可选的会话对话模式（fast / expert / rp）；官方归档缺省时按快速模式处理 */
+  mode?: ChatMode
   /** 用户当前停留的消息，线性化消息树的唯一依据 */
   current_message_id: number
   inserted_at: Iso8601Utc
@@ -169,6 +173,8 @@ export type FileEntry = {
   is_image: boolean
   width: number | null
   height: number | null
+  /** 可选的 OCR 识别纯文本缓存（空串表示已识别但无文字）；官方归档缺省 */
+  ocr_text?: string
 }
 
 /** 非图片文件只有元数据，本体不在产物里 */

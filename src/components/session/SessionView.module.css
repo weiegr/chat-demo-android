@@ -6,22 +6,83 @@
 }
 
 .header {
+  position: relative;
+  z-index: 17;
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  height: 60px;
-  padding: 12px 18px 0;
+  min-height: 60px;
+  padding: 10px 18px 6px;
   box-sizing: border-box;
   background: var(--dsw-alias-bg-base);
 }
 
-.title {
+.titleGroup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   max-width: 480px;
-  padding: 8px 12px;
+  min-width: 0;
+  padding: 2px 12px;
+}
+
+.title {
+  width: 100%;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   font: var(--dsw-font-s-strong-14);
+  color: var(--dsw-alias-label-primary);
+}
+
+.modeBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 -4px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.14s ease;
+
+  @media (hover: hover) {
+    &:hover {
+      opacity: 0.78;
+    }
+  }
+
+  &:active {
+    opacity: 0.65;
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+}
+
+.modeIcon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--dsw-alias-brand-text);
+
+  svg {
+    display: block;
+    width: 12px;
+    height: 12px;
+  }
+}
+
+.modeLabel {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
   color: var(--dsw-alias-label-primary);
 }
 
@@ -40,6 +101,7 @@
   width: calc(var(--message-list-max-width) - 64px);
   max-width: calc(100% - 32px);
   margin: auto auto 0;
+  padding-bottom: 24px;
   background: linear-gradient(
     to bottom,
     transparent 0%,
@@ -48,22 +110,21 @@
   );
 }
 
-.caveat {
-  width: 100%;
-  padding: 6px 0;
-  font-size: 11px;
-  line-height: 16px;
-  text-align: center;
-  color: var(--dsw-alias-label-tertiary);
-  user-select: none;
-}
-
 @media not all and (min-width: 768px) {
   .inputContainer {
     position: relative;
     bottom: auto;
     flex-shrink: 0;
     margin: 0 auto;
-    padding-bottom: var(--safe-bottom);
+    padding-bottom: calc(12px + var(--safe-bottom));
+
+    [data-ime-open='true'] & {
+      padding-bottom: calc(6px + var(--safe-bottom));
+    }
   }
+}
+
+.inputContainerEditing {
+  z-index: auto;
+  background: transparent;
 }

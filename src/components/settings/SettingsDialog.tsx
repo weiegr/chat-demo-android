@@ -26,9 +26,8 @@ import {
 import { useIsMobile } from '../../app/viewport.js'
 import { useChatStore } from '../../services/chat/store.js'
 import {
-  setAllowAiImages,
+  setAutoReadAloud,
   setLocale,
-  setSystemPrompt,
   setThemePreference,
   setTtsVoice,
   useSettings,
@@ -43,7 +42,7 @@ import { Select } from '../base/Select.js'
 import { Switch } from '../base/Switch.js'
 import { showToast } from '../base/toastState.js'
 import { usePresence } from '../base/usePresence.js'
-import { ApiKeyConfirm, ApiKeyField, useApiKeyEditor } from './ApiKeyField.js'
+import { ApiKeySetting } from './ApiKeyField.js'
 import { InfoModalButton } from './InfoModalButton.js'
 import {
   AiLocationSetting,
@@ -51,6 +50,13 @@ import {
   MobileLocationNavRow,
   MobileLocationPage,
 } from './LocationSettings.js'
+import { MobileActionCard } from './MobileActionCard.js'
+import { MobileRpModeNavRow, MobileRpModePage, RpModeSetting } from './RpModeSettings.js'
+import {
+  MobileSystemPromptNavRow,
+  MobileSystemPromptPage,
+  SystemPromptSetting,
+} from './SystemPromptSettings.js'
 import { closeSettings, useSettingsDialog, type SettingsSection } from './settingsDialogState.js'
 import styles from './Settings.module.css'
 
@@ -77,9 +83,10 @@ const SettingsContent = () => {
   const isMobile = useIsMobile()
   // 打开时按调用方指定的分组选中，之后在弹窗内切换
   const [section, setSection] = useState(() => useSettingsDialog.getState().section)
-  const [mobilePage, setMobilePage] = useState<'main' | 'data' | 'location'>('main')
-  // 切换分组不丢失正在输入的 API Key 与导入状态
-  const apiKeyEditor = useApiKeyEditor()
+  const [mobilePage, setMobilePage] = useState<
+    'main' | 'data' | 'location' | 'systemPrompt' | 'rpMode'
+  >('main')
+  // 切换分组不丢失导入状态
   const historyImport = useHistoryImport()
   const historyUrlImport = useHistoryUrlImport()
   const historyDelete = useHistoryDelete()
@@ -87,12 +94,16 @@ const SettingsContent = () => {
   const historyBusy =
     historyImport.busy || historyUrlImport.busy || historyDelete.busy || replacingHistory
   const inMobileSubPage = isMobile && mobilePage !== 'main'
-  const mobileTitleKey =
+  const mobileTitleKey: TranslationKey =
     mobilePage === 'data'
       ? 'settingDialogAsideDataOptionLabel'
       : mobilePage === 'location'
         ? 'settingsLocation'
-        : 'settings'
+        : mobilePage === 'systemPrompt'
+          ? 'settingsSystemPrompt'
+          : mobilePage === 'rpMode'
+            ? 'settingsRpMode'
+            : 'settings'
   return (
     <>
       <Modal
@@ -142,21 +153,23 @@ const SettingsContent = () => {
               <MobileActionCard
                 danger
                 label={t('deleteAllSessions')}
-                status={null}
                 disabled={historyBusy}
                 onAction={historyDelete.open}
               />
             </div>
           ) : mobilePage === 'location' ? (
             <MobileLocationPage />
+          ) : mobilePage === 'systemPrompt' ? (
+            <MobileSystemPromptPage />
+          ) : mobilePage === 'rpMode' ? (
+            <MobileRpModePage />
           ) : (
             <div className={styles.content}>
               <div className={styles.mobileGroupTitle}>
                 {t('settingDialogAsideDataOptionLabel')}
               </div>
               <div className={styles.mobileCard}>
-                <ApiKeyField editor={apiKeyEditor} />
-                <ApiKeyConfirm editor={apiKeyEditor} />
+                <ApiKeySetting />
                 <button
                   type="button"
                   className={styles.mobileNavRow}
@@ -176,9 +189,10 @@ const SettingsContent = () => {
               </div>
               <div className={styles.mobileGroupTitle}>{t('settingGroupChat')}</div>
               <div className={styles.mobileCard}>
-                <SystemPromptSetting />
+                <MobileSystemPromptNavRow onOpen={() => setMobilePage('systemPrompt')} />
                 <MobileTtsVoiceSetting />
-                <AiImagesSetting />
+                <MobileAutoReadAloudSetting />
+                <MobileRpModeNavRow onOpen={() => setMobilePage('rpMode')} />
               </div>
             </div>
           )
@@ -205,14 +219,15 @@ const SettingsContent = () => {
                   <ThemeSetting />
                   <LocaleSetting />
                   <TtsVoiceSetting />
+                  <AutoReadAloudSetting />
                   <LocationSetting />
                   <AiLocationSetting />
                   <SystemPromptSetting />
-                  <AiImagesSetting />
+                  <RpModeSetting />
                 </>
               ) : (
                 <>
-                  <ApiKeyField editor={apiKeyEditor} />
+                  <ApiKeySetting />
                   <ImportHistory historyImport={historyImport} disabled={historyBusy} />
                   <ImportHistoryFromUrl urlImport={historyUrlImport} disabled={historyBusy} />
                   <ExportHistory disabled={historyBusy} />
@@ -505,6 +520,22 @@ const MobileTtsVoiceSetting = () => {
   )
 }
 
+/** 移动端自动朗读：开关行，置于朗读音色下方 */
+const MobileAutoReadAloudSetting = () => {
+  const t = useTranslate()
+  const autoReadAloud = useSettings((state) => state.autoReadAloud)
+  return (
+    <div className={styles.mobileNavRow}>
+      <span className={styles.label}>{t('settingsAutoReadAloud')}</span>
+      <Switch
+        checked={autoReadAloud}
+        ariaLabel={t('settingsAutoReadAloud')}
+        onChange={setAutoReadAloud}
+      />
+    </div>
+  )
+}
+
 /** 朗读音色：stella（海星，女声）/ tide（暗潮，男声） */
 const TtsVoiceSetting = () => {
   const t = useTranslate()
@@ -528,52 +559,23 @@ const TtsVoiceSetting = () => {
   )
 }
 
-/** 系统提示词：随每轮对话发给模型的自定义指令，与默认身份提示一起生效 */
-const SystemPromptSetting = () => {
+/** 自动朗读：回答完成后自动朗读回复内容 */
+const AutoReadAloudSetting = () => {
   const t = useTranslate()
-  const systemPrompt = useSettings((state) => state.systemPrompt)
+  const autoReadAloud = useSettings((state) => state.autoReadAloud)
   return (
     <SettingCell
-      label={t('settingsSystemPrompt')}
-      description={t('settingsSystemPromptDescription')}
+      label={t('settingsAutoReadAloud')}
+      description={t('settingsAutoReadAloudDesc')}
       status={null}
-      className={styles.systemPromptCell}
       action={
-        <textarea
-          aria-label={t('settingsSystemPrompt')}
-          className={styles.systemPromptInput}
-          placeholder={t('settingsSystemPromptPlaceholder')}
-          rows={3}
-          spellCheck={false}
-          value={systemPrompt}
-          onChange={(event) => setSystemPrompt(event.target.value)}
+        <Switch
+          checked={autoReadAloud}
+          ariaLabel={t('settingsAutoReadAloud')}
+          onChange={setAutoReadAloud}
         />
       }
     />
-  )
-}
-
-/** 允许在 AI 回复中加入图片：仅在明确执行搜索工具后触发富文本图文展示 */
-const AiImagesSetting = () => {
-  const t = useTranslate()
-  const allowAiImages = useSettings((state) => state.allowAiImages)
-  const search = useSettings((state) => state.search)
-  const description = t(
-    search ? 'settingsAiImagesDescription' : 'settingsAiImagesRequiresSearchDescription'
-  )
-
-  return (
-    <div className={clsx(styles.cell, styles.switchHeader)}>
-      <div className={styles.labelRow}>
-        <span className={styles.label}>{t('settingsAiImages')}</span>
-        <InfoModalButton ariaLabel={t('settingsAiImages')} description={description} />
-      </div>
-      <Switch
-        checked={allowAiImages}
-        ariaLabel={t('settingsAiImages')}
-        onChange={setAllowAiImages}
-      />
-    </div>
   )
 }
 
@@ -829,59 +831,6 @@ const SettingCell = ({
   )
 }
 
-/** 移动端数据管理单卡：整卡可点击触发动作，说明图标独立点击弹窗，避免交互按钮嵌套 */
-const MobileActionCard = ({
-  label,
-  description,
-  status,
-  disabled,
-  danger = false,
-  onAction,
-  children,
-}: {
-  label: string
-  description?: string
-  status: Status
-  disabled: boolean
-  danger?: boolean
-  onAction: () => void
-  children?: ReactNode
-}) => {
-  const t = useTranslate()
-
-  return (
-    <div className={styles.mobileActionCard}>
-      <button
-        type="button"
-        className={styles.mobileActionHit}
-        aria-label={label}
-        disabled={disabled}
-        onClick={onAction}
-      />
-      <div className={styles.mobileActionBody}>
-        <div className={styles.labelRow}>
-          <span
-            className={clsx(
-              styles.label,
-              danger && styles.mobileActionDangerLabel,
-              disabled && styles.mobileActionLabelDisabled
-            )}
-          >
-            {label}
-          </span>
-          {description ? <InfoModalButton ariaLabel={label} description={description} /> : null}
-        </div>
-        {status ? (
-          <div className={clsx(styles.description, status.error && styles.error)}>
-            {t(status.key, status.reason ? { message: t(status.reason) } : status.params)}
-          </div>
-        ) : null}
-      </div>
-      {children}
-    </div>
-  )
-}
-
 /** 选文件后先提示覆盖；确认后才检查文件并执行导入，任何错误都提示导入失败。 */
 const useHistoryImport = () => {
   const [file, setFile] = useState<File | null>(null)
@@ -939,11 +888,20 @@ const ImportHistory = ({
   )
 
   if (isMobile) {
+    const statusText = historyImport.status
+      ? t(
+          historyImport.status.key,
+          historyImport.status.reason
+            ? { message: t(historyImport.status.reason) }
+            : historyImport.status.params
+        )
+      : null
     return (
       <MobileActionCard
         label={t('historyImport')}
         description={t('historyImportDescription')}
-        status={historyImport.status}
+        statusText={statusText}
+        statusError={historyImport.status?.error}
         disabled={disabled}
         onAction={() => inputRef.current?.click()}
       >
@@ -1063,7 +1021,6 @@ const ImportHistoryFromUrl = ({
       <MobileActionCard
         label={t('historyImportFromUrl')}
         description={t('historyImportFromUrlDescription')}
-        status={null}
         disabled={disabled}
         onAction={urlImport.openModal}
       />
@@ -1104,7 +1061,8 @@ const UrlImportDialog = ({ urlImport }: { urlImport: ReturnType<typeof useHistor
       placeholder={t('historyUrlPlaceholder')}
       rows={4}
       spellCheck={false}
-      autoFocus
+      // 移动端不自动聚焦：抽屉滑入与软键盘同时进行会整段掉帧，交给用户点
+      autoFocus={!isMobile}
       disabled={urlImport.busy}
       value={urlImport.url}
       onChange={(event) => urlImport.setUrl(event.target.value)}
@@ -1251,7 +1209,6 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
         <MobileActionCard
           label={t('exportAllLabel')}
           description={t('historyExportDescription')}
-          status={null}
           disabled={actionDisabled}
           onAction={() => void onExport()}
         />

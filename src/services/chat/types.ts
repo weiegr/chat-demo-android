@@ -8,11 +8,13 @@ import type {
   StopReason,
   TextCitation,
 } from '../api/types.js'
+import type { ChatMode } from '../settings.js'
 
 /**
  * 消息附件。id 是本地标识（IndexedDB files 表的主键，原件按它存储，所有引用同一 id 的消息共用一份），
  * 导入的附件沿用导出产物里的文件 ID；本地没有原件的附件只展示文件名，不进入请求。
  * serverId 是 Files API 返回的 file_id，导入的数据或尚未上传成功的文件为 null，发送前补传。
+ * ocrText 用于缓存 deepseek-v4-pro 下通过 DeepSeek OCR 接口提取的文字，避免多轮对话重复识别。
  */
 export type FileAttachment = {
   id: string
@@ -23,6 +25,8 @@ export type FileAttachment = {
   isImage: boolean
   /** 具体 MIME；导入时没有原件或无法识别的为空字符串，不影响图片身份。 */
   mimeType: string
+  /** 经 DeepSeek OCR 提取的纯文本缓存（空串表示已识别但无文字） */
+  ocrText?: string
 }
 
 /** 本地消息的分支关系；字段缺省时按线性消息列表处理。 */
@@ -136,6 +140,8 @@ export type Session = {
   title: string
   createdAt: number
   updatedAt: number
+  /** 对话模式：快速 / 专家 / RP；旧会话与导入会话缺省按快速模式处理。 */
+  mode?: ChatMode
   /** 包含所有分支的消息，按创建顺序存储。 */
   messages: Message[]
   /** undefined 表示线性消息列表；null 表示空会话。 */

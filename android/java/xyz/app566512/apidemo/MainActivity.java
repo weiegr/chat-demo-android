@@ -8,11 +8,13 @@ import android.content.ContentUris;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.location.Address;
 import android.location.Geocoder;
 import android.location.Location;
@@ -34,7 +36,9 @@ import android.util.Size;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
+import android.view.WindowInsetsAnimation;
 import android.view.WindowInsetsController;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.GeolocationPermissions;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
@@ -45,6 +49,7 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 import android.widget.Toast;
 
 import org.json.JSONArray;
@@ -63,9 +68,11 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -79,6 +86,8 @@ public class MainActivity extends Activity {
     private static final String APP_ORIGIN = "https://" + APP_HOST;
     private static final String MEDIA_PREFIX = "/__android_media__/";
     private static final String PROXY_PATH = "/__android_proxy__";
+    private static final String PREF_IME_LAYOUT = "ime_layout_prefs";
+    private static final String KEY_LAST_IME_RAISE_CSS = "last_ime_raise_css";
     private static final int REQ_FILE_CHOOSER = 1001;
     private static final int REQ_AUDIO_PERMISSION = 1002;
     private static final int REQ_GALLERY_PERMISSION = 1003;
@@ -89,6 +98,7 @@ public class MainActivity extends Activity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<String, Uri> recentMediaUris = new ConcurrentHashMap<>();
 
+    private FrameLayout rootContainer;
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
     private PermissionRequest pendingPermissionRequest;
@@ -103,17 +113,50 @@ public class MainActivity extends Activity {
     private volatile String cachedUserAgent = "Mozilla/5.0";
     private int safeTopCss = 24;
     private int safeBottomCss = 0;
+    private int imePaddingPx = 0;
+    private int lastNavBottomPx = 0;
+    private volatile int lastKnownImeRaiseCss = 0;
+    private boolean imeAnimating = false;
+    private boolean isImeVisible = false;
+    private boolean wasImeVisibleBeforeAnim = false;
+    private boolean lastSyncedImeOpen = false;
+    private WindowInsets pendingNonAnimInsets = null;
+    private final Runnable applyPendingNonAnimInsets = () -> {
+        WindowInsets pending = pendingNonAnimInsets;
+        pendingNonAnimInsets = null;
+        if (!imeAnimating && pending != null) {
+            applyWindowInsetsNow(pending, false);
+        }
+    };
+    private final Runnable imeAnimWatchdog = () -> {
+        imeAnimating = false;
+        if (rootContainer != null) {
+            WindowInsets rootInsets = rootContainer.getRootWindowInsets();
+            if (rootInsets != null) {
+                applyWindowInsetsNow(rootInsets, false);
+            }
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        lastKnownImeRaiseCss = getSharedPreferences(PREF_IME_LAYOUT, MODE_PRIVATE)
+                .getInt(KEY_LAST_IME_RAISE_CSS, 0);
+
         boolean isDark = (getResources().getConfiguration().uiMode
                 & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        int bgColor = isDark ? Color.BLACK : Color.WHITE;
 
+        rootContainer = new FrameLayout(this);
+        rootContainer.setBackgroundColor(bgColor);
         webView = new WebView(this);
-        webView.setBackgroundColor(isDark ? Color.BLACK : Color.WHITE);
-        setContentView(webView);
+        webView.setBackgroundColor(bgColor);
+        rootContainer.addView(webView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+        setContentView(rootContainer);
         setupEdgeToEdge();
         applySystemBarsTheme(isDark);
 
@@ -678,32 +721,273 @@ public class MainActivity extends Activity {
                     | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
             decor.setSystemUiVisibility(flags);
         }
-        decor.setOnApplyWindowInsetsListener((v, insets) -> {
-            float density = getResources().getDisplayMetrics().density;
-            if (density <= 0f) {
-                density = 1f;
-            }
-            int topPx;
-            int navBottomPx;
-            int imeBottomPx;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                topPx = insets.getInsets(WindowInsets.Type.statusBars()).top;
-                navBottomPx = insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
-                imeBottomPx = insets.getInsets(WindowInsets.Type.ime()).bottom;
+        rootContainer.setOnApplyWindowInsetsListener((v, insets) -> {
+            if (imeAnimating) {
+                syncTopSafeAreaFromInsets(insets);
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                    && (extractImeBottomPx(insets) > extractNavBottomPx(insets)) != isImeVisible) {
+                // 延迟 1 帧确认是否进入 WindowInsetsAnimation，避免个别 ROM 在 onPrepare 前先闪一帧终值高度。
+                syncTopSafeAreaFromInsets(insets);
+                pendingNonAnimInsets = insets;
+                rootContainer.removeCallbacks(applyPendingNonAnimInsets);
+                rootContainer.postOnAnimation(applyPendingNonAnimInsets);
             } else {
-                topPx = insets.getSystemWindowInsetTop();
-                navBottomPx = insets.getSystemWindowInsetBottom();
-                imeBottomPx = navBottomPx;
+                pendingNonAnimInsets = null;
+                rootContainer.removeCallbacks(applyPendingNonAnimInsets);
+                applyWindowInsetsNow(insets, false);
             }
-            safeTopCss = Math.round(topPx / density);
-            boolean imeVisible = imeBottomPx > navBottomPx;
-            safeBottomCss = imeVisible ? 0 : Math.round(navBottomPx / density);
-            if (webView != null) {
-                webView.setPadding(0, 0, 0, imeVisible ? imeBottomPx : 0);
-                syncSafeAreaToWeb();
-            }
-            return insets;
+            return consumeBottomInsets(insets, imePaddingPx);
         });
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            final Set<WindowInsetsAnimation> activeImeAnims = new HashSet<>();
+            rootContainer.setWindowInsetsAnimationCallback(new WindowInsetsAnimation.Callback(
+                    WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+                @Override
+                public void onPrepare(WindowInsetsAnimation animation) {
+                    if ((animation.getTypeMask() & WindowInsets.Type.ime()) == 0) {
+                        return;
+                    }
+                    pendingNonAnimInsets = null;
+                    rootContainer.removeCallbacks(applyPendingNonAnimInsets);
+                    if (activeImeAnims.isEmpty()) {
+                        wasImeVisibleBeforeAnim = isImeVisible;
+                    }
+                    activeImeAnims.add(animation);
+                    imeAnimating = true;
+                    mainHandler.removeCallbacks(imeAnimWatchdog);
+                    mainHandler.postDelayed(imeAnimWatchdog, 600L);
+                }
+
+                @Override
+                public WindowInsetsAnimation.Bounds onStart(
+                        WindowInsetsAnimation animation, WindowInsetsAnimation.Bounds bounds) {
+                    if ((animation.getTypeMask() & WindowInsets.Type.ime()) != 0) {
+                        if (!wasImeVisibleBeforeAnim) {
+                            float density = getResources().getDisplayMetrics().density;
+                            if (density <= 0f) {
+                                density = 1f;
+                            }
+                            int targetRaisePx = Math.max(0, bounds.getUpperBound().bottom - lastNavBottomPx);
+                            int targetRaiseCss = Math.round(targetRaisePx / density);
+                            if (targetRaiseCss > 80) {
+                                rememberKeyboardRaiseCss(targetRaiseCss);
+                            }
+                            long rawDuration = animation.getDurationMillis();
+                            long duration = rawDuration > 0 ? Math.max(180L, Math.min(360L, rawDuration)) : 220L;
+                            dispatchImeStart(duration, targetRaiseCss);
+                        } else {
+                            // 键盘开始收起瞬间即恢复底距状态，避免落底后滞后弹一下。
+                            syncImeOpenAttr(false, false);
+                        }
+                    }
+                    return bounds;
+                }
+
+                @Override
+                public WindowInsets onProgress(WindowInsets insets, List<WindowInsetsAnimation> runningAnimations) {
+                    boolean hasImeAnim = false;
+                    for (WindowInsetsAnimation anim : runningAnimations) {
+                        if ((anim.getTypeMask() & WindowInsets.Type.ime()) != 0) {
+                            hasImeAnim = true;
+                            break;
+                        }
+                    }
+                    if (hasImeAnim) {
+                        applyWindowInsetsNow(insets, true);
+                    }
+                    return consumeBottomInsets(insets, imePaddingPx);
+                }
+
+                @Override
+                public void onEnd(WindowInsetsAnimation animation) {
+                    if ((animation.getTypeMask() & WindowInsets.Type.ime()) == 0) {
+                        return;
+                    }
+                    activeImeAnims.remove(animation);
+                    if (!activeImeAnims.isEmpty()) {
+                        return;
+                    }
+                    mainHandler.removeCallbacks(imeAnimWatchdog);
+                    imeAnimating = false;
+                    WindowInsets rootInsets = rootContainer.getRootWindowInsets();
+                    if (rootInsets != null) {
+                        applyWindowInsetsNow(rootInsets, true);
+                    }
+                    syncImeOpenAttr(isImeVisible, false);
+                    if (wasImeVisibleBeforeAnim && !isImeVisible) {
+                        dispatchImeHidden();
+                    } else if (!wasImeVisibleBeforeAnim && isImeVisible) {
+                        dispatchImeShown();
+                    }
+                }
+            });
+        }
+        rootContainer.requestApplyInsets();
+    }
+
+    private void rememberKeyboardRaiseCss(int raiseCss) {
+        if (raiseCss <= 80 || raiseCss == lastKnownImeRaiseCss) {
+            return;
+        }
+        lastKnownImeRaiseCss = raiseCss;
+        SharedPreferences prefs = getSharedPreferences(PREF_IME_LAYOUT, MODE_PRIVATE);
+        prefs.edit().putInt(KEY_LAST_IME_RAISE_CSS, raiseCss).apply();
+    }
+
+    @SuppressWarnings("deprecation")
+    private int extractStatusTopPx(WindowInsets insets) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return insets.getInsets(WindowInsets.Type.statusBars()).top;
+        }
+        return insets.getSystemWindowInsetTop();
+    }
+
+    @SuppressWarnings("deprecation")
+    private int extractNavBottomPx(WindowInsets insets) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
+        }
+        return Math.min(insets.getSystemWindowInsetBottom(), insets.getStableInsetBottom());
+    }
+
+    @SuppressWarnings("deprecation")
+    private int extractImeBottomPx(WindowInsets insets) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return insets.getInsets(WindowInsets.Type.ime()).bottom;
+        }
+        int sysBottom = insets.getSystemWindowInsetBottom();
+        int stableBottom = insets.getStableInsetBottom();
+        return sysBottom > stableBottom ? sysBottom : 0;
+    }
+
+    private void syncTopSafeAreaFromInsets(WindowInsets insets) {
+        float density = getResources().getDisplayMetrics().density;
+        if (density <= 0f) {
+            density = 1f;
+        }
+        int nextSafeTop = Math.round(extractStatusTopPx(insets) / density);
+        if (nextSafeTop != safeTopCss) {
+            safeTopCss = nextSafeTop;
+            syncSafeAreaToWeb();
+        }
+    }
+
+    private void applyWindowInsetsNow(WindowInsets insets, boolean fromAnimation) {
+        float density = getResources().getDisplayMetrics().density;
+        if (density <= 0f) {
+            density = 1f;
+        }
+        int topPx = extractStatusTopPx(insets);
+        int navBottomPx = extractNavBottomPx(insets);
+        int imeBottomPx = extractImeBottomPx(insets);
+        lastNavBottomPx = navBottomPx;
+
+        boolean prevVisible = isImeVisible;
+        isImeVisible = imeBottomPx > navBottomPx;
+        // 原生容器始终以 max(navBottomPx, imeBottomPx) 托底，Web 侧 --safe-bottom 恒定为 0px；
+        // 键盘收起落到导航栏上沿即自然停住，彻底消除原生归零与 JS 恢复安全区异步错帧导致的回弹。
+        int nextBottomPadding = Math.max(Math.max(0, navBottomPx), Math.max(0, imeBottomPx));
+        int nextSafeTop = Math.round(topPx / density);
+        int nextSafeBottom = 0;
+        boolean safeChanged = nextSafeTop != safeTopCss || nextSafeBottom != safeBottomCss;
+        safeTopCss = nextSafeTop;
+        safeBottomCss = nextSafeBottom;
+
+        if (isImeVisible && !imeAnimating) {
+            int raiseCss = Math.round((imeBottomPx - navBottomPx) / density);
+            if (raiseCss > 80) {
+                rememberKeyboardRaiseCss(raiseCss);
+            }
+        }
+
+        if (rootContainer != null && imePaddingPx != nextBottomPadding) {
+            imePaddingPx = nextBottomPadding;
+            rootContainer.setPadding(0, 0, 0, imePaddingPx);
+        }
+        if (safeChanged && webView != null) {
+            syncSafeAreaToWeb();
+        }
+        if (!imeAnimating) {
+            syncImeOpenAttr(isImeVisible, false);
+        } else if (!wasImeVisibleBeforeAnim && imeBottomPx > navBottomPx + Math.round(16f * density)) {
+            // 待键盘实际抬升超过 16dp 后再同步收窄底距，确保不出现第 0 帧向下跳 6~8dp。
+            syncImeOpenAttr(true, false);
+        }
+        if (!fromAnimation) {
+            if (!prevVisible && isImeVisible) {
+                int targetRaiseCss = Math.round(Math.max(0, imeBottomPx - navBottomPx) / density);
+                lastSyncedImeOpen = true;
+                dispatchImeStartWithAttr(180L, targetRaiseCss);
+                dispatchImeShown();
+            } else if (prevVisible && !isImeVisible) {
+                syncImeOpenAttr(false, false);
+                dispatchImeHidden();
+            }
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private WindowInsets consumeBottomInsets(WindowInsets insets, int consumedBottomPx) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowInsets base = consumedBottomPx > 0 ? insets.inset(0, 0, 0, consumedBottomPx) : insets;
+            return new WindowInsets.Builder(base)
+                    .setInsets(WindowInsets.Type.ime(), Insets.NONE)
+                    .build();
+        }
+        if (consumedBottomPx <= 0) {
+            return insets;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return insets.inset(0, 0, 0, consumedBottomPx);
+        }
+        return insets.replaceSystemWindowInsets(
+                insets.getSystemWindowInsetLeft(),
+                insets.getSystemWindowInsetTop(),
+                insets.getSystemWindowInsetRight(),
+                Math.max(0, insets.getSystemWindowInsetBottom() - consumedBottomPx));
+    }
+
+    private void syncImeOpenAttr(boolean visible, boolean force) {
+        if ((!force && visible == lastSyncedImeOpen) || webView == null) {
+            return;
+        }
+        lastSyncedImeOpen = visible;
+        String js = visible
+                ? "document.documentElement.dataset.imeOpen='true';"
+                : "delete document.documentElement.dataset.imeOpen;";
+        webView.evaluateJavascript(js, null);
+    }
+
+    private void dispatchImeStart(long durationMs, int targetRaiseCss) {
+        if (webView != null) {
+            webView.evaluateJavascript(
+                    "window.dispatchEvent(new CustomEvent('android-ime-start',{detail:{durationMs:"
+                            + durationMs + ",targetRaiseCss:" + targetRaiseCss + "}}));",
+                    null);
+        }
+    }
+
+    private void dispatchImeStartWithAttr(long durationMs, int targetRaiseCss) {
+        if (webView != null) {
+            webView.evaluateJavascript(
+                    "document.documentElement.dataset.imeOpen='true';"
+                            + "window.dispatchEvent(new CustomEvent('android-ime-start',{detail:{durationMs:"
+                            + durationMs + ",targetRaiseCss:" + targetRaiseCss + "}}));",
+                    null);
+        }
+    }
+
+    private void dispatchImeShown() {
+        if (webView != null) {
+            webView.evaluateJavascript("window.dispatchEvent(new Event('android-ime-shown'));", null);
+        }
+    }
+
+    private void dispatchImeHidden() {
+        if (webView != null) {
+            webView.evaluateJavascript("window.dispatchEvent(new Event('android-ime-hidden'));", null);
+        }
     }
 
     private void syncSafeAreaToWeb() {
@@ -717,6 +1001,7 @@ public class MainActivity extends Activity {
 
     private void injectThemeAndDownloadHooks() {
         syncSafeAreaToWeb();
+        syncImeOpenAttr(isImeVisible, true);
         String js = "(function(){"
                 + "if(window.__androidHooksInstalled)return;"
                 + "window.__androidHooksInstalled=true;"
@@ -1232,6 +1517,37 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public boolean isKeyboardVisible() {
+            return isImeVisible;
+        }
+
+        @JavascriptInterface
+        public int getKeyboardHeightCss() {
+            return lastKnownImeRaiseCss;
+        }
+
+        @JavascriptInterface
+        public void hideKeyboard() {
+            runOnUiThread(() -> {
+                if (webView == null) {
+                    return;
+                }
+                syncImeOpenAttr(false, false);
+                webView.clearFocus();
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    WindowInsetsController controller = webView.getWindowInsetsController();
+                    if (controller != null) {
+                        controller.hide(WindowInsets.Type.ime());
+                    }
+                }
+                InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (imm != null) {
+                    imm.hideSoftInputFromWindow(webView.getWindowToken(), 0);
+                }
+            });
+        }
+
+        @JavascriptInterface
         public boolean isSystemDark() {
             return (getResources().getConfiguration().uiMode
                     & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
@@ -1241,8 +1557,12 @@ public class MainActivity extends Activity {
         public void onThemeChanged(final boolean isDark) {
             runOnUiThread(() -> {
                 applySystemBarsTheme(isDark);
+                int bgColor = isDark ? Color.BLACK : Color.WHITE;
+                if (rootContainer != null) {
+                    rootContainer.setBackgroundColor(bgColor);
+                }
                 if (webView != null) {
-                    webView.setBackgroundColor(isDark ? Color.BLACK : Color.WHITE);
+                    webView.setBackgroundColor(bgColor);
                 }
             });
         }

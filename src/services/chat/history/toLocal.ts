@@ -41,6 +41,7 @@ const toFile = (file: FileEntry): FileAttachment => ({
   isImage: file.is_image,
   // 图片身份来自归档；原件随后从 ZIP 读取后补充具体 MIME。
   mimeType: '',
+  ...(file.ocr_text !== undefined ? { ocrText: file.ocr_text } : {}),
 })
 
 const toUser = (message: ChatMessage): UserMessage => ({
@@ -289,6 +290,7 @@ export const toLocalSession = (file: SessionFile): LocalSession => {
     title: file.title ?? '',
     createdAt: time(file.inserted_at),
     updatedAt: time(file.updated_at),
+    ...(file.mode ? { mode: file.mode } : {}),
     ...buildTree(file),
   }
   const images = new Map<string, string>()

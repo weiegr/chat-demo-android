@@ -1,11 +1,30 @@
 import { create } from 'zustand'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
+import { isOcrSupportedAttachment, recognizeFileText } from '../api/ocr.js'
+import {
+  rewriteSearchQuery,
+  searchWeb,
+  truncateSearchQuery,
+  type SearchApiResult,
+} from '../api/search.js'
 import type { ChatModel, ClientToolDefinition, CreateMessageRequest } from '../api/types.js'
-import { extractFileIds, getFileErrorCode, isRetryableApiError } from '../api/errors.js'
+import {
+  classifyStatus,
+  extractFileIds,
+  getFileErrorCode,
+  isRetryableApiError,
+} from '../api/errors.js'
 import { cancelUpload, describeUploadError, uploadAttachment, useUploads } from '../attachments.js'
 import { GeolocationError, getCurrentPosition } from '../geolocation.js'
-import { useSettings } from '../settings.js'
+import {
+  DEFAULT_LOCATION_TOOL_PROMPT,
+  getModePrompts,
+  resolveModeModel,
+  useSettings,
+  type ChatMode,
+  type Locale,
+} from '../settings.js'
 import { appendBranch, getVisibleMessages, normalizeSession, selectVersion } from './branches.js'
 import * as db from './db.js'
 import {
@@ -15,7 +34,9 @@ import {
   getDraft,
   prepareDraftMessage,
 } from './drafts.js'
+import { isTextAttachment, loadInlineTexts } from './inlineFiles.js'
 import { createLatestReminder } from './latestReminder.js'
+import { autoStartReadAloud } from '../speech/readAloud.js'
 import {
   applyEvent,
   canContinueReply,
@@ -34,13 +55,18 @@ import {
   type SessionSummary,
   type UserMessage,
 } from './types.js'
+import { buildReplyView } from './view.js'
 
-/** deepseek-flash 同时支持深度思考与图片输入 */
-const MODEL: ChatModel = 'deepseek-flash'
 /** 保留最近打开的详情；当前会话、生成中及尚未成功保存的会话不淘汰。 */
 const SESSION_CACHE_LIMIT = 5
-/** 安全审核固定开启，所有请求都走扩展模式 */
-const SAFETY_CHECK = { level: 'high' } as const
+/**
+ * 请求安全检查级别：RP 模式省略安全参数（保持长上下文纯净）；
+ * 其余模式统一使用 low —— high 会拦截定位等正常提问，且定位工具要求 low。
+ */
+const safetyCheck = (isRpMode: boolean): CreateMessageRequest['safety_check'] =>
+  isRpMode ? undefined : { level: 'low' }
+/** RP 模式省略服务端 title 时的本地兜底标题字数上限 */
+const LOCAL_TITLE_MAX_CHARS = 24
 /** 服务端判定 file_id 失效后，重新补传并重发的最多次数（不含首次请求） */
 const FILE_RETRY_LIMIT = 2
 /** 退避基数，第 n 次重试等待 2^n 倍；连续失败达到上限就放弃，把原始报错展示出来 */
@@ -48,10 +74,11 @@ const FILE_RETRY_BASE_DELAY = 1000
 /** 单次提问内客户端工具（如真实定位）连续调用次数上限 */
 const MAX_TOOL_ROUNDS = 5
 
-const GET_LOCATION_TOOL: ClientToolDefinition = {
+const LINK_PATTERN = /https?:\/\//i
+
+const buildLocationTool = (description: string): ClientToolDefinition => ({
   name: 'get_location',
-  description:
-    "Get the user's real-time physical geographic location (latitude, longitude, and resolved address when available). Call this tool only when the user's request depends on their actual current location (such as local weather, nearby places, current city, or directions).",
+  description: description.trim() || DEFAULT_LOCATION_TOOL_PROMPT,
   input_schema: {
     type: 'object',
     properties: {
@@ -61,39 +88,135 @@ const GET_LOCATION_TOOL: ClientToolDefinition = {
       },
     },
   },
-}
+})
 
-const RICH_IMAGE_SEARCH_INSTRUCTION =
-  '排版与配图约束：仅当你在本轮回复中明确调用了搜索工具并获取到真实检索结果时，方可采用图文混排富文本格式（合理使用小标题、分点、表格或引用），并可将搜索结果中真实存在且可直接访问的 HTTP/HTTPS 图片直链以独立成段的 Markdown 图片语法（![图片说明](图片URL)）插入对应段落中。严禁在未调用搜索工具时输出任何图片，严禁凭记忆编造或猜测图片 URL；若检索结果中没有可用的直接图片 URL，请仅使用纯文本作答。'
-
+/**
+ * 组装本轮请求的 system 提示词：
+ * - RP 模式仅发送 RP 模式基础系统提示词，不附带任何工具提示词；
+ * - 快速/专家模式在基础系统提示词后，按本轮实际启用的工具附带对应模式的搜索与链接阅读工具提示词。
+ */
 const buildRequestSystem = (
   basePrompt: string,
-  { search, allowAiImages }: { search: boolean; allowAiImages: boolean }
-): string => {
-  if (!allowAiImages || !search) {
-    return basePrompt
+  {
+    isRpMode,
+    search,
+    hasLink,
+    searchToolPrompt,
+    readLinkToolPrompt,
+  }: {
+    isRpMode: boolean
+    search: boolean
+    hasLink: boolean
+    searchToolPrompt: string
+    readLinkToolPrompt: string
   }
-  const trimmed = basePrompt.trim()
-  return trimmed ? `${trimmed}\n\n${RICH_IMAGE_SEARCH_INSTRUCTION}` : RICH_IMAGE_SEARCH_INSTRUCTION
+): string => {
+  if (isRpMode) {
+    return basePrompt.trim()
+  }
+  return [
+    basePrompt.trim(),
+    search ? searchToolPrompt.trim() : '',
+    hasLink ? readLinkToolPrompt.trim() : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n')
 }
 
-/** 阅读链接始终开启，智能搜索与允许 AI 定位开关控制额外声明的工具。 */
+/**
+ * 声明本轮可用工具：
+ * - RP 模式与专家模式（v4-pro）不声明任何工具；
+ * - 快速模式下，read_url 仅在本轮正文含链接时声明，search 开关控制 deepseek_web_search；
+ *   客户端定位工具仅在快速模式、思考 + 搜索均开启时声明（服务端约束，且缺少推理时模型无法正确安排调用顺序）。
+ */
 const requestTools = (
+  isRpMode: boolean,
+  isV4Pro: boolean,
   search: boolean,
+  hasLink: boolean,
   allowAiLocation: boolean,
-  thinking: boolean
-): CreateMessageRequest['tools'] => {
-  const tools: CreateMessageRequest['tools'] = [
-    { type: 'deepseek_read_url', name: 'deepseek_read_url' },
-  ]
+  thinking: boolean,
+  locationToolDescription: string
+): NonNullable<CreateMessageRequest['tools']> => {
+  if (isRpMode || isV4Pro) {
+    return []
+  }
+  const tools: NonNullable<CreateMessageRequest['tools']> = []
+  if (hasLink) {
+    tools.push({ type: 'deepseek_read_url', name: 'deepseek_read_url' })
+  }
   if (search) {
     tools.push({ type: 'deepseek_web_search', name: 'deepseek_web_search' })
   }
   // 服务端约束：客户端工具只能在思考模式下与 deepseek_web_search 一同声明，缺一返回 400
   if (allowAiLocation && thinking && search) {
-    tools.push(GET_LOCATION_TOOL)
+    tools.push(buildLocationTool(locationToolDescription))
   }
   return tools
+}
+
+/** RP 模式省略服务端 title 时的本地兜底标题：优先取提问正文，无正文时取首个附件名 */
+const buildLocalTitle = (question: UserMessage): string => {
+  const fromContent = question.content.replace(/\s+/g, ' ').trim()
+  const raw = fromContent || question.files[0]?.name.replace(/\.[^.]+$/, '').trim() || ''
+  return Array.from(raw).slice(0, LOCAL_TITLE_MAX_CHARS).join('').trim()
+}
+
+/**
+ * 搜索结果按 URL 去重：来源面板按 URL 首次出现登记角标编号，
+ * 重复项会让注入文本里的 [N] 与角标错位。
+ */
+const dedupeSearchResults = (results: SearchApiResult[]): SearchApiResult[] => {
+  const seen = new Set<string>()
+  return results.filter((item) => {
+    if (seen.has(item.url)) {
+      return false
+    }
+    seen.add(item.url)
+    return true
+  })
+}
+
+/**
+ * 把旁路搜索结果格式化为注入提问的文本。
+ * 编号与伪工具块里结果的顺序一致，模型输出 [citation:N] 后由渲染层解析成角标。
+ */
+const buildSearchContext = (results: SearchApiResult[], locale: Locale): string => {
+  const isZh = locale === 'zh-CN'
+  const items = results.map((item, index) => {
+    const site = [item.site_name, item.date?.slice(0, 10)].filter(Boolean).join(isZh ? '，' : ', ')
+    return [
+      `[${index + 1}] ${item.title}${site ? (isZh ? `（${site}）` : ` (${site})`) : ''}`,
+      item.summary || item.snippet,
+      isZh ? `链接：${item.url}` : `Link: ${item.url}`,
+    ]
+      .filter((part) => part !== '')
+      .join('\n')
+  })
+  return [
+    isZh ? '【联网搜索结果】' : '[Web search results]',
+    ...items,
+    isZh
+      ? '请结合以上搜索结果回答；引用某条结果时在句末使用 [citation:N]（N 为对应编号）标注。若结果与问题无关，请忽略并直接回答。'
+      : 'Answer using the search results above. When citing a result, append [citation:N] (N is its number) at the end of the sentence. Ignore the results and answer directly if they are irrelevant.',
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+/**
+ * 自动朗读：回复正常完成且会话为当前活跃会话时触发。
+ * 只读最终正文（与手动朗读按钮一致），续写时截掉前缀已读部分；拒绝回复不读，失败静默。
+ */
+const autoReadReply = (sessionId: string, reply: AssistantMessage, prefix?: AssistantMessage) => {
+  if (sessionId !== useChatStore.getState().activeId || reply.stopReason === 'refusal') {
+    return
+  }
+  const text = buildReplyView(reply, false).answer?.text ?? ''
+  const readText = prefix
+    ? text.slice((buildReplyView(prefix, false).answer?.text ?? '').length)
+    : text
+  autoStartReadAloud(reply.id, readText, () => {})
 }
 
 /** 允许自动补标题的请求；手动重命名后取消本轮标题写入，包含主动清空标题的情况。 */
@@ -340,16 +463,16 @@ export const bindChatPersistence = () => {
   }
 }
 
-/** 按当前开关创建回复：深度思考对应 thinking，智能搜索控制 deepseek_web_search。 */
-const createReply = (): AssistantMessage => {
+/** 按当前模式与开关创建回复：RP 模式固定关闭搜索，模型按模式及 RP 模型设置确定。 */
+const createReply = (mode: ChatMode, model: ChatModel): AssistantMessage => {
   const { thinking, search } = useSettings.getState()
   return {
     id: createId(),
     role: 'assistant',
     createdAt: Date.now(),
-    model: MODEL,
+    model,
     thinking,
-    search,
+    search: mode === 'rp' ? false : search,
     prefix: true,
     status: 'pending',
     blocks: [],
@@ -632,6 +755,15 @@ const removeSessionData = async (id: string): Promise<boolean> => {
 
 export const stopReply = (sessionId: string) => getStreamController(sessionId)?.abort()
 
+/** 切换已有会话的对话模式（如在标准/专家模式遇单条 32K 限制时一键切至 RP 模式） */
+export const setSessionMode = (sessionId: string, mode: ChatMode) => {
+  if (get().importingHistory || deletingSessions.has(sessionId) || getStreamController(sessionId)) {
+    return
+  }
+  updateSession(sessionId, (session) => (session.mode === mode ? session : { ...session, mode }))
+  persist(sessionId)
+}
+
 /**
  * 提交指定会话的最新草稿；null 表示新建会话。
  * 同步接收成功才清空草稿，附件原件由会话接管；保存失败仍通过保存入口重试。
@@ -640,12 +772,7 @@ export const sendMessage = (targetSessionId: string | null) => {
   if (get().importingHistory || !get().ready) {
     return false
   }
-  const prepared = prepareDraftMessage(getDraft(targetSessionId), useUploads.getState().tasks)
-  if (!prepared) {
-    return false
-  }
-  const { text, files } = prepared
-  const now = Date.now()
+  const settings = useSettings.getState()
   let sessionId = targetSessionId
   if (
     sessionId !== null &&
@@ -653,10 +780,24 @@ export const sendMessage = (targetSessionId: string | null) => {
   ) {
     return false
   }
+  const mode: ChatMode =
+    sessionId === null ? settings.chatMode : (getSession(sessionId)?.mode ?? 'fast')
+  const model = resolveModeModel(mode, settings.rpModel)
+  const prepared = prepareDraftMessage(
+    getDraft(targetSessionId),
+    useUploads.getState().tasks,
+    model === 'deepseek-v4-pro'
+  )
+  if (!prepared) {
+    return false
+  }
+  const { text, files } = prepared
+  const now = Date.now()
   if (sessionId === null) {
     const session: Session = {
       id: createId(),
       title: '',
+      mode,
       createdAt: now,
       updatedAt: now,
       messages: [],
@@ -689,7 +830,7 @@ export const sendMessage = (targetSessionId: string | null) => {
     })),
     createdAt: now,
   }
-  const reply = createReply()
+  const reply = createReply(mode, model)
   updateSession(sessionId, (session) => ({
     ...appendBranch(session, history.at(-1)?.id ?? null, [question, reply]),
     updatedAt: now,
@@ -723,7 +864,9 @@ export const regenerateReply = (sessionId: string, messageId?: string) => {
     return
   }
   const history = path.slice(0, index - 1)
-  const reply = createReply()
+  const mode = session.mode ?? 'fast'
+  const model = resolveModeModel(mode, useSettings.getState().rpModel)
+  const reply = createReply(mode, model)
   updateSession(sessionId, (s) => ({
     ...appendBranch(s, question.id, [reply]),
     updatedAt: Date.now(),
@@ -732,13 +875,13 @@ export const regenerateReply = (sessionId: string, messageId?: string) => {
   void streamReply(sessionId, reply, { history, question })
 }
 
-/** 编辑提问后新增同父版本，保留原文件；旧问题的所有回答与后续对话仍可切回。 */
-/** 编辑提问：替换文本，附件按传入的列表保留（可在编辑时移除），不传则沿用原消息的附件。 */
+/** 编辑提问：替换文本，附件按传入的列表保留（可在编辑时增删），新增原件并入待保存队列避免读写竞态。 */
 export const editMessage = (
   sessionId: string,
   messageId: string,
   content: string,
-  files?: FileAttachment[]
+  files?: FileAttachment[],
+  newBlobs: db.StoredFile[] = []
 ): boolean => {
   if (get().importingHistory || deletingSessions.has(sessionId)) {
     return false
@@ -765,11 +908,16 @@ export const editMessage = (
     files: nextFiles,
     createdAt: Date.now(),
   }
-  const reply = createReply()
+  const mode = session.mode ?? 'fast'
+  const model = resolveModeModel(mode, useSettings.getState().rpModel)
+  const reply = createReply(mode, model)
   updateSession(sessionId, (s) => ({
     ...appendBranch(s, path[index - 1]?.id ?? null, [question, reply]),
     updatedAt: Date.now(),
   }))
+  if (newBlobs.length > 0) {
+    pendingFiles.set(sessionId, [...(pendingFiles.get(sessionId) ?? []), ...newBlobs])
+  }
   persist(sessionId)
   void streamReply(sessionId, reply, { history: path.slice(0, index), question })
   return true
@@ -806,13 +954,15 @@ export const continueReply = (sessionId: string, messageId: string) => {
   ) {
     return
   }
-  const { thinking, search } = useSettings.getState()
+  const { thinking, search, rpModel } = useSettings.getState()
+  const mode = session.mode ?? 'fast'
+  const fallbackModel = resolveModeModel(mode, rpModel)
   const reply: AssistantMessage = {
     ...previous,
-    // 未记录请求配置的回复，续写时使用默认模型和当前开关。
-    model: previous.model ?? MODEL,
+    // 未记录请求配置的回复，续写时使用当前会话模式对应的模型和开关。
+    model: previous.model ?? fallbackModel,
     thinking: previous.thinking ?? thinking,
-    search: previous.search ?? search,
+    search: mode === 'rp' ? false : (previous.search ?? search),
     status: 'pending',
     stopReason: undefined,
     stopDetails: undefined,
@@ -851,6 +1001,10 @@ export const retryUpload = (sessionId: string, messageId: string) => {
 }
 
 type Request = { history: Message[]; question: UserMessage; prefix?: AssistantMessage }
+type PreparedRequest = Request & {
+  texts?: Map<string, string>
+  ocrTexts?: Map<string, string>
+}
 
 /** 把补传得到的 serverId 写回会话里所有引用同一附件的消息（编辑、重新生成会共用附件） */
 const saveServerIds = (sessionId: string, serverIds: Map<string, string>) => {
@@ -873,11 +1027,36 @@ const saveServerIds = (sessionId: string, serverIds: Map<string, string>) => {
   persist(sessionId)
 }
 
+/** 把 Pro 模型经 DeepSeek OCR 提取的文字缓存写回会话附件，避免多轮对话与重启后重复识别 */
+const saveOcrTexts = (sessionId: string, ocrTexts: Map<string, string>) => {
+  if (ocrTexts.size === 0) {
+    return
+  }
+  updateSession(sessionId, (session) => ({
+    ...session,
+    messages: session.messages.map((message) =>
+      message.role === 'user' && message.files.some((file) => ocrTexts.has(file.id))
+        ? {
+            ...message,
+            files: message.files.map((file) =>
+              ocrTexts.has(file.id) ? { ...file, ocrText: ocrTexts.get(file.id) } : file
+            ),
+          }
+        : message
+    ),
+  }))
+  persist(sessionId)
+}
+
 /**
  * 附件的服务端 id：已有直接用；正在上传的等待同一任务；否则读取本地原件补传。
  * 本地也没有原件（导入的文档附件只有元数据）时返回 null，该附件只展示、不进入请求。
  */
-const ensureServerId = async (apiKey: string, file: FileAttachment): Promise<string | null> => {
+const ensureServerId = async (
+  apiKey: string,
+  file: FileAttachment,
+  pendingBlobs?: Map<string, Blob>
+): Promise<string | null> => {
   if (file.serverId) {
     return file.serverId
   }
@@ -885,7 +1064,7 @@ const ensureServerId = async (apiKey: string, file: FileAttachment): Promise<str
   if (task?.status === 'done') {
     return task.serverId
   }
-  const blob = await db.loadFile(file.id)
+  const blob = pendingBlobs?.get(file.id) ?? (await db.loadFile(file.id))
   if (!blob) {
     return null
   }
@@ -909,63 +1088,182 @@ const refreshRequest = (sessionId: string, request: Request): Request => {
 }
 
 /**
- * 发送前补齐附件的 serverId。
- * - 本轮提问的附件并行补齐，任一失败则整体失败，已成功的照常写回，重试时复用成功结果；
- * - 历史轮次（仅进入上下文的）中没有 serverId 的附件，多为导入的图片：从最新的消息往前逐张补传，
- *   失败静默跳过，该附件不进入本次请求，下次发送时再试。
+ * 发送前就绪全部附件：
+ * - 纯文本附件：本地按编码读出正文并入提问，不再上传为 document 块；
+ * - deepseek-v4-pro（无原生识图）：图片与 PDF/Word/PPT 自动调用 DeepSeek OCR 接口提取文字并缓存；
+ * - deepseek-flash：图片与非纯文本附件按 Files API 补齐 serverId。
  */
-const prepareFiles = async (sessionId: string, request: Request, signal: AbortSignal) => {
+const prepareFiles = async (
+  sessionId: string,
+  request: Request,
+  model: ChatModel,
+  signal: AbortSignal
+): Promise<PreparedRequest> => {
   const epoch = historyEpoch
   // 服务端判定 file_id 失效时会清掉会话里的 serverId，先用最新消息替换请求快照，
   // 否则快照里仍是旧 id，补传会直接复用它。
   request = refreshRequest(sessionId, request)
+  const pendingBlobs = new Map(
+    (pendingFiles.get(sessionId) ?? []).map((file) => [file.id, file.blob])
+  )
+  /** 纯文本附件的正文在本地读出后直接并入提问，不再上传为 document */
+  const texts = await loadInlineTexts([...request.history, request.question], pendingBlobs)
   const apiKey = useSettings.getState().apiKey ?? ''
+  const useOcr = model === 'deepseek-v4-pro'
   const serverIds = new Map<string, string>()
+  const ocrTexts = new Map<string, string>()
   // 停止生成立即生效；上传本身不取消（输入框与其他消息可能共用同一任务），完成后照常写回 serverId
   const aborted = new Promise<never>((_, reject) => {
     signal.addEventListener('abort', () => reject(signal.reason), { once: true })
   })
-  const uploads = Promise.allSettled(
-    request.question.files.map(async (file) => {
-      const serverId = await ensureServerId(apiKey, file)
-      if (serverId) {
-        serverIds.set(file.id, serverId)
+
+  if (useOcr) {
+    // 收集本轮提问与历史中已缓存的 OCR 文本
+    for (const message of [...request.history, request.question]) {
+      if (message.role !== 'user') {
+        continue
+      }
+      for (const file of message.files) {
+        if (file.ocrText !== undefined) {
+          ocrTexts.set(file.id, file.ocrText)
+        }
+      }
+    }
+    const ocrTargets = request.question.files.filter(
+      (file) => isOcrSupportedAttachment(file) && !ocrTexts.has(file.id)
+    )
+    const uploadTargets = request.question.files.filter(
+      (file) => !texts.has(file.id) && !isTextAttachment(file) && !isOcrSupportedAttachment(file)
+    )
+    const questionTasks = Promise.allSettled([
+      ...ocrTargets.map(async (file) => {
+        const blob = pendingBlobs.get(file.id) ?? (await db.loadFile(file.id))
+        if (!blob) {
+          return
+        }
+        const text = await recognizeFileText(apiKey, blob, file.name, signal)
+        ocrTexts.set(file.id, text)
+      }),
+      ...uploadTargets.map(async (file) => {
+        const serverId = await ensureServerId(apiKey, file, pendingBlobs)
+        if (serverId) {
+          serverIds.set(file.id, serverId)
+        }
+      }),
+    ])
+    void questionTasks.then(() => {
+      if (epoch === historyEpoch) {
+        saveOcrTexts(sessionId, ocrTexts)
+        saveServerIds(sessionId, serverIds)
       }
     })
-  )
-  void uploads.then(() => {
-    if (epoch === historyEpoch) {
-      saveServerIds(sessionId, serverIds)
+    const results = await Promise.race([questionTasks, aborted])
+    const failed = results.find((result) => result.status === 'rejected')
+    if (failed) {
+      throw failed.reason
     }
-  })
-  const results = await Promise.race([uploads, aborted])
-  const failed = results.find((result) => result.status === 'rejected')
-  if (failed) {
-    throw failed.reason
-  }
 
-  const pending = new Map<string, FileAttachment>()
-  for (const [user] of getContextRounds(request.history).toReversed()) {
-    for (const file of user.files) {
-      if (!file.serverId && !serverIds.has(file.id) && !pending.has(file.id)) {
-        pending.set(file.id, file)
+    // 历史轮次中缺失 OCR 文本的图片/文档从新到旧逐个补齐，单条失败静默跳过不阻塞本轮
+    const pendingHistoryOcr = new Map<string, FileAttachment>()
+    const pendingHistoryUpload = new Map<string, FileAttachment>()
+    for (const [user] of [...getContextRounds(request.history)].reverse()) {
+      for (const file of user.files) {
+        if (texts.has(file.id) || isTextAttachment(file)) {
+          continue
+        }
+        if (isOcrSupportedAttachment(file)) {
+          if (!ocrTexts.has(file.id) && !pendingHistoryOcr.has(file.id)) {
+            pendingHistoryOcr.set(file.id, file)
+          }
+        } else if (
+          !file.serverId &&
+          !serverIds.has(file.id) &&
+          !pendingHistoryUpload.has(file.id)
+        ) {
+          pendingHistoryUpload.set(file.id, file)
+        }
       }
     }
-  }
-  for (const file of pending.values()) {
-    signal.throwIfAborted()
-    try {
-      const serverId = await Promise.race([ensureServerId(apiKey, file), aborted])
-      if (serverId) {
-        serverIds.set(file.id, serverId)
-        saveServerIds(sessionId, new Map([[file.id, serverId]]))
-      }
-    } catch {
+    for (const file of pendingHistoryOcr.values()) {
       signal.throwIfAborted()
+      try {
+        const blob = pendingBlobs.get(file.id) ?? (await db.loadFile(file.id))
+        if (!blob) {
+          continue
+        }
+        const text = await Promise.race([
+          recognizeFileText(apiKey, blob, file.name, signal),
+          aborted,
+        ])
+        ocrTexts.set(file.id, text)
+        saveOcrTexts(sessionId, new Map([[file.id, text]]))
+      } catch {
+        signal.throwIfAborted()
+      }
+    }
+    for (const file of pendingHistoryUpload.values()) {
+      signal.throwIfAborted()
+      try {
+        const serverId = await Promise.race([ensureServerId(apiKey, file, pendingBlobs), aborted])
+        if (serverId) {
+          serverIds.set(file.id, serverId)
+          saveServerIds(sessionId, new Map([[file.id, serverId]]))
+        }
+      } catch {
+        signal.throwIfAborted()
+      }
+    }
+  } else {
+    const uploads = Promise.allSettled(
+      request.question.files
+        .filter((file) => !texts.has(file.id) && !isTextAttachment(file))
+        .map(async (file) => {
+          const serverId = await ensureServerId(apiKey, file, pendingBlobs)
+          if (serverId) {
+            serverIds.set(file.id, serverId)
+          }
+        })
+    )
+    void uploads.then(() => {
+      if (epoch === historyEpoch) {
+        saveServerIds(sessionId, serverIds)
+      }
+    })
+    const results = await Promise.race([uploads, aborted])
+    const failed = results.find((result) => result.status === 'rejected')
+    if (failed) {
+      throw failed.reason
+    }
+
+    const pending = new Map<string, FileAttachment>()
+    for (const [user] of [...getContextRounds(request.history)].reverse()) {
+      for (const file of user.files) {
+        if (
+          !file.serverId &&
+          !serverIds.has(file.id) &&
+          !pending.has(file.id) &&
+          !texts.has(file.id) &&
+          !isTextAttachment(file)
+        ) {
+          pending.set(file.id, file)
+        }
+      }
+    }
+    for (const file of pending.values()) {
+      signal.throwIfAborted()
+      try {
+        const serverId = await Promise.race([ensureServerId(apiKey, file, pendingBlobs), aborted])
+        if (serverId) {
+          serverIds.set(file.id, serverId)
+          saveServerIds(sessionId, new Map([[file.id, serverId]]))
+        }
+      } catch {
+        signal.throwIfAborted()
+      }
     }
   }
 
-  // 用补齐后的会话重新取历史与提问，保证请求里都是 serverId
+  // 用补齐后的会话重新取历史与提问，保证请求里都是最新 serverId / ocrText
   const session = getSession(sessionId)
   const resolve = <T extends Message>(message: T): T =>
     (session?.messages.find((m) => m.id === message.id) as T | undefined) ?? message
@@ -973,6 +1271,8 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
     history: request.history.map(resolve),
     question: resolve(request.question),
     prefix: request.prefix,
+    texts,
+    ocrTexts,
   }
 }
 
@@ -1059,7 +1359,7 @@ const executeClientTool = async (
   block: ClientToolUseBlock,
   signal: AbortSignal
 ): Promise<ClientToolResultBlock> => {
-  if (block.name !== GET_LOCATION_TOOL.name) {
+  if (block.name !== 'get_location') {
     return {
       type: 'client_tool_result',
       tool_use_id: block.id,
@@ -1142,8 +1442,16 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
   set((state) => ({ streaming: { ...state.streaming, [sessionId]: controller } }))
   const settingsSnapshot = useSettings.getState()
   const allowAiLocation = settingsSnapshot.allowAiLocation
+  const sessionMode = getSession(sessionId)?.mode ?? 'fast'
+  const isRpMode = sessionMode === 'rp'
+  const model = initial.model ?? resolveModeModel(sessionMode, settingsSnapshot.rpModel)
+  // v4-pro 无原生识图，且服务端不支持 server-side 工具、title 与 latest_reminder 等扩展能力
+  const isV4Pro = model === 'deepseek-v4-pro'
+  const useOcrForVisual = isV4Pro
+  /** 旁路搜索：v4-pro 不支持服务端搜索工具，改为发送前客户端先搜、结果注入提问 */
+  const bypassSearch = !isRpMode && isV4Pro && (initial.search ?? false)
   let reply = initial
-  let prepared = request
+  let prepared: PreparedRequest = request
   let frame = 0
   const flush = () => {
     cancelAnimationFrame(frame)
@@ -1154,24 +1462,106 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
 
   try {
     let toolRound = 0
+    /** 旁路搜索注入文本；附件重传重试时沿用首轮结果，不重复搜索 */
+    let searchContext: string | undefined
     for (let attempt = 0; ; attempt += 1) {
-      /** 附件补齐前出错属于上传失败，请求还没有发出 */
+      /** 附件补齐或 OCR 前出错属于预处理失败，主对话请求还没有发出 */
       let preparing = toolRound === 0
       let receivedContent = false
       try {
         if (toolRound === 0) {
-          prepared = await prepareFiles(sessionId, request, controller.signal)
+          prepared = await prepareFiles(sessionId, request, model, controller.signal)
           preparing = false
           // 附件就绪后获取本轮信息；续写沿用原回答快照，重新生成的快照独立保存。
           const latestReminder = prepared.prefix
             ? prepared.prefix.latestReminder
-            : createLatestReminder({
-                locale: settingsSnapshot.locale,
-                location: settingsSnapshot.locationEnabled ? settingsSnapshot.location : null,
-              })
+            : isV4Pro
+              ? undefined
+              : createLatestReminder({
+                  locale: settingsSnapshot.locale,
+                  location: settingsSnapshot.locationEnabled ? settingsSnapshot.location : null,
+                })
           reply = { ...reply, latestReminder }
           // 只进草稿槽，收尾时随整段回复一起落盘；这里再写一次是整段会话的重复克隆。
           updateReply(sessionId, reply)
+          // 旁路搜索：先改写查询词再调独立搜索接口，结果以伪工具块驱动既有引用展示，
+          // 同时注入提问让模型基于结果作答。守卫空 blocks 避免附件重传重试时重复搜索。
+          if (bypassSearch && reply.blocks.length === 0 && prepared.question.content.trim()) {
+            const questionText = prepared.question.content
+            const searchApiKey = useSettings.getState().apiKey ?? ''
+            let query = truncateSearchQuery(questionText)
+            try {
+              query = await rewriteSearchQuery(searchApiKey, questionText, controller.signal)
+            } catch (error) {
+              if (controller.signal.aborted) {
+                throw error
+              }
+              // 改写失败降级：直接用原问题截断作为查询词
+            }
+            const toolUseId = `bypass-search-${createId()}`
+            reply = {
+              ...reply,
+              blocks: [
+                ...reply.blocks,
+                {
+                  type: 'server_tool_use',
+                  id: toolUseId,
+                  name: 'deepseek_web_search',
+                  input: { action: 'search', queries: [query] },
+                  caller: { type: 'direct' },
+                  kind: 'search',
+                },
+              ],
+            }
+            updateReply(sessionId, reply)
+            let results: SearchApiResult[] | null = null
+            try {
+              results = dedupeSearchResults(
+                await searchWeb(
+                  searchApiKey,
+                  { query, oriQuestion: truncateSearchQuery(questionText) },
+                  controller.signal
+                )
+              )
+            } catch (error) {
+              if (controller.signal.aborted) {
+                throw error
+              }
+              // 搜索失败：结果块记错误项展示「暂不可用」，请求继续（无搜索上下文）
+            }
+            reply = {
+              ...reply,
+              blocks: [
+                ...reply.blocks,
+                {
+                  type: 'web_search_tool_result',
+                  tool_use_id: toolUseId,
+                  content: results
+                    ? results.map((item) => ({
+                        type: 'web_search_result' as const,
+                        title: item.title,
+                        url: item.url,
+                        snippet: item.snippet,
+                        site_icon: item.site_icon,
+                        site_name: item.site_name,
+                        encrypted_content: '',
+                        page_age: item.date,
+                      }))
+                    : [
+                        {
+                          type: 'web_search_tool_result_error' as const,
+                          error_code: 'unavailable' as const,
+                        },
+                      ],
+                  kind: 'search' as const,
+                },
+              ],
+            }
+            updateReply(sessionId, reply)
+            if (results && results.length > 0) {
+              searchContext = buildSearchContext(results, settingsSnapshot.locale)
+            }
+          }
         }
         const messages = toRequestMessages(
           prepared.history,
@@ -1179,26 +1569,53 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           prepared.prefix,
           initial.thinking ?? false,
           reply.latestReminder,
-          toolRound > 0 ? reply : undefined
+          toolRound > 0 ? reply : undefined,
+          {
+            texts: prepared.texts,
+            ocrTexts: prepared.ocrTexts,
+            omitServerTools: isRpMode,
+            omitLatestReminder: isV4Pro,
+            useOcrForVisual,
+            searchContext,
+          }
         )
-        const { systemPrompt, allowAiImages, apiKey } = useSettings.getState()
+        const currentSettings = useSettings.getState()
+        const { apiKey } = currentSettings
+        const modePrompts = getModePrompts(sessionMode, currentSettings)
+        // 服务端约束：v4-pro 不支持 server-side 工具（web_search/read_url）与 title 生成，
+        // 请求携带任一项即整体报错，因此连同依赖 search 的定位工具一并停用，标题走本地兜底
+        const serverToolsAllowed = !isRpMode && !isV4Pro
+        const hasLink = serverToolsAllowed && LINK_PATTERN.test(prepared.question.content)
+        const searchEnabled = serverToolsAllowed && (initial.search ?? false)
+        const safety = safetyCheck(isRpMode)
+        const tools = requestTools(
+          isRpMode,
+          isV4Pro,
+          searchEnabled,
+          hasLink,
+          allowAiLocation,
+          initial.thinking ?? false,
+          modePrompts.locationToolPrompt
+        )
+        // RP 模式省略服务端 title（避免触发单条 32K 限制），v4-pro 不支持服务端 title，
+        // 两者首轮结束后均写本地兜底标题
+        const askTitle = titleRequests.has(controller) && serverToolsAllowed
         const events = streamMessage(
           apiKey ?? '',
           {
-            model: initial.model ?? MODEL,
-            system: buildRequestSystem(systemPrompt, {
-              search: initial.search ?? false,
-              allowAiImages,
+            model,
+            system: buildRequestSystem(modePrompts.systemPrompt, {
+              isRpMode,
+              search: searchEnabled,
+              hasLink,
+              searchToolPrompt: modePrompts.searchToolPrompt,
+              readLinkToolPrompt: modePrompts.readLinkToolPrompt,
             }),
             messages,
             thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
-            safety_check: SAFETY_CHECK,
-            tools: requestTools(
-              initial.search ?? false,
-              allowAiLocation,
-              initial.thinking ?? false
-            ),
-            ...(titleRequests.has(controller) ? { title: { enabled: true } } : {}),
+            ...(safety ? { safety_check: safety } : {}),
+            ...(tools.length > 0 ? { tools } : {}),
+            ...(askTitle ? { title: { enabled: true } } : {}),
           },
           controller.signal
         )
@@ -1240,7 +1657,20 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           attempt = -1
           continue
         }
+        if (
+          !askTitle &&
+          titleRequests.has(controller) &&
+          !controller.signal.aborted &&
+          !get().importingHistory
+        ) {
+          const title = buildLocalTitle(prepared.question)
+          if (title) {
+            updateSession(sessionId, (session) => (session.title ? session : { ...session, title }))
+          }
+          titleRequests.delete(controller)
+        }
         reply = settleReply(reply, 'done', Date.now())
+        autoReadReply(sessionId, reply, prepared.prefix)
         break
       } catch (error) {
         if (controller.signal.aborted) {
@@ -1248,6 +1678,21 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           break
         }
         if (preparing) {
+          const statusClass = error instanceof ApiError ? classifyStatus(error.status) : 'other'
+          if (
+            error instanceof ApiError &&
+            (statusClass === 'unauthorized' ||
+              statusClass === 'insufficientBalance' ||
+              statusClass === 'rateLimited')
+          ) {
+            reply = settleReply(reply, 'error', Date.now(), {
+              kind: error.kind,
+              message: error.message,
+              status: error.status,
+              localMessage: error.localMessage,
+            })
+            break
+          }
           reply = settleReply(reply, 'error', Date.now(), {
             kind: 'upload',
             message: '',
@@ -1273,6 +1718,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         if (error instanceof ApiError && error.kind === 'interrupted' && reply.stopReason) {
           // 已收到 message_delta 的结束原因，只是缺了结尾的 message_stop
           reply = settleReply(reply, 'done', Date.now())
+          autoReadReply(sessionId, reply, prepared.prefix)
         } else if (error instanceof ApiError) {
           reply = settleReply(reply, 'error', Date.now(), {
             kind: error.kind,

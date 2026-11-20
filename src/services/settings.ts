@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { TtsVoice } from './api/speech.js'
+import type { ChatModel } from './api/types.js'
 import { normalizeLocation, type UserLocation } from './location.js'
 
 export type Locale = 'zh-CN' | 'en-US'
@@ -7,10 +8,53 @@ export type Locale = 'zh-CN' | 'en-US'
 /** 主题偏好；默认跟随系统 */
 export type ThemePreference = 'light' | 'dark' | 'system'
 
-/** 系统提示词默认值；可在设置中修改或清空（清空后请求不带 system 内容） */
-export const DEFAULT_SYSTEM_PROMPT = '该助手为DeepSeek，由深度求索公司创造。'
+/** 对话模式：快速（Flash 全功能）/ 专家（Pro 复杂问题 + OCR）/ RP（长上下文纯净模式） */
+export type ChatMode = 'fast' | 'expert' | 'rp'
 
-/** 本机设置，存 localStorage：API Key、语言、主题、位置与 AI 定位权限、允许回复插图、朗读音色、系统提示词、深度思考与智能搜索开关、侧边栏收起状态 */
+/** 快速模式系统提示词默认值；可在设置中修改或清空（清空后请求不带基础 system 内容） */
+export const DEFAULT_FAST_SYSTEM_PROMPT = '该助手为DeepSeek Flash，由深度求索公司创造。'
+
+/** 专家模式系统提示词默认值；对模型只提档位（Pro），不暴露具体型号 */
+export const DEFAULT_EXPERT_SYSTEM_PROMPT = '该助手为DeepSeek Pro，由深度求索公司创造。'
+
+/** RP 模式系统提示词默认值：明确角色扮演边界，可在设置中修改或清空 */
+export const DEFAULT_RP_SYSTEM_PROMPT =
+  '你是 AI RP 助手，专注于沉浸式虚构角色扮演。请始终遵循用户设定的角色、语气与世界观，保持人设和剧情连贯，不擅自跳出角色或代替用户行动；用户未指定设定时，主动配合并推动剧情发展。'
+
+/** 联网搜索工具（deepseek_web_search）默认提示词说明 */
+export const DEFAULT_SEARCH_TOOL_PROMPT = [
+  '本轮已启用联网能力：你可以调用 deepseek_web_search 搜索网页。是否调用由你根据问题需要判断，不需要用户先提出「搜索」的要求。',
+  '当问题涉及最新信息、具体事实、人物、地点、地标、机构、产品、作品、影视游戏、动植物、事件新闻或操作步骤时，先搜索核实再回答；寒暄、闲聊、纯创作或你已确定的常识问题不必搜索。',
+  '你具备上述能力，请不要表示自己无法联网或没有搜索工具。',
+].join('\n')
+
+/** 链接阅读工具（deepseek_read_url）默认提示词说明 */
+export const DEFAULT_READ_LINK_TOOL_PROMPT =
+  '本轮消息包含网页链接，你可以调用 deepseek_read_url 阅读用户消息中的链接内容以辅助回答。'
+
+/** 实时定位工具（get_location）默认描述提示词 */
+export const DEFAULT_LOCATION_TOOL_PROMPT =
+  "Get the user's real-time physical geographic location (latitude, longitude, and resolved address when available). Call this tool only when the user's request depends on their actual current location (such as local weather, nearby places, current city, or directions)."
+
+export type ModePrompts = {
+  systemPrompt: string
+  searchToolPrompt: string
+  readLinkToolPrompt: string
+  locationToolPrompt: string
+}
+
+/** 根据对话模式与 RP 模式所选模型解析实际请求的模型 ID */
+export const resolveModeModel = (mode: ChatMode, rpModel: ChatModel): ChatModel => {
+  if (mode === 'expert') {
+    return 'deepseek-v4-pro'
+  }
+  if (mode === 'rp') {
+    return rpModel
+  }
+  return 'deepseek-flash'
+}
+
+/** 本机设置，存 localStorage：API Key、语言、主题、位置与 AI 定位权限、朗读音色、各模式系统与工具提示词、对话模式与 RP 模型、深度思考与智能搜索开关、侧边栏收起状态 */
 type Settings = {
   apiKey: string | null
   locale: Locale
@@ -18,12 +62,58 @@ type Settings = {
   location: UserLocation | null
   locationEnabled: boolean
   allowAiLocation: boolean
-  allowAiImages: boolean
   ttsVoice: TtsVoice
-  systemPrompt: string
+  /** 回答完成后是否自动朗读回复内容 */
+  autoReadAloud: boolean
+  fastSystemPrompt: string
+  fastSearchToolPrompt: string
+  fastReadLinkToolPrompt: string
+  fastLocationToolPrompt: string
+  expertSystemPrompt: string
+  rpSystemPrompt: string
+  chatMode: ChatMode
+  rpModel: ChatModel
   thinking: boolean
   search: boolean
   siderCollapsed: boolean
+}
+
+/** 按会话模式取出对应的系统提示词与工具提示词配置 */
+export const getModePrompts = (
+  mode: ChatMode,
+  settings: Pick<
+    Settings,
+    | 'fastSystemPrompt'
+    | 'fastSearchToolPrompt'
+    | 'fastReadLinkToolPrompt'
+    | 'fastLocationToolPrompt'
+    | 'expertSystemPrompt'
+    | 'rpSystemPrompt'
+  >
+): ModePrompts => {
+  if (mode === 'rp') {
+    return {
+      systemPrompt: settings.rpSystemPrompt,
+      searchToolPrompt: '',
+      readLinkToolPrompt: '',
+      locationToolPrompt: '',
+    }
+  }
+  if (mode === 'expert') {
+    return {
+      systemPrompt: settings.expertSystemPrompt,
+      // v4-pro 不声明任何服务端/客户端工具，工具提示词在专家模式无请求侧用途
+      searchToolPrompt: '',
+      readLinkToolPrompt: '',
+      locationToolPrompt: '',
+    }
+  }
+  return {
+    systemPrompt: settings.fastSystemPrompt,
+    searchToolPrompt: settings.fastSearchToolPrompt,
+    readLinkToolPrompt: settings.fastReadLinkToolPrompt,
+    locationToolPrompt: settings.fastLocationToolPrompt,
+  }
 }
 
 const KEYS = {
@@ -32,10 +122,20 @@ const KEYS = {
   location: 'chat-demo:location',
   locationEnabled: 'chat-demo:location-enabled',
   allowAiLocation: 'chat-demo:allow-ai-location',
-  allowAiImages: 'chat-demo:allow-ai-images',
   themePreference: 'chat-demo:theme-preference',
   ttsVoice: 'chat-demo:tts-voice',
-  systemPrompt: 'chat-demo:system-prompt',
+  autoReadAloud: 'chat-demo:auto-read-aloud',
+  fastSystemPrompt: 'chat-demo:fast-system-prompt',
+  fastSearchToolPrompt: 'chat-demo:fast-search-tool-prompt',
+  fastReadLinkToolPrompt: 'chat-demo:fast-read-link-tool-prompt',
+  fastLocationToolPrompt: 'chat-demo:fast-location-tool-prompt',
+  expertSystemPrompt: 'chat-demo:expert-system-prompt',
+  rpSystemPrompt: 'chat-demo:rp-system-prompt',
+  legacySystemPrompt: 'chat-demo:system-prompt',
+  legacyToolPromptsEnabled: 'chat-demo:tool-prompts-enabled',
+  legacyLocationToolPrompt: 'chat-demo:location-tool-prompt',
+  chatMode: 'chat-demo:chat-mode',
+  rpModel: 'chat-demo:rp-model',
   thinking: 'chat-demo:thinking',
   search: 'chat-demo:search',
   siderCollapsed: 'chat-demo:sider-collapsed',
@@ -98,8 +198,18 @@ const initialThemePreference = (): ThemePreference => {
 /** 未保存过时使用服务端默认音色 stella（海星） */
 const initialTtsVoice = (): TtsVoice => (read(KEYS.ttsVoice) === 'tide' ? 'tide' : 'stella')
 
-/** 自定义系统提示词，未保存过时使用默认身份说明；保存过空串则请求不带 system 内容 */
-const initialSystemPrompt = (): string => read(KEYS.systemPrompt) ?? DEFAULT_SYSTEM_PROMPT
+/** 兼容老版本全局提示词：尚未分别保存新字段时沿用旧配置 */
+const legacySystemPrompt = read(KEYS.legacySystemPrompt)
+const legacyLocationToolPrompt =
+  read(KEYS.legacyToolPromptsEnabled) === 'true' ? read(KEYS.legacyLocationToolPrompt) : null
+
+const initialChatMode = (): ChatMode => {
+  const saved = read(KEYS.chatMode)
+  return saved === 'expert' || saved === 'rp' ? saved : 'fast'
+}
+
+const initialRpModel = (): ChatModel =>
+  read(KEYS.rpModel) === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-flash'
 
 /** 已设置过手动位置的老版本升级时默认保持开启，未配置过或显式关闭时为 false */
 const initialLocationValue = initialLocation()
@@ -117,12 +227,21 @@ export const useSettings = create<Settings>(() => ({
   location: initialLocationValue,
   locationEnabled: initialLocationEnabled(),
   allowAiLocation: read(KEYS.allowAiLocation) === 'true',
-  allowAiImages: read(KEYS.allowAiImages) !== 'false',
   themePreference: initialThemePreference(),
   ttsVoice: initialTtsVoice(),
-  systemPrompt: initialSystemPrompt(),
+  autoReadAloud: read(KEYS.autoReadAloud) === 'true',
+  fastSystemPrompt: read(KEYS.fastSystemPrompt) ?? legacySystemPrompt ?? DEFAULT_FAST_SYSTEM_PROMPT,
+  fastSearchToolPrompt: read(KEYS.fastSearchToolPrompt) ?? DEFAULT_SEARCH_TOOL_PROMPT,
+  fastReadLinkToolPrompt: read(KEYS.fastReadLinkToolPrompt) ?? DEFAULT_READ_LINK_TOOL_PROMPT,
+  fastLocationToolPrompt:
+    read(KEYS.fastLocationToolPrompt) ?? legacyLocationToolPrompt ?? DEFAULT_LOCATION_TOOL_PROMPT,
+  expertSystemPrompt:
+    read(KEYS.expertSystemPrompt) ?? legacySystemPrompt ?? DEFAULT_EXPERT_SYSTEM_PROMPT,
+  rpSystemPrompt: read(KEYS.rpSystemPrompt) ?? DEFAULT_RP_SYSTEM_PROMPT,
+  chatMode: initialChatMode(),
+  rpModel: initialRpModel(),
   thinking: read(KEYS.thinking) === 'true',
-  search: read(KEYS.search) === 'true',
+  search: read(KEYS.search) !== 'false',
   siderCollapsed: read(KEYS.siderCollapsed) === 'true',
 }))
 
@@ -147,11 +266,6 @@ export const setAllowAiLocation = (allowAiLocation: boolean) => {
   useSettings.setState({ allowAiLocation })
 }
 
-export const setAllowAiImages = (allowAiImages: boolean) => {
-  write(KEYS.allowAiImages, String(allowAiImages))
-  useSettings.setState({ allowAiImages })
-}
-
 export const setThemePreference = (themePreference: ThemePreference) => {
   write(KEYS.themePreference, themePreference)
   useSettings.setState({ themePreference })
@@ -162,9 +276,49 @@ export const setTtsVoice = (ttsVoice: TtsVoice) => {
   useSettings.setState({ ttsVoice })
 }
 
-export const setSystemPrompt = (systemPrompt: string) => {
-  write(KEYS.systemPrompt, systemPrompt)
-  useSettings.setState({ systemPrompt })
+export const setAutoReadAloud = (autoReadAloud: boolean) => {
+  write(KEYS.autoReadAloud, String(autoReadAloud))
+  useSettings.setState({ autoReadAloud })
+}
+
+export const setFastSystemPrompt = (fastSystemPrompt: string) => {
+  write(KEYS.fastSystemPrompt, fastSystemPrompt)
+  useSettings.setState({ fastSystemPrompt })
+}
+
+export const setFastSearchToolPrompt = (fastSearchToolPrompt: string) => {
+  write(KEYS.fastSearchToolPrompt, fastSearchToolPrompt)
+  useSettings.setState({ fastSearchToolPrompt })
+}
+
+export const setFastReadLinkToolPrompt = (fastReadLinkToolPrompt: string) => {
+  write(KEYS.fastReadLinkToolPrompt, fastReadLinkToolPrompt)
+  useSettings.setState({ fastReadLinkToolPrompt })
+}
+
+export const setFastLocationToolPrompt = (fastLocationToolPrompt: string) => {
+  write(KEYS.fastLocationToolPrompt, fastLocationToolPrompt)
+  useSettings.setState({ fastLocationToolPrompt })
+}
+
+export const setExpertSystemPrompt = (expertSystemPrompt: string) => {
+  write(KEYS.expertSystemPrompt, expertSystemPrompt)
+  useSettings.setState({ expertSystemPrompt })
+}
+
+export const setRpSystemPrompt = (rpSystemPrompt: string) => {
+  write(KEYS.rpSystemPrompt, rpSystemPrompt)
+  useSettings.setState({ rpSystemPrompt })
+}
+
+export const setChatMode = (chatMode: ChatMode) => {
+  write(KEYS.chatMode, chatMode)
+  useSettings.setState({ chatMode })
+}
+
+export const setRpModel = (rpModel: ChatModel) => {
+  write(KEYS.rpModel, rpModel)
+  useSettings.setState({ rpModel })
 }
 
 export const setApiKey = (apiKey: string | null) => {

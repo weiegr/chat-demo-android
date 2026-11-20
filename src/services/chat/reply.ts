@@ -1,3 +1,4 @@
+import { isOcrSupportedAttachment } from '../api/ocr.js'
 import type {
   AssistantBlockParam,
   FileBlockParam,
@@ -7,6 +8,7 @@ import type {
   TextBlockParam,
   ToolResultBlockParam,
 } from '../api/types.js'
+import { isTextAttachment } from './inlineFiles.js'
 import type {
   AssistantMessage,
   ClientToolUseBlock,
@@ -250,14 +252,59 @@ const isUsableReply = (message: Message): message is AssistantMessage =>
   !message.blocks.some((block) => block.type === 'text' && block.isTemplate) &&
   getReplyText(message) !== ''
 
-/** 有文件时用内容块数组：先文件后文本，文件按 Files API 的 file_id 引用 */
-const toUserParam = ({ content, files }: UserMessage): MessageParam => {
-  const blocks = toFileBlocks(files)
+type UserParamOptions = {
+  texts?: Map<string, string>
+  ocrTexts?: Map<string, string>
+  strictInline?: boolean
+  useOcrForVisual?: boolean
+  /** 置于正文最前的注入文本（旁路搜索结果），与内联附件、正文按空行连接 */
+  prepend?: string
+}
+
+/**
+ * 有文件时用内容块数组：先文件后文本，文件按 Files API 的 file_id 引用。
+ * - 纯文本附件已在本地读出正文（texts），不再作为 document 块上传，避免走单条 32768 token 的受限通道；
+ *   strictInline 用于本轮提问与 RP 模式历史：读不到正文时用占位说明代替，绝不退回 document。
+ * - useOcrForVisual 用于 deepseek-v4-pro（无原生识图）：图片与 PDF/Office 不发 image/document 块，
+ *   改为拼入经 DeepSeek OCR 接口识别出的纯文本。
+ */
+const toUserParam = (
+  { content, files }: UserMessage,
+  { texts, ocrTexts, strictInline = false, useOcrForVisual = false, prepend }: UserParamOptions = {}
+): MessageParam => {
+  const isInlinedText = (file: FileAttachment) =>
+    isTextAttachment(file) && (strictInline || texts?.has(file.id))
+  const isInlinedOcr = (file: FileAttachment) => useOcrForVisual && isOcrSupportedAttachment(file)
+
+  const blocks = toFileBlocks(files.filter((file) => !isInlinedText(file) && !isInlinedOcr(file)))
+  const inline = files.flatMap((file) => {
+    if (isInlinedText(file)) {
+      const text = texts?.get(file.id)
+      return [
+        text === undefined
+          ? `【附件：${file.name}｜正文读取失败，未发送】`
+          : `【附件：${file.name}】\n${text}`,
+      ]
+    }
+    if (isInlinedOcr(file)) {
+      const ocr = ocrTexts?.get(file.id) ?? file.ocrText
+      const kindLabel = file.isImage ? '图片' : '文档'
+      if (ocr === undefined) {
+        return [`【${kindLabel}：${file.name}｜无法读取原件进行文字识别】`]
+      }
+      if (!ocr.trim()) {
+        return [`【${kindLabel}：${file.name}｜OCR 未识别到文字】`]
+      }
+      return [`【${kindLabel} OCR：${file.name}】\n${ocr}`]
+    }
+    return []
+  })
+  const merged = [prepend, ...inline, content].filter((part) => part !== '').join('\n\n')
   return blocks.length === 0
-    ? { role: 'user', content }
+    ? { role: 'user', content: merged }
     : {
         role: 'user',
-        content: [...blocks, ...(content ? [{ type: 'text' as const, text: content }] : [])],
+        content: [...blocks, ...(merged ? [{ type: 'text' as const, text: merged }] : [])],
       }
 }
 
@@ -265,13 +312,14 @@ const toUserParam = ({ content, files }: UserMessage): MessageParam => {
  * assistant 的内容块按历史、工具循环与续写场景转换为消息数组：
  * - 历史思考及其签名不回传；同一轮工具循环或开启思考时续写保留思考及其签名；
  * - 文本块去掉 citations（服务端忽略）。相邻文本直接拼接，被思考或工具隔开的文本用空行连接；
- * - 服务端块只保留带签名的 read_link 调用和结果；
+ * - 服务端块只保留带签名的 read_link 调用和结果（RP 模式 omitServerTools 时省略）；
  * - 已配对结果的客户端 tool_use 会与后续 client_tool_result 切分成交替的 assistant / user(tool_result) 消息。
  */
 const toReplyParams = (
   { blocks }: AssistantMessage,
   prefix = false,
-  thinking = false
+  thinking = false,
+  omitServerTools = false
 ): MessageParam[] => {
   const unsignedReadLinks = new Set(
     blocks.flatMap((block) =>
@@ -343,6 +391,7 @@ const toReplyParams = (
       const { type, thinking: thought, signature } = block
       content.push({ type, thinking: thought, signature: signature ?? '' })
     } else if (
+      !omitServerTools &&
       block.type === 'server_tool_use' &&
       block.kind === 'read_link' &&
       !unsignedReadLinks.has(block.id)
@@ -350,6 +399,7 @@ const toReplyParams = (
       const { type, id, name, input, kind } = block
       content.push({ type, id, name, input, kind })
     } else if (
+      !omitServerTools &&
       block.type === 'web_fetch_tool_result' &&
       block.kind === 'read_link' &&
       !unsignedReadLinks.has(block.tool_use_id)
@@ -388,35 +438,75 @@ export const toRequestMessages = (
   prefix?: AssistantMessage,
   thinking = prefix?.thinking ?? false,
   latestReminder?: string,
-  toolLoopReply?: AssistantMessage
+  toolLoopReply?: AssistantMessage,
+  options?: {
+    texts?: Map<string, string>
+    ocrTexts?: Map<string, string>
+    omitServerTools?: boolean
+    omitLatestReminder?: boolean
+    useOcrForVisual?: boolean
+    /** 旁路搜索注入文本，仅置于本轮提问最前（历史轮搜索块不进请求） */
+    searchContext?: string
+  }
 ): MessageParam[] => {
+  const texts = options?.texts
+  const ocrTexts = options?.ocrTexts
+  const omitServerTools = options?.omitServerTools ?? false
+  const omitLatestReminder = options?.omitLatestReminder ?? false
+  const useOcrForVisual = options?.useOcrForVisual ?? false
   const messages: MessageParam[] = []
   let previousReminder: string | undefined
   const appendReminder = (reminder: string | undefined) => {
-    // 仅在当前分支首次出现或内容变化时插入快照；缺少快照的消息保持原有内容。
-    if (reminder && reminder !== previousReminder) {
-      messages.push({ role: 'latest_reminder', content: reminder })
-      previousReminder = reminder
+    // 服务端不支持 latest_reminder 的模型（deepseek-v4-pro）整个请求省略该角色；
+    // 其余仅在当前分支首次出现或内容变化时插入快照，缺少快照的消息保持原有内容。
+    if (omitLatestReminder || !reminder || reminder === previousReminder) {
+      return
     }
+    messages.push({ role: 'latest_reminder', content: reminder })
+    previousReminder = reminder
   }
   for (const [user, reply] of getContextRounds(history)) {
-    // 历史提问没有文字、附件也都没有 serverId 时，提问为空，连同回答一起省略。
-    if (!user.content && toFileBlocks(user.files).length === 0) {
+    const hasInlineText = user.files.some((file) => texts?.has(file.id))
+    const hasOcr =
+      useOcrForVisual &&
+      user.files.some(
+        (file) =>
+          isOcrSupportedAttachment(file) && (ocrTexts?.has(file.id) || file.ocrText !== undefined)
+      )
+    const remainingFiles = user.files.filter(
+      (file) =>
+        !(isTextAttachment(file) && (omitServerTools || texts?.has(file.id))) &&
+        !(useOcrForVisual && isOcrSupportedAttachment(file))
+    )
+    // 历史提问没有文字、附件也不进请求时，提问为空，连同回答一起省略。
+    if (!user.content && toFileBlocks(remainingFiles).length === 0 && !hasInlineText && !hasOcr) {
       continue
     }
     appendReminder(reply.latestReminder)
-    const replyParams = toReplyParams(reply)
+    const replyParams = toReplyParams(reply, false, false, omitServerTools)
     if (replyParams.at(-1)?.role !== 'assistant') {
       continue
     }
-    messages.push(toUserParam(user), ...replyParams)
+    // RP 模式下历史里的文本附件同样强制内联，避免遗留 serverId 把请求带回 32K 受限通道。
+    messages.push(
+      toUserParam(user, { texts, ocrTexts, strictInline: omitServerTools, useOcrForVisual }),
+      ...replyParams
+    )
   }
   appendReminder(latestReminder)
-  messages.push(toUserParam(question))
+  messages.push(
+    toUserParam(question, {
+      texts,
+      ocrTexts,
+      strictInline: true,
+      useOcrForVisual,
+      prepend: options?.searchContext,
+    })
+  )
   if (toolLoopReply) {
-    messages.push(...toReplyParams(toolLoopReply, true, thinking))
+    messages.push(...toReplyParams(toolLoopReply, true, thinking, omitServerTools))
   } else if (prefix?.prefix) {
-    const [assistant] = toReplyParams(prefix, true, thinking)
+    const [assistant] = toReplyParams(prefix, true, thinking, omitServerTools)
     // 没有非空白正文或有效思考时直接重发原问题，避免服务端拒绝空 Prefill。
     if (
       assistant?.role === 'assistant' &&

@@ -728,3 +728,54 @@ export const IconLocationWarningOutline16 = () => (
     <circle cx={8} cy={9.3} r={0.85} fill="currentColor" />
   </svg>
 )
+
+/** 快速模式：线性闪电图标 */
+export const IconBoltOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M9.15 1.85L3.65 8.9C3.42 9.2 3.63 9.63 4.01 9.63H7.75L6.85 14.15L12.35 7.1C12.58 6.8 12.37 6.37 11.99 6.37H8.25L9.15 1.85Z"
+      stroke="currentColor"
+      strokeWidth={1.35}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
+/** 专家模式：实心几何钻石图标，两侧外轮廓相连，中间内嵌横向细缝表现腰部拐角 */
+export const IconDiamondFill16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      fillRule="evenodd"
+      clipRule="evenodd"
+      d="M4.65 2.4H11.35C11.78 2.4 12.18 2.61 12.42 2.97L14.32 5.82C14.54 6.15 14.52 6.59 14.27 6.9L8.56 13.72C8.27 14.07 7.73 14.07 7.44 13.72L1.73 6.9C1.48 6.59 1.46 6.15 1.68 5.82L3.58 2.97C3.82 2.61 4.22 2.4 4.65 2.4ZM3.8 5.8C3.5 5.8 3.25 6.05 3.25 6.35C3.25 6.65 3.5 6.9 3.8 6.9H12.2C12.5 6.9 12.75 6.65 12.75 6.35C12.75 6.05 12.5 5.8 12.2 5.8H3.8Z"
+      fill="currentColor"
+    />
+  </svg>
+)
+
+/** RP 模式：风格统一的线性文档图标 */
+export const IconDocumentOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M4.2 1.9H9.35L12.8 5.35V12.6C12.8 13.43 12.13 14.1 11.3 14.1H4.2C3.37 14.1 2.7 13.43 2.7 12.6V3.4C2.7 2.57 3.37 1.9 4.2 1.9Z"
+      stroke="currentColor"
+      strokeWidth={1.35}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M9.1 2.05V5.15C9.1 5.45 9.35 5.7 9.65 5.7H12.65"
+      stroke="currentColor"
+      strokeWidth={1.35}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M5.4 8.45H10.1M5.4 11.05H8.5"
+      stroke="currentColor"
+      strokeWidth={1.35}
+      strokeLinecap="round"
+    />
+  </svg>
+)

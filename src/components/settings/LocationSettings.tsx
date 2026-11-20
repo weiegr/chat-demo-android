@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import {
   getDeviceLocationPermissionLevel,
@@ -27,9 +27,8 @@ import { Select } from '../base/Select.js'
 import { Switch } from '../base/Switch.js'
 import { usePresence } from '../base/usePresence.js'
 import { InfoModalButton } from './InfoModalButton.js'
+import { WheelColumn } from './WheelColumn.js'
 import styles from './Settings.module.css'
-
-const WHEEL_ITEM_HEIGHT = 44
 
 /** 格式化已选择的地区名称（中文模式为省+市，非中文模式为国家/地区）；未选择时返回 null */
 const formatSelectedArea = (
@@ -99,10 +98,14 @@ const useAiLocationPermission = (t: ReturnType<typeof useTranslate>) => {
 const getAiLocationDescriptionKey = (
   allowAiLocation: boolean,
   permissionLevel: LocationPermissionLevel,
-  toolsReady: boolean
+  toolsReady: boolean,
+  locationSupported: boolean
 ): TranslationKey => {
   if (!allowAiLocation) {
     return 'settingsAiLocationDescription'
+  }
+  if (!locationSupported) {
+    return 'settingsAiLocationFastOnlyDescription'
   }
   if (permissionLevel === 'none') {
     return toolsReady
@@ -122,6 +125,7 @@ export const AiLocationSetting = () => {
   const t = useTranslate()
   const thinking = useSettings((state) => state.thinking)
   const search = useSettings((state) => state.search)
+  const chatMode = useSettings((state) => state.chatMode)
   const {
     allowAiLocation,
     permissionLevel,
@@ -130,11 +134,13 @@ export const AiLocationSetting = () => {
     requestOrOpenSettings,
     toggleAllowAiLocation,
   } = useAiLocationPermission(t)
-  // 与 requestTools 的声明条件保持一致，统一整合进弹窗主说明文案
+  // 与 requestTools 的声明条件保持一致（RP 模式关闭工具调用），统一整合进弹窗主说明文案
   const descriptionKey = getAiLocationDescriptionKey(
     allowAiLocation,
     permissionLevel,
-    thinking && search
+    // 定位工具只在快速模式下、且思考与搜索均开启时声明（见 requestTools）
+    thinking && search,
+    chatMode === 'fast'
   )
 
   return (
@@ -182,98 +188,6 @@ export const MobileLocationNavRow = ({ onOpen }: { onOpen: () => void }) => {
         <IconChevronRightOutline14 />
       </span>
     </button>
-  )
-}
-
-/** 单列上下滑动滚轮选择器，基于 scroll-snap 吸附中心选中项并实时同步 */
-const WheelColumn = ({
-  items,
-  value,
-  ariaLabel,
-  liveIndexRef,
-  onChange,
-}: {
-  items: { value: string; label: string }[]
-  value: string
-  ariaLabel: string
-  liveIndexRef: MutableRefObject<number>
-  onChange: (value: string) => void
-}) => {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const itemsSignature = items.map((item) => item.value).join(',')
-  const selectedIndex = Math.max(
-    0,
-    items.findIndex((item) => item.value === value)
-  )
-  const initialIndexRef = useRef(selectedIndex)
-  initialIndexRef.current = selectedIndex
-  const [activeIndex, setActiveIndex] = useState(selectedIndex)
-
-  useLayoutEffect(() => {
-    const el = containerRef.current
-    if (!el || items.length === 0) {
-      return
-    }
-    const clamped = Math.max(0, Math.min(items.length - 1, initialIndexRef.current))
-    el.scrollTop = clamped * WHEEL_ITEM_HEIGHT
-    liveIndexRef.current = clamped
-    setActiveIndex(clamped)
-  }, [itemsSignature, items.length, liveIndexRef])
-
-  const commitIndex = (idx: number) => {
-    const target = items[idx]
-    if (target && target.value !== value) {
-      onChange(target.value)
-    }
-  }
-
-  const handleScroll = () => {
-    const el = containerRef.current
-    if (!el || items.length === 0) {
-      return
-    }
-    const idx = Math.max(
-      0,
-      Math.min(items.length - 1, Math.round(el.scrollTop / WHEEL_ITEM_HEIGHT))
-    )
-    liveIndexRef.current = idx
-    if (idx !== activeIndex) {
-      setActiveIndex(idx)
-    }
-    commitIndex(idx)
-  }
-
-  return (
-    <div
-      ref={containerRef}
-      role="listbox"
-      aria-label={ariaLabel}
-      className={styles.wheelColumn}
-      onScroll={handleScroll}
-    >
-      <div className={styles.wheelSpacer} aria-hidden="true" />
-      {items.map((item, idx) => {
-        const active = idx === activeIndex
-        return (
-          <button
-            key={item.value}
-            type="button"
-            role="option"
-            aria-selected={active}
-            className={clsx(styles.wheelOption, active && styles.wheelOptionActive)}
-            onClick={() => {
-              const el = containerRef.current
-              if (el) {
-                el.scrollTo({ top: idx * WHEEL_ITEM_HEIGHT, behavior: 'smooth' })
-              }
-            }}
-          >
-            <span className={styles.wheelOptionText}>{item.label}</span>
-          </button>
-        )
-      })}
-      <div className={styles.wheelSpacer} aria-hidden="true" />
-    </div>
   )
 }
 

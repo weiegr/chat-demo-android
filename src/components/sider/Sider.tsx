@@ -11,7 +11,13 @@ import { IconButton } from '../base/IconButton.js'
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { openSettings } from '../settings/settingsDialogState.js'
-import { closeMobileSider, openMobileSider, useMobileSider } from './mobileSiderState.js'
+import {
+  closeMobileSider,
+  dismissKeyboard,
+  isKeyboardOpen,
+  openMobileSider,
+  useMobileSider,
+} from './mobileSiderState.js'
 import { SessionItem } from './SessionItem.js'
 import styles from './Sider.module.css'
 
@@ -191,6 +197,7 @@ export const MobileSider = () => {
     let startTime = 0
     let drawerWidth = 0
     let wasOpen = false
+    let didDismissKeyboard = false
     let mode: 'idle' | 'pending' | 'dragging' | 'ignored' = 'idle'
     let lastDx = 0
 
@@ -212,7 +219,9 @@ export const MobileSider = () => {
     const onTouchStart = (event: TouchEvent) => {
       if (
         event.touches.length !== 1 ||
+        (event.target instanceof Element && event.target.closest('[data-sider-swipe-ignore]')) ||
         document.querySelector('[role="dialog"][aria-modal="true"]') ||
+        document.querySelector('[role="menu"]') ||
         document.querySelector('aside[class*="panel"]')
       ) {
         mode = 'ignored'
@@ -227,6 +236,7 @@ export const MobileSider = () => {
       startY = touch.clientY
       startTime = Date.now()
       wasOpen = useMobileSider.getState().open
+      didDismissKeyboard = false
       drawerWidth = drawerRef.current?.offsetWidth || Math.min(window.innerWidth * 0.8, 320)
       lastDx = 0
       mode = 'pending'
@@ -258,6 +268,10 @@ export const MobileSider = () => {
         if (canScrollHorizontally(event.target, dx)) {
           mode = 'ignored'
           return
+        }
+        if (!wasOpen && !didDismissKeyboard && isKeyboardOpen()) {
+          didDismissKeyboard = true
+          dismissKeyboard()
         }
         mode = 'dragging'
       }

@@ -2,7 +2,17 @@ import type { zh } from './zh.js'
 
 export const en = {
   welcomeMessageChat250808: 'How can I help you?',
-  contentCaveat: 'AI-generated, for reference only',
+  chatModeLabel: 'Chat mode',
+  chatModeFast: 'Fast',
+  chatModeExpert: 'Expert',
+  chatModeRp: 'RP',
+  welcomeModeTitleFast: 'Start chatting in Fast mode',
+  welcomeModeTitleExpert: 'Start chatting in Expert mode',
+  welcomeModeTitleRp: 'Start chatting in RP mode',
+  chatModeFastHint: 'Fast responses with full features,\npowered by Flash',
+  chatModeExpertHint: 'Built for complex tasks, no vision support,\npowered by Pro',
+  chatModeRpHint: 'Tailored for roleplay and long context,\nwithout search or global memory',
+  chatModeSwitchInNewSessionHint: 'Switch modes in a new chat',
   expandSiderbarButton: 'Open sidebar',
   collapseSiderbarButton: 'Close sidebar',
   newChat: 'New chat',
@@ -78,6 +88,10 @@ export const en = {
     'The API Key is invalid or has been deleted. Please replace it and try again.',
   replyInsufficientBalance: 'Insufficient account balance. Please top up and try again.',
   replyRateLimited: 'Too many requests. Please try again later.',
+  replyInputTooLong:
+    'This message is about {used} tokens, over the server limit of {max} tokens per message. Shorten it, or split it into several messages and try again.',
+  replyInputTooLongHint: ' You can also switch to RP mode and try again.',
+  switchToRpModeAction: 'Switch to RP mode',
   completionServerBusyToast: 'Server busy, please try again later.',
   unknownError: 'Unknown error',
   replyRefused: "Sorry, that's beyond my current scope. Let's talk about something else.",
@@ -96,6 +110,8 @@ export const en = {
   backupInvalidFiles: 'The attachment data in this file is corrupted and cannot be imported.',
   settingsLocalePreference: 'Language',
   settingsTtsVoice: 'Read-aloud voice',
+  settingsAutoReadAloud: 'Auto read aloud',
+  settingsAutoReadAloudDesc: 'Automatically read each reply aloud once it finishes',
   settingsTtsVoiceStella: 'Stella (female)',
   settingsTtsVoiceStellaName: 'Stella',
   settingsTtsVoiceStellaDesc: 'Female',
@@ -103,17 +119,34 @@ export const en = {
   settingsTtsVoiceTideName: 'Tide',
   settingsTtsVoiceTideDesc: 'Male',
   settingsSystemPrompt: 'System prompt',
-  settingsSystemPromptDescription: 'System instructions sent with every conversation.',
   settingsSystemPromptPlaceholder: 'Enter a system prompt, leave empty to send none',
-  settingsAiImages: 'Allow images in AI replies',
-  settingsAiImagesDescription:
-    'When enabled, AI replies include rich-text image layouts using verified search results only after a web or image search tool is actually executed. Replies stay text-only when no search is run. External images may fail to load due to source host restrictions.',
-  settingsAiImagesRequiresSearchDescription:
-    'When enabled, turn on Search in the chat bar as well: rich-text image layouts trigger only when the AI actually runs a search tool and retrieves valid images; otherwise replies stay text-only.',
-  richImageGalleryLabel: 'Search images',
-  richImageOpenSource: 'Open source page',
-  richImageLoadFailed: 'Image unavailable',
-  richImageViewOriginal: 'Open image URL',
+  settingsFastSystemPrompt: 'Fast mode prompt',
+  settingsFastSystemPromptDesc:
+    'Base system instructions sent with each Fast mode chat, powered by Flash; leave empty to omit.',
+  settingsFastSearchToolPrompt: 'Fast mode search tool prompt',
+  settingsFastSearchToolPromptDesc:
+    'Search instructions appended in Fast mode when Search is enabled; leave empty to omit.',
+  settingsFastReadLinkToolPrompt: 'Fast mode link reader tool prompt',
+  settingsFastReadLinkToolPromptDesc:
+    'Link-reading instructions appended in Fast mode when a message contains a URL; leave empty to omit.',
+  settingsFastLocationToolPrompt: 'Fast mode location tool prompt',
+  settingsFastLocationToolPromptDesc:
+    'Sent as the get_location tool description in Fast mode when AI location is enabled with DeepThink and Search; leave empty to use default.',
+  settingsExpertSystemPrompt: 'Expert mode prompt',
+  settingsExpertSystemPromptDesc:
+    'Base system instructions sent with each Expert mode chat, powered by Pro; leave empty to omit.',
+  settingsRpSystemPrompt: 'RP mode prompt',
+  settingsRpSystemPromptDesc: 'System instructions sent only in RP mode; leave empty to send none.',
+  settingsToolPromptPlaceholder: 'Enter tool prompt',
+  settingsResetDefault: 'Reset to default',
+  settingsEditAction: 'Edit',
+  settingsConfigured: 'Configured',
+  settingsRpMode: 'RP mode settings',
+  settingsRpModel: 'Model',
+  settingsRpModelDescription:
+    'Choose the model used in RP mode. Flash is faster and supports image vision; Pro excels at complex writing and automatically uses OCR for uploaded images.',
+  settingsRpModelFlash: 'DeepSeek Flash',
+  settingsRpModelPro: 'DeepSeek Pro',
   settingsLocation: 'Location',
   settingsLocationProvince: 'Select province/region',
   settingsLocationCity: 'Select city',
@@ -131,6 +164,8 @@ export const en = {
   settingsAiLocationDescription: 'Let AI request current device location when needed',
   settingsAiLocationRequiresDescription:
     'Let AI request current device location when needed (requires deep thinking and web search)',
+  settingsAiLocationFastOnlyDescription:
+    'The location tool is available only in Fast mode. Switch to Fast mode and enable DeepThink and Search to use it.',
   settingsAiLocationCoarseDescription:
     'Only approximate location is granted, which may fail or be inaccurate. Enable precise location for better accuracy.',
   settingsAiLocationCoarseRequiresDescription:
@@ -159,6 +194,11 @@ export const en = {
   avatarMenuSettingsDialogThemeSelectLightOption: 'Light',
   avatarMenuSettingsDialogThemeSelectDarkOption: 'Dark',
   avatarMenuSettingsDialogThemeSelectSystemOption: 'System',
+  apiKeyLabel: 'API Key',
+  apiKeyDescription: 'API Key obtained from the DeepSeek API Open Platform',
+  apiKeyStatusSet: 'Configured',
+  apiKeyStatusUnset: 'Not set',
+  apiKeyClear: 'Clear',
   apiKeyStart: 'Enter an API Key to get started',
   apiKeyEdit: 'Edit API Key',
   apiKeyPlaceholder: 'Enter API Key',
@@ -217,6 +257,8 @@ export const en = {
   thinkingSwitch: 'DeepThink',
   deactivatedSearchTooltip: 'Search the web when necessary',
   search: 'Search',
+  bypassSearch: 'Bypass search',
+  bypassSearchTooltip: 'Search the web before sending and attach the results',
   uploadFile: 'Upload files',
   attachCamera: 'Camera',
   attachAlbum: 'Album',

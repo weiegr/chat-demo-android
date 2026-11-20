@@ -80,6 +80,21 @@ export const extractFileIds = (message: string): string[] => [
   ...new Set(message.match(/file-api-[\w-]+/g) ?? []),
 ]
 
+/** 服务端单次输入上限：单条消息超过 max 时返回 400，而不是静默截断 */
+export type InputTooLongInfo = { used: number; max: number }
+
+const INPUT_TOO_LONG_PATTERN =
+  /user input too long,\s*(\d+)\s*tokens?\s*exceeds\s*max\s*(\d+)\s*tokens?/i
+
+/** 识别「user input too long, N tokens exceeds max M tokens」这类 400 */
+export const getInputTooLongInfo = (message: string): InputTooLongInfo | null => {
+  const match = INPUT_TOO_LONG_PATTERN.exec(message)
+  if (!match) {
+    return null
+  }
+  return { used: Number(match[1]), max: Number(match[2]) }
+}
+
 /** 上传失败里能识别出具体原因的情况；其余统一按「上传失败」处理 */
 export type UploadErrorCode = 'fileCountLimit' | 'storageLimit' | 'parseFailed'
 
