@@ -23,6 +23,7 @@ import {
   IconVideoOutline20,
 } from '../base/icons.js'
 import {
+  canTranscribeVideo,
   canUploadVideo,
   resolveModeModel,
   setSearch,
@@ -44,6 +45,7 @@ import {
   setDraftText,
   shouldSkipDraftUpload,
   useDrafts,
+  type DraftVideoTranscript,
 } from '../../services/chat/drafts.js'
 import { canInlineTextAttachment } from '../../services/chat/inlineFiles.js'
 import { stopReadAloud } from '../../services/speech/readAloud.js'
@@ -129,9 +131,11 @@ const Input = ({
   const activeModel = resolveModeModel(activeMode, rpModel)
   const useOcrModel = activeModel === 'deepseek-v4-pro'
   const videoAllowed = useSettings((settings) => canUploadVideo(activeMode, settings))
+  const videoAudioEnabled = useSettings((settings) => canTranscribeVideo(activeMode, settings))
   const video = useVideoInput(draftKey, sessionId)
   const videoEntry = videoAllowed && activeEdit === null
   const videoBlocked = !videoAllowed && Boolean(draft.video)
+  const audioFailed = videoAudioEnabled && draft.video && video.audioFailureId === draft.video.id
   const isRpMode = activeMode === 'rp'
 
   useEffect(() => {
@@ -444,7 +448,9 @@ const Input = ({
     if (useChatStore.getState().importingHistory || !ensureApiKey()) {
       return
     }
-    getAndroidHost()?.setNextPickerMode?.(mode)
+    if (mode !== 'video' || !video.preparePicker()) {
+      getAndroidHost()?.setNextPickerMode?.(mode)
+    }
     input.click()
     closeAttachMenu()
   }
@@ -555,14 +561,29 @@ const Input = ({
 
   // 移动端录音时用频谱替代输入框内容
   const recording = voice.status === 'recording'
+  const processingAudio = video.status !== null && video.status.phase !== 'frames'
 
   // 排队、上传中或上传失败的附件都留在输入框，全部上传成功后才能发送
   const canSend =
     !importingHistory &&
     !streaming &&
     voice.status === 'idle' &&
-    video.progress === null &&
+    video.status === null &&
     draftReady
+
+  const submitDraft = (transcript?: DraftVideoTranscript) => {
+    if (!ensureApiKey() || !sendMessage(sessionId, transcript)) {
+      return false
+    }
+    stopReadAloud()
+    closeAttachMenu()
+    if (isMobile) {
+      textareaRef.current?.blur()
+    } else {
+      textareaRef.current?.focus()
+    }
+    return true
+  }
 
   const send = () => {
     if (
@@ -620,15 +641,8 @@ const Input = ({
       return
     }
     // 文本与上传完成态由提交动作读取最新快照，不使用上一次渲染的草稿。
-    if (!ensureApiKey() || !sendMessage(sessionId)) {
-      return
-    }
-    stopReadAloud()
-    closeAttachMenu()
-    if (isMobile) {
-      textareaRef.current?.blur()
-    } else {
-      textareaRef.current?.focus()
+    if (ensureApiKey()) {
+      void video.send(submitDraft)
     }
   }
 
@@ -700,12 +714,37 @@ const Input = ({
           onRemove={removeFile}
           onRemoveExisting={removeUserEditExistingFile}
         />
-        {video.progress !== null ? (
+        {video.status ? (
           <div className={styles.videoStatus}>
-            <span role="status">{t('videoProcessing', { progress: video.progress })}</span>
+            <span role="status">
+              {video.status.phase === 'frames'
+                ? t('videoProcessing', { progress: video.status.progress })
+                : t(
+                    video.status.phase === 'extracting'
+                      ? 'videoAudioExtracting'
+                      : 'videoAudioTranscribing'
+                  )}
+            </span>
             <button type="button" className={styles.videoAction} onClick={video.cancel}>
               {t('cancel')}
             </button>
+          </div>
+        ) : audioFailed ? (
+          <div className={styles.videoStatus}>
+            <span role="status">{t('videoAudioFailed')}</span>
+            <div className={styles.videoActions}>
+              <button type="button" className={styles.videoAction} disabled={!canSend} onClick={send}>
+                {t('videoAudioRetry')}
+              </button>
+              <button
+                type="button"
+                className={styles.videoAction}
+                disabled={!canSend}
+                onClick={() => void video.send(submitDraft, true)}
+              >
+                {t('videoAudioSendVisuals')}
+              </button>
+            </div>
           </div>
         ) : null}
         {videoBlocked ? <div className={styles.videoStatus}>{t('videoEnableToSend')}</div> : null}
@@ -875,7 +914,7 @@ const Input = ({
               >
                 <IconSendOutline16 />
               </button>
-            ) : (
+            ) : processingAudio ? null : (
               <VoiceButton
                 status={voice.status}
                 disabled={!voice.available}
@@ -883,7 +922,9 @@ const Input = ({
                 onClick={() => {
                   if (
                     voice.status !== 'idle' ||
-                    (!useChatStore.getState().importingHistory && ensureApiKey())
+                    (!useChatStore.getState().importingHistory &&
+                      !video.isProcessing() &&
+                      ensureApiKey())
                   ) {
                     setAttachMenuOpen(false)
                     cancelAttachToIme()

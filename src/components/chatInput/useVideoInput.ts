@@ -1,7 +1,19 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
-import { addDraftVideoFrames, getDraft } from '../../services/chat/drafts.js'
+import {
+  addDraftVideoFrames,
+  getDraft,
+  useDrafts,
+  type DraftVideoTranscript,
+} from '../../services/chat/drafts.js'
 import { useChatStore } from '../../services/chat/store.js'
-import { canUploadVideo, useSettings } from '../../services/settings.js'
+import { canTranscribeVideo, canUploadVideo, useSettings } from '../../services/settings.js'
+import {
+  hasVideoAudioSupport,
+  prepareVideoAudioPicker,
+  releaseVideoAudioSelection,
+  transcribeVideoAudio,
+  type VideoAudioPhase,
+} from '../../services/video/audio.js'
 import { extractVideoSheets, VideoTooLongError } from '../../services/video/frames.js'
 import { showToast } from '../base/toastState.js'
 import { ensureApiKey } from '../settings/settingsDialogState.js'
@@ -11,14 +23,22 @@ const getModeForVideo = (sessionId: string | null) =>
     ? useSettings.getState().chatMode
     : (useChatStore.getState().sessionCache[sessionId]?.mode ?? 'fast')
 
+type Work =
+  | { kind: 'frames'; controller: AbortController }
+  | { kind: 'audio'; controller: AbortController; videoId: string; apiKey: string }
+
+type Status = { phase: 'frames'; progress: number } | { phase: VideoAudioPhase }
+
 export const useVideoInput = (draftKey: string | null, sessionId: string | null) => {
-  const current = useRef<AbortController | null>(null)
-  const [progress, setProgress] = useState<number | null>(null)
+  const current = useRef<Work | null>(null)
+  const pendingSelection = useRef<string>()
+  const [status, setStatus] = useState<Status | null>(null)
+  const [audioFailureId, setAudioFailureId] = useState<string>()
 
   const cancel = useCallback(() => {
-    current.current?.abort()
+    current.current?.controller.abort()
     current.current = null
-    setProgress(null)
+    setStatus(null)
   }, [])
 
   useLayoutEffect(() => {
@@ -26,7 +46,14 @@ export const useVideoInput = (draftKey: string | null, sessionId: string | null)
       return
     }
     const unsubscribeSettings = useSettings.subscribe((settings) => {
-      if (current.current && !canUploadVideo(getModeForVideo(sessionId), settings)) {
+      const work = current.current
+      const mode = getModeForVideo(sessionId)
+      if (
+        work &&
+        (!canUploadVideo(mode, settings) ||
+          (work.kind === 'audio' &&
+            (!canTranscribeVideo(mode, settings) || work.apiKey !== settings.apiKey)))
+      ) {
         cancel()
       }
     })
@@ -40,11 +67,20 @@ export const useVideoInput = (draftKey: string | null, sessionId: string | null)
         cancel()
       }
     })
+    const unsubscribeDrafts = useDrafts.subscribe(() => {
+      const work = current.current
+      if (work?.kind === 'audio' && getDraft(draftKey).video?.id !== work.videoId) {
+        cancel()
+      }
+    })
     return () => {
       unsubscribeSettings()
       unsubscribeChat()
-      current.current?.abort()
+      unsubscribeDrafts()
+      current.current?.controller.abort()
       current.current = null
+      releaseVideoAudioSelection(pendingSelection.current)
+      pendingSelection.current = undefined
     }
   }, [cancel, draftKey, sessionId])
 
@@ -59,19 +95,41 @@ export const useVideoInput = (draftKey: string | null, sessionId: string | null)
     return true
   }
 
+  const preparePicker = () => {
+    releaseVideoAudioSelection(pendingSelection.current)
+    pendingSelection.current = prepareVideoAudioPicker()
+    return pendingSelection.current !== undefined
+  }
+
+  const finish = (work: Work) => {
+    if (current.current === work) {
+      current.current = null
+      setStatus(null)
+    }
+  }
+
   const add = async (files: File[]) => {
+    const selectionId = pendingSelection.current
+    pendingSelection.current = undefined
     if (files.length === 0 || !canSelect() || !ensureApiKey()) {
+      releaseVideoAudioSelection(selectionId)
       return
     }
     if (files.length > 1) {
+      releaseVideoAudioSelection(selectionId)
       showToast({ key: 'videoLimitOne' })
       return
     }
     const controller = new AbortController()
-    current.current = controller
-    setProgress(0)
+    const work: Work = { kind: 'frames', controller }
+    current.current = work
+    setStatus({ phase: 'frames', progress: 0 })
+    setAudioFailureId(undefined)
+    let keptSelection = false
     try {
-      const sheets = await extractVideoSheets(files[0], controller.signal, setProgress)
+      const sheets = await extractVideoSheets(files[0], controller.signal, (progress) =>
+        setStatus({ phase: 'frames', progress })
+      )
       if (controller.signal.aborted || !ensureApiKey()) {
         return
       }
@@ -80,22 +138,80 @@ export const useVideoInput = (draftKey: string | null, sessionId: string | null)
         files[0],
         sheets,
         useSettings.getState().apiKey ?? '',
-        getModeForVideo(sessionId)
+        getModeForVideo(sessionId),
+        selectionId
       )
       if (error) {
         showToast(error)
+      } else {
+        keptSelection = true
       }
     } catch (error) {
       if (!controller.signal.aborted) {
         showToast({ key: error instanceof VideoTooLongError ? 'videoTooLong' : 'videoReadFailed' })
       }
     } finally {
-      if (current.current === controller) {
-        current.current = null
-        setProgress(null)
+      if (!keptSelection) {
+        releaseVideoAudioSelection(selectionId)
+      }
+      finish(work)
+    }
+  }
+
+  const send = async (
+    submit: (transcript?: DraftVideoTranscript) => boolean,
+    visualsOnly = false
+  ) => {
+    if (current.current) {
+      return
+    }
+    const video = getDraft(draftKey).video
+    const settings = useSettings.getState()
+    if (
+      !video ||
+      visualsOnly ||
+      !canTranscribeVideo(getModeForVideo(sessionId), settings) ||
+      !hasVideoAudioSupport()
+    ) {
+      submit()
+      return
+    }
+    const apiKey = settings.apiKey
+    if (!apiKey) {
+      return
+    }
+    const controller = new AbortController()
+    const work: Work = { kind: 'audio', controller, videoId: video.id, apiKey }
+    current.current = work
+    setAudioFailureId(undefined)
+    let text: string
+    try {
+      text = await transcribeVideoAudio(video.audioSelectionId, apiKey, controller.signal, (phase) =>
+        setStatus({ phase })
+      )
+    } catch {
+      if (!controller.signal.aborted) {
+        setAudioFailureId(video.id)
+      }
+      return
+    } finally {
+      finish(work)
+    }
+    if (!controller.signal.aborted && getDraft(draftKey).video?.id === video.id) {
+      if (submit({ videoId: video.id, text }) && !text) {
+        showToast({ key: 'videoAudioNoSpeech' })
       }
     }
   }
 
-  return { add, cancel, canSelect, progress, isProcessing: () => current.current !== null }
+  return {
+    add,
+    cancel,
+    canSelect,
+    preparePicker,
+    status,
+    audioFailureId,
+    send,
+    isProcessing: () => current.current !== null,
+  }
 }

@@ -74,6 +74,7 @@ const toUser = (message: ChatMessage): UserMessage => {
         size: video.size,
         mimeType: video.mimeType,
         frameIds: video.frameIds,
+        ...(video.transcript !== undefined && { transcript: video.transcript }),
       },
     }),
   }

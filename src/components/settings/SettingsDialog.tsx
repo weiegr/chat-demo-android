@@ -31,10 +31,12 @@ import {
   setLocale,
   setThemePreference,
   setTtsVoice,
+  setVideoAudioEnabled,
   useSettings,
   type Locale,
   type ThemePreference,
 } from '../../services/settings.js'
+import { hasVideoAudioSupport } from '../../services/video/audio.js'
 import type { TtsVoice } from '../../services/api/speech.js'
 import { useTranslate, type TranslationKey, type TranslationMessage } from '../../i18n/index.js'
 import { Button } from '../base/Button.js'
@@ -585,7 +587,9 @@ const AutoReadAloudSetting = () => {
 const BetaSettings = ({ isMobile = false }: { isMobile?: boolean }) => {
   const t = useTranslate()
   const allowVideoUpload = useSettings((state) => state.allowVideoUpload)
+  const videoAudioEnabled = useSettings((state) => state.videoAudioEnabled)
   const label = t('settingsAllowVideoUpload')
+  const audioLabel = t('settingsVideoAudio')
   return (
     <section aria-label="beta">
       <div className={isMobile ? styles.mobileGroupTitle : styles.betaGroupTitle}>beta</div>
@@ -600,6 +604,22 @@ const BetaSettings = ({ isMobile = false }: { isMobile?: boolean }) => {
           </div>
           <Switch checked={allowVideoUpload} ariaLabel={label} onChange={setAllowVideoUpload} />
         </div>
+        {hasVideoAudioSupport() ? (
+          <SettingCell
+            label={audioLabel}
+            description={t('settingsVideoAudioDesc')}
+            infoAsModal
+            status={null}
+            action={
+              <Switch
+                checked={videoAudioEnabled}
+                disabled={!allowVideoUpload}
+                ariaLabel={audioLabel}
+                onChange={setVideoAudioEnabled}
+              />
+            }
+          />
+        ) : null}
       </div>
     </section>
   )

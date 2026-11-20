@@ -12,6 +12,7 @@ import {
   type UploadTask,
 } from '../attachments.js'
 import { canUploadVideo, type ChatMode } from '../settings.js'
+import { releaseVideoAudioSelection } from '../video/audio.js'
 import { canInlineTextAttachment } from './inlineFiles.js'
 import type { FileAttachment, VideoAttachment } from './types.js'
 
@@ -23,7 +24,8 @@ export type DraftAttachment = {
   previewUrl: string | null
 }
 
-export type DraftVideo = VideoAttachment & { file: File }
+export type DraftVideo = VideoAttachment & { file: File; audioSelectionId?: string }
+export type DraftVideoTranscript = { videoId: string; text: string }
 
 type Draft = { text: string; attachments: DraftAttachment[]; video?: DraftVideo }
 
@@ -129,7 +131,8 @@ export const addDraftVideoFrames = (
   source: File,
   frames: File[],
   apiKey: string,
-  mode: ChatMode
+  mode: ChatMode,
+  audioSelectionId?: string
 ): TranslationMessage | null => {
   if (!canUploadVideo(mode)) {
     return { key: 'videoEnableToSend' }
@@ -143,6 +146,7 @@ export const addDraftVideoFrames = (
     size: source.size,
     mimeType: source.type,
     file: source,
+    audioSelectionId,
   }).error
 }
 
@@ -242,6 +246,9 @@ export const removeDraftAttachment = (sessionId: string | null, attachmentId: st
   const draft = getDraft(sessionId)
   const video = draft.video
   const ids = video?.id === attachmentId ? video.frameIds : [attachmentId]
+  if (video?.id === attachmentId) {
+    releaseVideoAudioSelection(video.audioSelectionId)
+  }
   draft.attachments
     .filter((item) => ids.includes(item.id))
     .forEach((item) => releaseAttachment(item, true))
@@ -254,19 +261,24 @@ export const removeDraftAttachment = (sessionId: string | null, attachmentId: st
 
 /** 发送成功后原件与 serverId 已交给会话，释放预览但保留上传完成态。 */
 export const clearSentDraft = (sessionId: string | null) => {
-  getDraft(sessionId).attachments.forEach((attachment) => releaseAttachment(attachment, false))
+  const draft = getDraft(sessionId)
+  draft.attachments.forEach((attachment) => releaseAttachment(attachment, false))
+  releaseVideoAudioSelection(draft.video?.audioSelectionId)
   updateDraft(sessionId, () => EMPTY_DRAFT)
 }
 
 /** 删除会话或替换历史成功后，释放尚未发送的草稿及上传任务。 */
 export const clearDraft = (sessionId: string | null) => {
-  getDraft(sessionId).attachments.forEach((attachment) => releaseAttachment(attachment, true))
+  const draft = getDraft(sessionId)
+  draft.attachments.forEach((attachment) => releaseAttachment(attachment, true))
+  releaseVideoAudioSelection(draft.video?.audioSelectionId)
   updateDraft(sessionId, () => EMPTY_DRAFT)
 }
 
 export const clearAllDrafts = () => {
   for (const draft of useDrafts.getState().drafts.values()) {
     draft.attachments.forEach((attachment) => releaseAttachment(attachment, true))
+    releaseVideoAudioSelection(draft.video?.audioSelectionId)
   }
   useDrafts.setState({ drafts: new Map() })
 }

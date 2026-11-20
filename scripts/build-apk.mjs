@@ -128,7 +128,10 @@ run(aapt2, [
 
 // 3. javac 编译 Java 源码与 R.java
 const rJava = path.join(workDir, 'gen', ...pkgSegments, 'R.java')
-const mainJava = path.join(root, 'android', 'java', ...pkgSegments, 'MainActivity.java')
+const sourceDir = path.join(root, 'android', 'java', ...pkgSegments)
+const javaFiles = (await readdir(sourceDir))
+  .filter((name) => name.endsWith('.java'))
+  .map((name) => path.join(sourceDir, name))
 run(javaBin('javac'), [
   '--release',
   '11',
@@ -139,7 +142,7 @@ run(javaBin('javac'), [
   '-d',
   path.join(workDir, 'classes'),
   rJava,
-  mainJava,
+  ...javaFiles,
 ])
 
 // 4. d8 将 class 转为 classes.dex

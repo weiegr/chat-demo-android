@@ -257,6 +257,7 @@ type UserParamOptions = {
   ocrTexts?: Map<string, string>
   strictInline?: boolean
   useOcrForVisual?: boolean
+  includeVideo?: boolean
   /** 置于正文最前的注入文本（旁路搜索结果），与内联附件、正文按空行连接 */
   prepend?: string
 }
@@ -269,14 +270,42 @@ type UserParamOptions = {
  *   改为拼入经 DeepSeek OCR 接口识别出的纯文本。
  */
 const toUserParam = (
-  { content, files }: UserMessage,
-  { texts, ocrTexts, strictInline = false, useOcrForVisual = false, prepend }: UserParamOptions = {}
-): MessageParam => {
+  { content, files, video }: UserMessage,
+  {
+    texts,
+    ocrTexts,
+    strictInline = false,
+    useOcrForVisual = false,
+    includeVideo,
+    prepend,
+  }: UserParamOptions
+): { message: MessageParam; hasVideo: boolean } => {
   const isInlinedText = (file: FileAttachment) =>
     isTextAttachment(file) && (strictInline || texts?.has(file.id))
   const isInlinedOcr = (file: FileAttachment) => useOcrForVisual && isOcrSupportedAttachment(file)
 
-  const blocks = toFileBlocks(files.filter((file) => !isInlinedText(file) && !isInlinedOcr(file)))
+  const requestFiles = files.filter((file) => !isInlinedText(file) && !isInlinedOcr(file))
+  const videoSource = includeVideo ? video : undefined
+  const frameIds = new Set(videoSource?.frameIds)
+  const blocks: (FileBlockParam | TextBlockParam)[] = toFileBlocks(
+    requestFiles.filter((file) => !frameIds.has(file.id))
+  )
+  const frames = toFileBlocks(
+    (videoSource?.frameIds ?? []).flatMap((id) => {
+      const file = requestFiles.find((item) => item.id === id && item.isImage)
+      return file ? [file] : []
+    })
+  )
+  if (frames.length > 0) {
+    blocks.push(
+      { type: 'text', text: '【视频画面】以下图片按时间顺序排列，每格对应一个独立时刻。' },
+      ...frames
+    )
+  }
+  const transcript = videoSource?.transcript?.trim()
+  if (transcript) {
+    blocks.push({ type: 'text', text: `【视频对白转写】\n${JSON.stringify(transcript)}` })
+  }
   const inline = files.flatMap((file) => {
     if (isInlinedText(file)) {
       const text = texts?.get(file.id)
@@ -299,13 +328,18 @@ const toUserParam = (
     }
     return []
   })
-  const merged = [prepend, ...inline, content].filter((part) => part !== '').join('\n\n')
-  return blocks.length === 0
-    ? { role: 'user', content: merged }
-    : {
-        role: 'user',
-        content: [...blocks, ...(merged ? [{ type: 'text' as const, text: merged }] : [])],
-      }
+  const merged = [prepend ?? '', ...inline, content].filter(Boolean).join('\n\n')
+  const hasBlocks = blocks.length > 0
+  if (hasBlocks && merged) {
+    blocks.push({ type: 'text', text: merged })
+  }
+  return {
+    message: {
+      role: 'user',
+      content: hasBlocks ? blocks : merged,
+    },
+    hasVideo: frames.length > 0 || Boolean(transcript),
+  }
 }
 
 /**
@@ -445,16 +479,19 @@ export const toRequestMessages = (
     omitServerTools?: boolean
     omitLatestReminder?: boolean
     useOcrForVisual?: boolean
+    includeVideo?: boolean
     /** 旁路搜索注入文本，仅置于本轮提问最前（历史轮搜索块不进请求） */
     searchContext?: string
   }
-): MessageParam[] => {
+): { messages: MessageParam[]; hasVideoContext: boolean } => {
   const texts = options?.texts
   const ocrTexts = options?.ocrTexts
   const omitServerTools = options?.omitServerTools ?? false
   const omitLatestReminder = options?.omitLatestReminder ?? false
   const useOcrForVisual = options?.useOcrForVisual ?? false
+  const includeVideo = options?.includeVideo ?? false
   const messages: MessageParam[] = []
+  let hasVideoContext = false
   let previousReminder: string | undefined
   const appendReminder = (reminder: string | undefined) => {
     // 服务端不支持 latest_reminder 的模型（deepseek-v4-pro）整个请求省略该角色；
@@ -479,7 +516,13 @@ export const toRequestMessages = (
         !(useOcrForVisual && isOcrSupportedAttachment(file))
     )
     // 历史提问没有文字、附件也不进请求时，提问为空，连同回答一起省略。
-    if (!user.content && toFileBlocks(remainingFiles).length === 0 && !hasInlineText && !hasOcr) {
+    if (
+      !user.content &&
+      !remainingFiles.some((file) => file.serverId) &&
+      !hasInlineText &&
+      !hasOcr &&
+      !(includeVideo && user.video?.transcript?.trim())
+    ) {
       continue
     }
     appendReminder(reply.latestReminder)
@@ -488,21 +531,26 @@ export const toRequestMessages = (
       continue
     }
     // RP 模式下历史里的文本附件同样强制内联，避免遗留 serverId 把请求带回 32K 受限通道。
-    messages.push(
-      toUserParam(user, { texts, ocrTexts, strictInline: omitServerTools, useOcrForVisual }),
-      ...replyParams
-    )
-  }
-  appendReminder(latestReminder)
-  messages.push(
-    toUserParam(question, {
+    const userParam = toUserParam(user, {
       texts,
       ocrTexts,
-      strictInline: true,
+      strictInline: omitServerTools,
       useOcrForVisual,
-      prepend: options?.searchContext,
+      includeVideo,
     })
-  )
+    messages.push(userParam.message, ...replyParams)
+    hasVideoContext ||= userParam.hasVideo
+  }
+  appendReminder(latestReminder)
+  const questionParam = toUserParam(question, {
+    texts,
+    ocrTexts,
+    strictInline: true,
+    useOcrForVisual,
+    includeVideo,
+    prepend: options?.searchContext,
+  })
+  messages.push(questionParam.message)
   if (toolLoopReply) {
     messages.push(...toReplyParams(toolLoopReply, true, thinking, omitServerTools))
   } else if (prefix?.prefix) {
@@ -519,7 +567,7 @@ export const toRequestMessages = (
       messages.push(assistant)
     }
   }
-  return messages
+  return { messages, hasVideoContext: hasVideoContext || questionParam.hasVideo }
 }
 
 /** 思考用时（秒），至少 1 秒 */

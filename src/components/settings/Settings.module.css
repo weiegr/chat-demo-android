@@ -628,6 +628,7 @@
   }
 
   .mobileCard {
+    flex-shrink: 0;
     padding: 0 16px;
     border-radius: 16px;
     background-color: var(--dsw-alias-bg-base);

@@ -18,6 +18,7 @@ import {
 import { cancelUpload, describeUploadError, uploadAttachment, useUploads } from '../attachments.js'
 import { GeolocationError, getCurrentPosition } from '../geolocation.js'
 import {
+  canTranscribeVideo,
   canUploadVideo,
   DEFAULT_LOCATION_TOOL_PROMPT,
   getModePrompts,
@@ -34,6 +35,7 @@ import {
   clearSentDraft,
   getDraft,
   prepareDraftMessage,
+  type DraftVideoTranscript,
 } from './drafts.js'
 import { isTextAttachment, loadInlineTexts } from './inlineFiles.js'
 import { createLatestReminder } from './latestReminder.js'
@@ -786,7 +788,7 @@ export const setSessionMode = (sessionId: string, mode: ChatMode) => {
  * 提交指定会话的最新草稿；null 表示新建会话。
  * 同步接收成功才清空草稿，附件原件由会话接管；保存失败仍通过保存入口重试。
  */
-export const sendMessage = (targetSessionId: string | null) => {
+export const sendMessage = (targetSessionId: string | null, videoTranscript?: DraftVideoTranscript) => {
   if (get().importingHistory || !get().ready) {
     return false
   }
@@ -811,6 +813,12 @@ export const sendMessage = (targetSessionId: string | null) => {
     return false
   }
   const { text, files, video } = prepared
+  if (
+    videoTranscript &&
+    (video?.id !== videoTranscript.videoId || !canTranscribeVideo(mode, settings))
+  ) {
+    return false
+  }
   const now = Date.now()
   if (sessionId === null) {
     const session: Session = {
@@ -841,6 +849,7 @@ export const sendMessage = (targetSessionId: string | null) => {
     size: video.size,
     mimeType: video.mimeType,
     frameIds: video.frameIds,
+    ...(videoTranscript?.text && { transcript: videoTranscript.text }),
   }
   const question: UserMessage = {
     id: createId(),
@@ -1608,7 +1617,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             }
           }
         }
-        const messages = toRequestMessages(
+        const { messages, hasVideoContext } = toRequestMessages(
           prepared.history,
           prepared.question,
           prepared.prefix,
@@ -1621,12 +1630,13 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             omitServerTools: isRpMode,
             omitLatestReminder: isV4Pro,
             useOcrForVisual,
+            includeVideo: __BETA__ && sessionMode === 'fast',
             searchContext,
           }
         )
         const currentSettings = useSettings.getState()
         const { apiKey } = currentSettings
-        const modePrompts = getModePrompts(sessionMode, currentSettings)
+        const modePrompts = getModePrompts(sessionMode, currentSettings, hasVideoContext)
         // 服务端约束：v4-pro 不支持 server-side 工具（web_search/read_url）与 title 生成，
         // 请求携带任一项即整体报错，因此连同依赖 search 的定位工具一并停用，标题走本地兜底
         const serverToolsAllowed = !isRpMode && !isV4Pro

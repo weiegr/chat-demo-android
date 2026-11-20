@@ -131,6 +131,18 @@
   color: var(--dsw-alias-brand-primary);
   font: inherit;
   cursor: pointer;
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+.videoActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  justify-content: flex-end;
 }
 
 .attachment {

@@ -228,6 +228,7 @@ const message: Read<ChatMessage> = (value) => {
         size: count(video.size),
         mimeType: string(video.mimeType),
         frameIds: list(string)(video.frameIds),
+        ...(video.transcript !== undefined && { transcript: string(video.transcript) }),
         export_path: nullable(string)(video.export_path),
       },
     }),

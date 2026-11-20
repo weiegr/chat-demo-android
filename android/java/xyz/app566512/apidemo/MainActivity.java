@@ -98,6 +98,7 @@ public class MainActivity extends Activity {
     private final ExecutorService mediaExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<String, Uri> recentMediaUris = new ConcurrentHashMap<>();
+    private final VideoAudio videoAudio = new VideoAudio();
 
     private FrameLayout rootContainer;
     private WebView webView;
@@ -111,6 +112,8 @@ public class MainActivity extends Activity {
     private boolean lastLocationPermissionHadCoarse = false;
     private Uri pendingCameraUri;
     private volatile String nextPickerMode = "file";
+    private volatile String nextVideoAudioSelection;
+    private String pendingVideoAudioSelection;
     private volatile String cachedUserAgent = "Mozilla/5.0";
     private int safeTopCss = 24;
     private int safeBottomCss = 0;
@@ -187,6 +190,13 @@ public class MainActivity extends Activity {
                     if (path != null && path.startsWith(MEDIA_PREFIX)) {
                         return serveMediaUri(path.substring(MEDIA_PREFIX.length()));
                     }
+                    if (path != null && path.startsWith(VideoAudio.PATH_PREFIX)) {
+                        if (request.isForMainFrame() || !"GET".equals(request.getMethod())) {
+                            return notFoundResponse();
+                        }
+                        return videoAudio.serve(
+                                getContentResolver(), path.substring(VideoAudio.PATH_PREFIX.length()));
+                    }
                     if (path == null || path.isEmpty() || "/".equals(path)) {
                         path = "/index.html";
                     }
@@ -251,13 +261,18 @@ public class MainActivity extends Activity {
 
             @Override
             public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
-                if (MainActivity.this.filePathCallback != null) {
-                    MainActivity.this.filePathCallback.onReceiveValue(null);
-                }
+                cancelFileCallback();
                 MainActivity.this.filePathCallback = filePathCallback;
 
                 String mode = nextPickerMode;
                 nextPickerMode = "file";
+                String selection = nextVideoAudioSelection;
+                nextVideoAudioSelection = null;
+                if ("video".equals(mode)) {
+                    pendingVideoAudioSelection = selection;
+                } else {
+                    videoAudio.releaseSelection(selection);
+                }
                 if ("file".equals(mode) && fileChooserParams != null && fileChooserParams.isCaptureEnabled()) {
                     mode = "camera";
                 }
@@ -343,6 +358,7 @@ public class MainActivity extends Activity {
             cancelActiveLocation = null;
         }
         mainHandler.removeCallbacksAndMessages(null);
+        videoAudio.clear();
         mediaExecutor.shutdownNow();
         super.onDestroy();
     }
@@ -603,6 +619,8 @@ public class MainActivity extends Activity {
     }
 
     private void cancelFileCallback() {
+        videoAudio.releaseSelection(pendingVideoAudioSelection);
+        pendingVideoAudioSelection = null;
         if (filePathCallback != null) {
             filePathCallback.onReceiveValue(null);
             filePathCallback = null;
@@ -1144,6 +1162,7 @@ public class MainActivity extends Activity {
         if (requestCode == REQ_FILE_CHOOSER) {
             if (filePathCallback == null) {
                 clearPendingCameraUri();
+                cancelFileCallback();
                 return;
             }
             Uri[] results = null;
@@ -1165,6 +1184,9 @@ public class MainActivity extends Activity {
                     results = new Uri[]{data.getData()};
                 }
             }
+            videoAudio.acceptSelection(pendingVideoAudioSelection,
+                    results != null && results.length == 1 ? results[0] : null);
+            pendingVideoAudioSelection = null;
             filePathCallback.onReceiveValue(results);
             filePathCallback = null;
             return;
@@ -1594,11 +1616,44 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void setNextPickerMode(String mode) {
+            videoAudio.releaseSelection(nextVideoAudioSelection);
+            nextVideoAudioSelection = null;
             if ("camera".equals(mode) || "gallery".equals(mode) || "file".equals(mode) || "video".equals(mode)) {
                 nextPickerMode = mode;
             } else {
                 nextPickerMode = "file";
             }
+        }
+
+        @JavascriptInterface
+        public boolean supportsVideoAudio() {
+            return getPackageName().endsWith(".beta");
+        }
+
+        @JavascriptInterface
+        public boolean prepareVideoAudioPicker(String selectionId) {
+            if (!supportsVideoAudio() || !videoAudio.reserveSelection(selectionId)) {
+                return false;
+            }
+            videoAudio.releaseSelection(nextVideoAudioSelection);
+            nextVideoAudioSelection = selectionId;
+            nextPickerMode = "video";
+            return true;
+        }
+
+        @JavascriptInterface
+        public void releaseVideoAudioSelection(String selectionId) {
+            videoAudio.releaseSelection(selectionId);
+        }
+
+        @JavascriptInterface
+        public boolean prepareVideoAudioRequest(String selectionId, String requestId) {
+            return supportsVideoAudio() && videoAudio.reserveRequest(selectionId, requestId);
+        }
+
+        @JavascriptInterface
+        public void cancelVideoAudioRequest(String requestId) {
+            videoAudio.cancelRequest(requestId);
         }
 
         @JavascriptInterface
