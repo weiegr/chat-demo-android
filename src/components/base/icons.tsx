@@ -3,6 +3,29 @@ import { useRef } from 'react'
 import { useReversibleProgress } from './useReversibleProgress.js'
 import styles from './icons.module.css'
 
+export const IconPhoneOutline20 = () => (
+  <svg width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path
+      d="M7.1 3.1 4.9 4c-1 .4-1.5 1.4-1.3 2.5A18.1 18.1 0 0 0 17.5 20.4c1.1.2 2.1-.3 2.5-1.3l.9-2.2c.2-.5 0-1.1-.5-1.4l-3.6-2.1c-.5-.3-1.1-.2-1.4.2l-1.3 1.6a13.3 13.3 0 0 1-5.3-5.3l1.6-1.3c.4-.3.5-.9.2-1.4L8.5 3.6c-.3-.5-.9-.7-1.4-.5Z"
+      stroke="currentColor"
+      strokeWidth={1.65}
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
+export const IconNotebookOutline20 = () => (
+  <svg width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <rect x={5} y={3} width={15} height={18} rx={2.5} stroke="currentColor" strokeWidth={1.65} />
+    <path
+      d="M3 7h4M3 12h4m-4 5h4m3-9h6m-6 4h6"
+      stroke="currentColor"
+      strokeWidth={1.65}
+      strokeLinecap="round"
+    />
+  </svg>
+)
+
 export const IconCheckOutline16 = () => (
   <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path
@@ -666,6 +689,18 @@ export const IconCameraOutline20 = () => (
     <path
       d="M10 8a3.2 3.2 0 1 1 0 6.4A3.2 3.2 0 0 1 10 8Zm0 1.5a1.7 1.7 0 1 0 0 3.4 1.7 1.7 0 0 0 0-3.4Z"
       fill="currentColor"
+    />
+  </svg>
+)
+
+export const IconVideoOutline20 = () => (
+  <svg width={20} height={20} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+    <rect x={2.5} y={4.5} width={10} height={11} rx={2} stroke="currentColor" strokeWidth={1.5} />
+    <path
+      d="m12.5 8 4.2-2.5a.5.5 0 0 1 .8.43v8.14a.5.5 0 0 1-.8.43L12.5 12"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinejoin="round"
     />
   </svg>
 )

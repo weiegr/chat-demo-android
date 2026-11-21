@@ -3,7 +3,7 @@ import { BackupError, fail } from './errors.js'
 import type { SessionIndexEntry } from './format.js'
 import { INDEX_PATH, MANIFEST_PATH, USER_PATH, parseSessionPath, sessionFilesDir } from './paths.js'
 import { checkManifest, readSessionFile, readSessionIndex } from './schema.js'
-import { toLocalSession } from './toLocal.js'
+import { toLocalSession, type LocalSession } from './toLocal.js'
 import {
   ArchiveError,
   isZipFile,
@@ -73,9 +73,9 @@ export const checkArchiveFormat = async (file: File): Promise<void> => {
 }
 
 /**
- * 流式导入：manifest → user（不导入）→ 全部会话 JSON → index → 全部图片。
- * 也支持会话与图片交错排列、index 位于末尾的条目顺序。
- * 会话读完立即暂存，只保留图片路径映射；图片全部读完后逐会话回填 MIME，不改变图片身份。
+ * 流式导入：manifest → user（不导入）→ 全部会话 JSON → index → 全部媒体原件。
+ * 也支持会话与媒体原件交错排列、index 位于末尾的条目顺序。
+ * 会话读完立即暂存，只保留原件路径映射；原件全部读完后逐会话回填图片 MIME。
  * 写入导入暂存存储；调用方负责先清空暂存，成功后替换正式数据，失败时清理暂存。
  */
 export const importArchive = async (file: File): Promise<void> => {
@@ -83,22 +83,35 @@ export const importArchive = async (file: File): Promise<void> => {
     fail('backupUnrecognized')
   }
   const imported = new Set<string>()
-  const images = new Map<string, string>()
+  const originals: LocalSession['originals'] = new Map()
+  /** 普通附件与只用于本地播放的原视频不得共用文件 ID。 */
+  const fileKinds = new Map<string, 'attachment' | 'video'>()
   /** 已保存的原件：文件 ID → MIME。同一图片出现在多个会话目录时只保存一次。 */
   const stored = new Map<string, string>()
   let manifest = false
   let index: SessionIndexEntry[] | undefined
   let currentSessionId: string | undefined
 
-  const saveImage = async (entry: ArchiveEntry, id: string) => {
+  const saveOriginal = async (
+    entry: ArchiveEntry,
+    { id, videoType }: { id: string; videoType?: string }
+  ) => {
     if (stored.has(id)) {
       await skipEntry(entry)
       return
     }
     const data = await readEntry(entry)
-    const type = imageType(new Uint8Array(await data.slice(0, 16).arrayBuffer()))
+    const type = videoType ?? imageType(new Uint8Array(await data.slice(0, 16).arrayBuffer()))
     await db.saveStagingFiles([{ id, blob: new Blob([data], { type }) }])
     stored.set(id, type)
+  }
+
+  const registerFile = (id: string, kind: 'attachment' | 'video') => {
+    const previous = fileKinds.get(id)
+    if (previous && previous !== kind) {
+      fail('backupInvalidFiles')
+    }
+    fileKinds.set(id, kind)
   }
 
   try {
@@ -121,8 +134,16 @@ export const importArchive = async (file: File): Promise<void> => {
         }
         imported.add(sessionId)
         currentSessionId = sessionId
-        for (const [imagePath, id] of local.images) {
-          images.set(imagePath, id)
+        for (const message of local.session.messages) {
+          if (message.role === 'user') {
+            message.files.forEach((file) => registerFile(file.id, 'attachment'))
+            if (message.video) {
+              registerFile(message.video.id, 'video')
+            }
+          }
+        }
+        for (const [mediaPath, original] of local.originals) {
+          originals.set(mediaPath, original)
         }
         await db.addStagingSession(local.session)
       } else if (path === INDEX_PATH && !index) {
@@ -132,9 +153,9 @@ export const importArchive = async (file: File): Promise<void> => {
           ? imported.has(/^chat_sessions\/([^/]+)_files\//.exec(path)?.[1] ?? '')
           : currentSessionId && path.startsWith(sessionFilesDir(currentSessionId))
       ) {
-        // 没有被引用的条目不保存，引用了但缺失的图片只展示文件名。
-        const id = images.get(path)
-        await (id === undefined ? skipEntry(entry) : saveImage(entry, id))
+        // 没有被引用的条目不保存；缺失原件时仍保留附件信息。
+        const original = originals.get(path)
+        await (original ? saveOriginal(entry, original) : skipEntry(entry))
       } else {
         fail('backupIncomplete')
       }

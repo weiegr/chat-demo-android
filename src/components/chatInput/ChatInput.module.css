@@ -114,6 +114,37 @@
   cursor: default;
 }
 
+.videoStatus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px 0;
+  font-size: 13px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.videoAction {
+  padding: 4px;
+  border: none;
+  background: none;
+  color: var(--dsw-alias-brand-primary);
+  font: inherit;
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+.videoActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  justify-content: flex-end;
+}
+
 .attachment {
   position: relative;
   flex-shrink: 0;
@@ -737,6 +768,10 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+}
+
+.attachGridWithCall {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .attachCard {

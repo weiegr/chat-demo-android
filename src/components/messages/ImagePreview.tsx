@@ -2,6 +2,7 @@ import clsx from 'clsx'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslate } from '../../i18n/index.js'
+import { seekVideoCover } from '../../services/video/frames.js'
 import { IconCloseFill14 } from '../base/icons.js'
 import { closeImagePreview, useImagePreview } from './imagePreviewState.js'
 import styles from './ImagePreview.module.css'
@@ -16,6 +17,7 @@ const openPreviews: object[] = []
 export const ImagePreview = () => {
   const t = useTranslate()
   const preview = useImagePreview((state) => state.preview)
+  const overlayRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
   const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading')
 
@@ -35,13 +37,24 @@ export const ImagePreview = () => {
         closeImagePreview()
       }
     }
+    const onFocusIn = (event: FocusEvent) => {
+      if (
+        openPreviews.at(-1) === token &&
+        event.target instanceof Node &&
+        !overlayRef.current?.contains(event.target)
+      ) {
+        closeRef.current?.focus()
+      }
+    }
     document.addEventListener('keydown', onKeyDown)
+    document.addEventListener('focusin', onFocusIn)
 
     const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null
     closeRef.current?.focus()
     return () => {
       openPreviews.splice(openPreviews.indexOf(token), 1)
       document.removeEventListener('keydown', onKeyDown)
+      document.removeEventListener('focusin', onFocusIn)
       focused?.focus()
     }
   }, [src])
@@ -52,19 +65,19 @@ export const ImagePreview = () => {
 
   return createPortal(
     <div
+      ref={overlayRef}
       className={styles.overlay}
       role="dialog"
       aria-modal="true"
       aria-label={preview.alt}
       onMouseDown={(event) => {
-        // 只有点在遮罩空白处才关闭；点在图片上不关
+        // 只在点击遮罩空白处时关闭
         if (event.target === event.currentTarget) {
           closeImagePreview()
         }
       }}
       onKeyDown={(event) => {
-        // 层内只有关闭按钮可聚焦，Tab 不跑到遮罩背后的页面
-        if (event.key === 'Tab') {
+        if (event.key === 'Tab' && preview.kind === 'image') {
           event.preventDefault()
           closeRef.current?.focus()
         }
@@ -82,7 +95,22 @@ export const ImagePreview = () => {
       </button>
       {status === 'loading' ? <span className={styles.spinner} /> : null}
       {status === 'error' ? (
-        <span className={styles.failed}>{t('imagePreviewFailed')}</span>
+        <span className={styles.failed}>
+          {t(preview.kind === 'video' ? 'videoPreviewFailed' : 'imagePreviewFailed')}
+        </span>
+      ) : preview.kind === 'video' ? (
+        <video
+          key={preview.src}
+          className={clsx(styles.image, styles.video, status === 'loading' && styles.imageLoading)}
+          src={preview.src}
+          aria-label={preview.alt}
+          controls
+          playsInline
+          preload="auto"
+          onLoadedMetadata={(event) => seekVideoCover(event.currentTarget)}
+          onLoadedData={() => setStatus('loaded')}
+          onError={() => setStatus('error')}
+        />
       ) : (
         <img
           className={clsx(styles.image, status === 'loading' && styles.imageLoading)}

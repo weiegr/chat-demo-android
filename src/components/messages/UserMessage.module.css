@@ -27,6 +27,7 @@
 }
 
 .files {
+  --video-tile-size: var(--message-file-image-size, 120px);
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;

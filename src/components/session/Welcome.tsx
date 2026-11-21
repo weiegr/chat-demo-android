@@ -667,7 +667,7 @@ const positionHintItems = (
 }
 
 /** 新对话：模式标题 + 可拖拽三模式滑块 + 模式说明 + 输入框。桌面端居中；移动端输入框吸底 */
-export const Welcome = () => {
+export const Welcome = ({ onStartCall }: { onStartCall?: (sessionId: string | null) => void }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
   const chatMode = useSettings((state) => state.chatMode)
@@ -801,7 +801,7 @@ export const Welcome = () => {
           </div>
         </div>
 
-        <ChatInput sessionId={null} />
+        <ChatInput sessionId={null} onStartCall={onStartCall} />
       </div>
     </div>
   )

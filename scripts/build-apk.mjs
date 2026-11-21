@@ -1,13 +1,14 @@
 /**
- * 将 dist/ 静态产物封装并构建为已签名的 Android WebView APK（dist-apk/chat-demo.apk）。
+ * 将 dist/ 静态产物封装成已签名的 Android WebView APK。BETA=1 使用独立包名。
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { cp, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises'
+import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
 const root = process.cwd()
+const beta = process.env.BETA === '1'
 const isWin = process.platform === 'win32'
 const exe = (name) => (isWin ? `${name}.exe` : name)
 const bat = (name) => (isWin ? `${name}.bat` : name)
@@ -89,11 +90,24 @@ const pkgMatch = /package="([^"]+)"/.exec(manifestXml)
 if (!pkgMatch) {
   throw new Error('AndroidManifest.xml 中未找到 package 属性')
 }
-const pkgSegments = pkgMatch[1].split('.')
+const javaPackage = pkgMatch[1]
+const pkgSegments = javaPackage.split('.')
 
 // 2. aapt2 编译并链接资源
+let resources = path.join(root, 'android', 'res')
+if (beta) {
+  const betaResources = path.join(workDir, 'res')
+  await cp(resources, betaResources, { recursive: true })
+  resources = betaResources
+  const stringsPath = path.join(resources, 'values', 'strings.xml')
+  const strings = await readFile(stringsPath, 'utf8')
+  await writeFile(
+    stringsPath,
+    strings.replace(/(<string name="app_name">)[^<]*(<\/string>)/, '$1API demo β$2')
+  )
+}
 const compiledResZip = path.join(workDir, 'compiled-res.zip')
-run(aapt2, ['compile', '--dir', path.join(root, 'android', 'res'), '-o', compiledResZip])
+run(aapt2, ['compile', '--dir', resources, '-o', compiledResZip])
 
 const unalignedApk = path.join(workDir, 'unaligned.apk')
 run(aapt2, [
@@ -102,6 +116,9 @@ run(aapt2, [
   androidJar,
   '--manifest',
   manifestPath,
+  ...(beta
+    ? ['--rename-manifest-package', `${javaPackage}.beta`, '--custom-package', javaPackage]
+    : []),
   '--java',
   path.join(workDir, 'gen'),
   '-o',
@@ -111,7 +128,10 @@ run(aapt2, [
 
 // 3. javac 编译 Java 源码与 R.java
 const rJava = path.join(workDir, 'gen', ...pkgSegments, 'R.java')
-const mainJava = path.join(root, 'android', 'java', ...pkgSegments, 'MainActivity.java')
+const sourceDir = path.join(root, 'android', 'java', ...pkgSegments)
+const javaFiles = (await readdir(sourceDir))
+  .filter((name) => name.endsWith('.java'))
+  .map((name) => path.join(sourceDir, name))
 run(javaBin('javac'), [
   '--release',
   '11',
@@ -122,7 +142,7 @@ run(javaBin('javac'), [
   '-d',
   path.join(workDir, 'classes'),
   rJava,
-  mainJava,
+  ...javaFiles,
 ])
 
 // 4. d8 将 class 转为 classes.dex
@@ -184,7 +204,7 @@ if (!existsSync(keystorePath)) {
   ])
 }
 
-const finalApk = path.join(outDir, 'chat-demo.apk')
+const finalApk = path.join(outDir, beta ? 'chat-demo-beta.apk' : 'chat-demo.apk')
 run(apksigner, [
   'sign',
   '--ks',

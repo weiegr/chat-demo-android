@@ -15,10 +15,12 @@ export const SessionView = ({
   session,
   streaming,
   siderCollapsed,
+  onStartCall,
 }: {
   session: Session
   streaming: boolean
   siderCollapsed: boolean
+  onStartCall?: (sessionId: string | null) => void
 }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
@@ -54,7 +56,7 @@ export const SessionView = ({
         streaming={streaming}
         footer={
           <div className={clsx(styles.inputContainer, editing && styles.inputContainerEditing)}>
-            <ChatInput sessionId={session.id} />
+            <ChatInput sessionId={session.id} onStartCall={onStartCall} />
           </div>
         }
       />

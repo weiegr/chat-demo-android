@@ -1,4 +1,5 @@
 import type { ChatMode } from '../../settings.js'
+import type { VideoAttachment } from '../types.js'
 
 /**
  * 历史会话导出产物（deepseek_data-*.zip）的类型定义。
@@ -66,6 +67,7 @@ export type ChatMessage = {
   inserted_at: Iso8601Utc
   /** 按发生顺序排列 */
   fragments: Fragment[]
+  video?: VideoAttachment & { export_path: string | null }
 }
 
 /** 用户的提问 */

@@ -2,6 +2,7 @@ import clsx from 'clsx'
 import { memo } from 'react'
 import { retryUpload } from '../../services/chat/store.js'
 import type { UserMessage as UserMessageType } from '../../services/chat/types.js'
+import { StoredVideoTile } from '../files/VideoTile.js'
 import {
   BranchSwitcher,
   type MessageVersions,
@@ -17,6 +18,7 @@ export const UserMessage = memo(function UserMessage({
   retryUploadId,
   isFirst,
   busy,
+  readOnly,
   versions,
   onSelectVersion,
 }: {
@@ -27,20 +29,26 @@ export const UserMessage = memo(function UserMessage({
   isFirst: boolean
   isLast?: boolean
   busy: boolean
+  readOnly: boolean
   versions: MessageVersions
   onSelectVersion: SelectMessageVersion
 }) {
   const isEditing = useUserEdit(
-    (state) => state.active?.sessionId === sessionId && state.active.messageId === message.id
+    (state) =>
+      !readOnly && state.active?.sessionId === sessionId && state.active.messageId === message.id
   )
-  const files = message.files
+  const editable = !readOnly && !busy
+  const video = message.video
+  const files = video
+    ? message.files.filter((file) => !video.frameIds.includes(file.id))
+    : message.files
 
   return (
     <div
       data-editing={isEditing ? 'true' : undefined}
       className={clsx(styles.container, isFirst && styles.isFirst)}
     >
-      {files.length > 0 ? (
+      {files.length > 0 || video ? (
         <div
           className={clsx(
             styles.files,
@@ -48,6 +56,7 @@ export const UserMessage = memo(function UserMessage({
             isEditing && !message.content && styles.editingTarget
           )}
         >
+          {video ? <StoredVideoTile video={video} sessionId={sessionId} /> : null}
           {files.map((file) => (
             <MessageFile
               key={file.id}
@@ -61,19 +70,15 @@ export const UserMessage = memo(function UserMessage({
         <div
           className={clsx(
             styles.bubble,
-            !busy && styles.clickableBubble,
+            editable && styles.clickableBubble,
             isEditing && styles.editingTarget
           )}
-          onClick={() => {
-            if (!busy && !isEditing) {
-              startUserEdit(sessionId, message)
-            }
-          }}
+          onClick={editable && !isEditing ? () => startUserEdit(sessionId, message) : undefined}
         >
           {message.content}
         </div>
       ) : null}
-      {versions.ids.length > 1 ? (
+      {!readOnly && versions.ids.length > 1 ? (
         <div className={styles.bottom}>
           <BranchSwitcher versions={versions} disabled={busy} onSelect={onSelectVersion} />
         </div>

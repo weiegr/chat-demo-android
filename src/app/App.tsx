@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslate } from '../i18n/index.js'
 import { useSettings } from '../services/settings.js'
 import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport.js'
 import {
   bindChatPersistence,
+  createLiveSession,
   initChat,
   newChat,
   retrySaveSessions,
@@ -13,6 +14,9 @@ import {
 import { SearchPanel } from '../components/search/SearchPanel.js'
 import { closeSearchPanel } from '../components/search/searchPanelState.js'
 import { SessionView } from '../components/session/SessionView.js'
+import { LiveCallView } from '../components/live/LiveCallView.js'
+import type { LiveCall } from '../components/live/useLiveCall.js'
+import { createSpeechOutput, type SpeechOutput } from '../services/speech/pcmPlayback.js'
 import { MobileHeader } from '../components/session/MobileHeader.js'
 import { Welcome } from '../components/session/Welcome.js'
 import { ensureApiKey } from '../components/settings/settingsDialogState.js'
@@ -33,6 +37,7 @@ import styles from './App.module.css'
 
 export const App = () => {
   const t = useTranslate()
+  const [liveCall, setLiveCall] = useState<LiveCall | null>(null)
   const isMobile = useIsMobile()
   const locale = useSettings((state) => state.locale)
   // 移动端侧边栏以独立抽屉管理开合状态
@@ -115,63 +120,96 @@ export const App = () => {
     showToast(t('storageEphemeral'))
   }, [t])
 
+  const openLiveCall = useCallback(
+    (sourceId: string | null) => {
+      const session = createLiveSession(sourceId)
+      if (!session || liveCall || !ensureApiKey()) {
+        return
+      }
+      stopReadAloud()
+      let output: SpeechOutput | null = null
+      try {
+        // 同步在点击事件内解锁输出，后续收到回复时可直接播放。
+        output = createSpeechOutput()
+      } catch {
+        // 设备无法播放时仍可在通话界面发送和阅读文字。
+      }
+      newChat()
+      setLiveCall({ session, output })
+    },
+    [liveCall]
+  )
+
   return (
     <>
       <div ref={frameRef} className={styles.frame}>
-        {isMobile ? <MobileSider /> : <Sidebar collapsed={siderCollapsed} />}
-        <main className={styles.main}>
-          {saveError ? (
-            <div className={styles.saveError} role="alert">
-              <span>{t('sessionSaveFailed')}</span>
-              <Button
-                variant="outlined"
-                size="s"
-                disabled={importingHistory}
-                onClick={retrySaveSessions}
-              >
-                {t('retry')}
-              </Button>
-            </div>
-          ) : null}
-          <div className={styles.content}>
-            {isMobile ? null : <CollapsedSider collapsed={siderCollapsed} />}
-            {!ready || (activeId !== null && !session) ? (
-              <div className={styles.loadingView}>
-                {isMobile ? <MobileHeader /> : null}
-                <div className={styles.loadingState} role="status" aria-live="polite">
-                  <span>
-                    {(!ready ? initError : sessionLoadError)
-                      ? t(!ready ? 'sessionListLoadFailed' : 'sessionLoadFailed')
-                      : t('sessionLoading')}
-                  </span>
-                  {(!ready ? initError : sessionLoadError) ? (
-                    <Button
-                      variant="outlined"
-                      size="m"
-                      onClick={() => {
-                        if (!ready) {
-                          void initChat()
-                        } else if (activeId !== null) {
-                          selectSession(activeId)
-                        }
-                      }}
-                    >
-                      {t('retry')}
-                    </Button>
-                  ) : null}
+        {liveCall ? (
+          <LiveCallView
+            call={liveCall}
+            onHangUp={() => {
+              setLiveCall(null)
+              selectSession(liveCall.session.id)
+            }}
+          />
+        ) : (
+          <>
+            {isMobile ? <MobileSider /> : <Sidebar collapsed={siderCollapsed} />}
+            <main className={styles.main}>
+              {saveError ? (
+                <div className={styles.saveError} role="alert">
+                  <span>{t('sessionSaveFailed')}</span>
+                  <Button
+                    variant="outlined"
+                    size="s"
+                    disabled={importingHistory}
+                    onClick={retrySaveSessions}
+                  >
+                    {t('retry')}
+                  </Button>
                 </div>
+              ) : null}
+              <div className={styles.content}>
+                {isMobile ? null : <CollapsedSider collapsed={siderCollapsed} />}
+                {!ready || (activeId !== null && !session) ? (
+                  <div className={styles.loadingView}>
+                    {isMobile ? <MobileHeader /> : null}
+                    <div className={styles.loadingState} role="status" aria-live="polite">
+                      <span>
+                        {(!ready ? initError : sessionLoadError)
+                          ? t(!ready ? 'sessionListLoadFailed' : 'sessionLoadFailed')
+                          : t('sessionLoading')}
+                      </span>
+                      {(!ready ? initError : sessionLoadError) ? (
+                        <Button
+                          variant="outlined"
+                          size="m"
+                          onClick={() => {
+                            if (!ready) {
+                              void initChat()
+                            } else if (activeId !== null) {
+                              selectSession(activeId)
+                            }
+                          }}
+                        >
+                          {t('retry')}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : session ? (
+                  <SessionView
+                    session={session}
+                    streaming={streaming}
+                    siderCollapsed={siderCollapsed}
+                    onStartCall={openLiveCall}
+                  />
+                ) : (
+                  <Welcome onStartCall={openLiveCall} />
+                )}
               </div>
-            ) : session ? (
-              <SessionView
-                session={session}
-                streaming={streaming}
-                siderCollapsed={siderCollapsed}
-              />
-            ) : (
-              <Welcome />
-            )}
-          </div>
-        </main>
+            </main>
+          </>
+        )}
         <SearchPanel />
       </div>
       <SettingsDialog />

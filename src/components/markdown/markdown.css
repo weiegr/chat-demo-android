@@ -1,6 +1,7 @@
 .ds-markdown {
   font: var(--dsw-font-markdown-base);
   color: var(--dsw-alias-label-primary);
+  overflow-wrap: anywhere;
 }
 
 .ds-markdown strong {
@@ -220,13 +221,29 @@
   }
 }
 
-.ds-markdown-math.katex-display {
-  display: block;
-  text-align: center;
-  overflow-x: auto;
-  overflow-y: hidden;
+.ds-markdown-math.katex-display,
+.ds-markdown-inline-math {
+  /* 将 KaTeX 的绝对定位 MathML 约束在公式自身的滚动容器内。 */
+  position: relative;
   max-width: 100%;
+  overflow-x: auto;
+}
+
+.ds-markdown-math.katex-display {
+  display: flex;
+  justify-content: safe center;
+  box-sizing: border-box;
+  overflow-y: hidden;
   padding: 4px;
+
+  > .katex {
+    flex: none;
+  }
+}
+
+.ds-markdown-inline-math {
+  display: inline-block;
+  vertical-align: middle;
 }
 
 .ds-markdown > * .ds-markdown-math {

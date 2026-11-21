@@ -1,27 +1,24 @@
 import clsx from 'clsx'
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ChangeEvent,
-} from 'react'
+import { memo, useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import {
   IconCameraOutline20,
   IconCheckOutline16,
   IconCloseOutline16,
   IconFolderOutline20,
-  IconGlobeLanguageOutline14,
   IconImageOutline20,
   IconPaperclipOutline16,
+  IconPhoneOutline20,
   IconPlusCircleOutline24,
   IconSendOutline16,
   IconStopFill16,
-  IconThinkOutline14,
+  IconVideoOutline20,
 } from '../base/icons.js'
-import { resolveModeModel, setSearch, setThinking, useSettings } from '../../services/settings.js'
+import {
+  canTranscribeVideo,
+  canUploadVideo,
+  resolveModeModel,
+  useSettings,
+} from '../../services/settings.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { editMessage, sendMessage, stopReply, useChatStore } from '../../services/chat/store.js'
 import {
@@ -37,11 +34,12 @@ import {
   setDraftText,
   shouldSkipDraftUpload,
   useDrafts,
+  type DraftVideoTranscript,
 } from '../../services/chat/drafts.js'
 import { canInlineTextAttachment } from '../../services/chat/inlineFiles.js'
 import { stopReadAloud } from '../../services/speech/readAloud.js'
 import { IconButton } from '../base/IconButton.js'
-import { Tooltip } from '../base/Tooltip.js'
+import { Menu } from '../base/Menu.js'
 import { ensureApiKey } from '../settings/settingsDialogState.js'
 import { dismissKeyboard } from '../sider/mobileSiderState.js'
 import { DragMask, useFileDrop } from './DragMask.js'
@@ -54,8 +52,11 @@ import {
   useUserEdit,
   type ActiveUserEdit,
 } from '../messages/userEditState.js'
+import { ChatModeToggles } from './ChatModeToggles.js'
+import { ChatTextarea } from './ChatTextarea.js'
 import { DraftAttachments } from './DraftAttachments.js'
 import { useVoiceInput } from './useVoiceInput.js'
+import { useVideoInput } from './useVideoInput.js'
 import { VoiceButton } from './VoiceButton.js'
 import { Spectrum } from './Spectrum.js'
 import { useTranslate } from '../../i18n/index.js'
@@ -69,8 +70,10 @@ interface RecentPhotoItem {
   thumb: string
 }
 
+type PickerMode = 'camera' | 'gallery' | 'file' | 'video'
+
 interface AndroidMediaBridge {
-  setNextPickerMode?: (mode: 'camera' | 'gallery' | 'file') => void
+  setNextPickerMode?: (mode: PickerMode) => void
   hasGalleryPermission?: () => boolean
   requestGalleryPermission?: () => void
   requestRecentPhotos?: (limit: number) => void
@@ -83,7 +86,12 @@ const getAndroidHost = (): AndroidMediaBridge | undefined =>
 const RECENT_PHOTOS_LIMIT = 10
 
 /** 输入框：自适应高度的文本框 + 文件 + 深度思考与智能搜索开关 + 语音输入 + 发送 / 停止 */
-export const ChatInput = memo(function ChatInput({ sessionId }: { sessionId: string | null }) {
+type ChatInputProps = {
+  sessionId: string | null
+  onStartCall?: (sessionId: string | null) => void
+}
+
+export const ChatInput = memo(function ChatInput({ sessionId, onStartCall }: ChatInputProps) {
   const activeEdit = useUserEdit((state) =>
     sessionId !== null && state.active?.sessionId === sessionId ? state.active : null
   )
@@ -93,16 +101,14 @@ export const ChatInput = memo(function ChatInput({ sessionId }: { sessionId: str
     : sessionId === null
       ? 'new'
       : `session:${sessionId}`
-  return <Input key={key} sessionId={sessionId} activeEdit={activeEdit} />
+  return <Input key={key} sessionId={sessionId} activeEdit={activeEdit} onStartCall={onStartCall} />
 })
 
 const Input = ({
   sessionId,
+  onStartCall,
   activeEdit,
-}: {
-  sessionId: string | null
-  activeEdit: ActiveUserEdit | null
-}) => {
+}: ChatInputProps & { activeEdit: ActiveUserEdit | null }) => {
   const t = useTranslate()
   const draftKey = activeEdit
     ? getEditDraftKey(activeEdit.sessionId, activeEdit.messageId)
@@ -118,7 +124,12 @@ const Input = ({
   const activeMode = sessionMode ?? globalMode
   const activeModel = resolveModeModel(activeMode, rpModel)
   const useOcrModel = activeModel === 'deepseek-v4-pro'
-  const isRpMode = activeMode === 'rp'
+  const videoAllowed = useSettings((settings) => canUploadVideo(activeMode, settings))
+  const videoAudioEnabled = useSettings((settings) => canTranscribeVideo(activeMode, settings))
+  const video = useVideoInput(draftKey, sessionId)
+  const videoEntry = videoAllowed && activeEdit === null
+  const videoBlocked = !videoAllowed && Boolean(draft.video)
+  const audioFailed = videoAudioEnabled && draft.video && video.audioFailureId === draft.video.id
 
   useEffect(() => {
     if (!useOcrModel && attachments.length > 0) {
@@ -128,7 +139,7 @@ const Input = ({
 
   const draftReady = useUploads((state) => {
     if (!activeEdit) {
-      return prepareDraftMessage(draft, state.tasks, useOcrModel) !== null
+      return prepareDraftMessage(draft, state.tasks, useOcrModel, videoAllowed) !== null
     }
     const allUploaded = draft.attachments.every((item) => {
       if (
@@ -150,15 +161,13 @@ const Input = ({
   const streaming = useChatStore(
     (state) => sessionId !== null && Object.hasOwn(state.streaming, sessionId)
   )
-  const thinking = useSettings((state) => state.thinking)
   const importingHistory = useChatStore((state) => state.importingHistory)
   const isMobile = useIsMobile()
-  const search = useSettings((state) => state.search)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
+  const videoInputRef = useRef<HTMLInputElement>(null)
   const albumInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const togglesRef = useRef<HTMLDivElement>(null)
   const attachPanelRef = useRef<HTMLDivElement>(null)
   const attachDismissCleanupRef = useRef<(() => void) | null>(null)
   const [attachMenuOpen, setAttachMenuOpen] = useState(false)
@@ -391,23 +400,6 @@ const Input = ({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [isMobile, attachMenuOpen, closeAttachMenu])
 
-  useLayoutEffect(() => {
-    const toggles = togglesRef.current
-    if (!toggles) {
-      return
-    }
-
-    const updateLabels = () => {
-      toggles.classList.remove(styles.collapsedToggles)
-      toggles.classList.toggle(styles.collapsedToggles, toggles.scrollWidth > toggles.clientWidth)
-    }
-
-    updateLabels()
-    const observer = new ResizeObserver(updateLabels)
-    observer.observe(toggles)
-    return () => observer.disconnect()
-  }, [t, isRpMode])
-
   const acceptFiles = (files: File[]) => {
     if (files.length === 0 || useChatStore.getState().importingHistory || !ensureApiKey()) {
       return
@@ -422,12 +414,17 @@ const Input = ({
     event.target.value = ''
     closeAttachMenu()
   }
-  const openPicker = (mode: 'camera' | 'gallery' | 'file', input: HTMLInputElement | null) => {
+  const openPicker = (mode: PickerMode, input: HTMLInputElement | null) => {
+    if (!input || (mode === 'video' && !video.canSelect())) {
+      return
+    }
     if (useChatStore.getState().importingHistory || !ensureApiKey()) {
       return
     }
-    getAndroidHost()?.setNextPickerMode?.(mode)
-    input?.click()
+    if (mode !== 'video' || !video.preparePicker()) {
+      getAndroidHost()?.setNextPickerMode?.(mode)
+    }
+    input.click()
     closeAttachMenu()
   }
   const toggleAttachMenu = () => {
@@ -495,10 +492,10 @@ const Input = ({
   const retryFile = useCallback(
     (id: string) => {
       if (!useChatStore.getState().importingHistory && ensureApiKey()) {
-        retryDraftAttachment(draftKey, id, useSettings.getState().apiKey ?? '')
+        retryDraftAttachment(draftKey, id, useSettings.getState().apiKey ?? '', videoAllowed)
       }
     },
-    [draftKey]
+    [draftKey, videoAllowed]
   )
   const removeFile = useCallback(
     (id: string) => {
@@ -537,12 +534,36 @@ const Input = ({
 
   // 移动端录音时用频谱替代输入框内容
   const recording = voice.status === 'recording'
+  const processingAudio = video.status !== null && video.status.phase !== 'frames'
 
   // 排队、上传中或上传失败的附件都留在输入框，全部上传成功后才能发送
-  const canSend = !importingHistory && !streaming && voice.status === 'idle' && draftReady
+  const canSend =
+    !importingHistory &&
+    !streaming &&
+    voice.status === 'idle' &&
+    video.status === null &&
+    draftReady
+
+  const submitDraft = (transcript?: DraftVideoTranscript) => {
+    if (!ensureApiKey() || !sendMessage(sessionId, transcript)) {
+      return false
+    }
+    stopReadAloud()
+    closeAttachMenu()
+    if (isMobile) {
+      textareaRef.current?.blur()
+    } else {
+      textareaRef.current?.focus()
+    }
+    return true
+  }
 
   const send = () => {
-    if (useChatStore.getState().importingHistory || voice.status !== 'idle') {
+    if (
+      useChatStore.getState().importingHistory ||
+      voice.status !== 'idle' ||
+      video.isProcessing()
+    ) {
       return
     }
     const currentEdit = useUserEdit.getState().active
@@ -589,25 +610,52 @@ const Input = ({
       return
     }
 
-    if (!prepareDraftMessage(getDraft(sessionId), useUploads.getState().tasks, useOcrModel)) {
+    if (
+      !prepareDraftMessage(
+        getDraft(sessionId),
+        useUploads.getState().tasks,
+        useOcrModel,
+        videoAllowed
+      )
+    ) {
       return
     }
     // 文本与上传完成态由提交动作读取最新快照，不使用上一次渲染的草稿。
-    if (!ensureApiKey() || !sendMessage(sessionId)) {
-      return
-    }
-    stopReadAloud()
-    closeAttachMenu()
-    if (isMobile) {
-      textareaRef.current?.blur()
-    } else {
-      textareaRef.current?.focus()
+    if (ensureApiKey()) {
+      void video.send(submitDraft)
     }
   }
 
   const hasNativeGallery = Boolean(getAndroidHost())
+  const fileAction = {
+    key: 'file',
+    icon: <IconFolderOutline20 />,
+    label: t('attachFile'),
+    onClick: () => openPicker('file', fileInputRef.current),
+  }
+  const videoAction = videoEntry
+    ? {
+        key: 'video',
+        icon: <IconVideoOutline20 />,
+        label: t('attachVideo'),
+        onClick: () => openPicker('video', videoInputRef.current),
+      }
+    : null
+  const callAction =
+    activeMode === 'fast' && activeEdit === null && onStartCall
+      ? {
+          key: 'call',
+          icon: <IconPhoneOutline20 />,
+          label: t('liveCall'),
+          onClick: () => {
+            setAttachMenuOpen(false)
+            dismissKeyboard()
+            onStartCall(sessionId)
+          },
+        }
+      : null
   const attachActions = [
-    {
+    videoAction ?? {
       key: 'camera',
       icon: <IconCameraOutline20 />,
       label: t('attachCamera'),
@@ -619,12 +667,8 @@ const Input = ({
       label: t('attachAlbum'),
       onClick: () => openPicker('gallery', albumInputRef.current),
     },
-    {
-      key: 'file',
-      icon: <IconFolderOutline20 />,
-      label: t('attachFile'),
-      onClick: () => openPicker('file', fileInputRef.current),
-    },
+    fileAction,
+    ...(callAction ? [callAction] : []),
   ]
 
   return (
@@ -656,98 +700,79 @@ const Input = ({
         ) : null}
         <DraftAttachments
           items={attachments}
+          sessionId={sessionId}
           existingFiles={activeEdit?.files}
+          existingVideo={activeEdit?.video}
+          video={draft.video}
           useOcrModel={useOcrModel}
+          videoAllowed={videoAllowed}
           onRetry={retryFile}
           onRemove={removeFile}
           onRemoveExisting={removeUserEditExistingFile}
         />
-        <div className={styles.textareaWrapper}>
-          <textarea
-            ref={textareaRef}
-            className={clsx(styles.textarea, recording && isMobile && styles.textareaHidden)}
-            placeholder={t('chatInputPlaceholderChat')}
-            rows={isMobile ? 1 : 2}
-            // 移动端不自动聚焦，避免一打开就弹出键盘
-            autoFocus={!isMobile}
-            disabled={importingHistory}
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            onFocus={() => {
-              if (isMobile && attachMenuOpen) {
-                dismissAttachToKeyboard()
-              }
-            }}
-            onMouseDown={(event) => {
-              // 仅在移动浏览器（如 Safari）首次点击时手动聚焦，避免整页滚动；
-              // Android 原生 WebView 容器已裁剪溢流，保留原生轻触聚焦与光标落点。
-              if (
-                isMobile &&
-                !getAndroidHost() &&
-                event.button === 0 &&
-                document.activeElement !== event.currentTarget
-              ) {
-                event.preventDefault()
-                event.currentTarget.focus({ preventScroll: true })
-              }
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault()
-                send()
-              }
-            }}
-            onPaste={(event) => {
-              const files = Array.from(event.clipboardData.files)
-              if (files.length > 0) {
-                event.preventDefault()
-                acceptFiles(files)
-              }
-            }}
-          />
-          {recording && isMobile ? <Spectrum getAnalyser={voice.getAnalyser} /> : null}
-          <div className={styles.mirror} aria-hidden>
-            {isMobile ? (text.endsWith('\n') ? `${text} ` : text || ' ') : `${text}\n`}
+        {video.status ? (
+          <div className={styles.videoStatus}>
+            <span role="status">
+              {video.status.phase === 'frames'
+                ? t('videoProcessing', { progress: video.status.progress })
+                : t(
+                    video.status.phase === 'extracting'
+                      ? 'videoAudioExtracting'
+                      : 'videoAudioTranscribing'
+                  )}
+            </span>
+            <button type="button" className={styles.videoAction} onClick={video.cancel}>
+              {t('cancel')}
+            </button>
           </div>
-        </div>
-        <div className={styles.functionRow}>
-          {/* 深度思考 / 智能搜索开关，tooltip 在按钮上方 */}
-          <div ref={togglesRef} className={styles.toggles}>
-            <Tooltip content={t('deactivatedThinkTooltip')}>
+        ) : audioFailed ? (
+          <div className={styles.videoStatus}>
+            <span role="status">{t('videoAudioFailed')}</span>
+            <div className={styles.videoActions}>
               <button
                 type="button"
-                className={clsx(styles.toggle, thinking && styles.selected)}
-                aria-label={t('thinkingSwitch')}
-                aria-pressed={thinking}
-                // 保持当前输入焦点不丢失，避免切换开关时系统收起输入法
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => setThinking(!thinking)}
+                className={styles.videoAction}
+                disabled={!canSend}
+                onClick={send}
               >
-                <IconThinkOutline14 active={thinking} />
-                <span className={styles.toggleLabel}>{t('thinkingSwitch')}</span>
+                {t('videoAudioRetry')}
               </button>
-            </Tooltip>
-            {/* v4-pro 不支持服务端搜索工具，专家模式开关走客户端旁路搜索 */}
-            {isRpMode ? null : (
-              <Tooltip
-                content={t(useOcrModel ? 'bypassSearchTooltip' : 'deactivatedSearchTooltip')}
+              <button
+                type="button"
+                className={styles.videoAction}
+                disabled={!canSend}
+                onClick={() => void video.send(submitDraft, true)}
               >
-                <button
-                  type="button"
-                  className={clsx(styles.toggle, search && styles.selected)}
-                  aria-label={t(useOcrModel ? 'bypassSearch' : 'search')}
-                  aria-pressed={search}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => setSearch(!search)}
-                >
-                  <IconGlobeLanguageOutline14 active={search} />
-                  <span className={styles.toggleLabel}>
-                    {t(useOcrModel ? 'bypassSearch' : 'search')}
-                  </span>
-                </button>
-              </Tooltip>
-            )}
+                {t('videoAudioSendVisuals')}
+              </button>
+            </div>
           </div>
+        ) : null}
+        {videoBlocked ? <div className={styles.videoStatus}>{t('videoEnableToSend')}</div> : null}
+        <ChatTextarea
+          inputRef={textareaRef}
+          value={text}
+          autoFocus={!isMobile}
+          disabled={importingHistory}
+          onTextChange={setText}
+          onSend={send}
+          onFocus={() => {
+            if (isMobile && attachMenuOpen) {
+              dismissAttachToKeyboard()
+            }
+          }}
+          onPaste={(event) => {
+            const files = Array.from(event.clipboardData.files)
+            if (files.length > 0) {
+              event.preventDefault()
+              acceptFiles(files)
+            }
+          }}
+        >
+          {recording && isMobile ? <Spectrum getAnalyser={voice.getAnalyser} /> : null}
+        </ChatTextarea>
+        <div className={styles.functionRow}>
+          <ChatModeToggles mode={activeMode} />
           <div className={styles.right}>
             {isMobile ? (
               <button
@@ -760,6 +785,26 @@ const Input = ({
               >
                 <IconPlusCircleOutline24 open={attachMenuOpen} />
               </button>
+            ) : callAction || videoAction ? (
+              <Menu
+                align="end"
+                options={[fileAction, videoAction, callAction]
+                  .filter((item) => item !== null)
+                  .map(({ onClick, ...item }) => ({ ...item, onSelect: onClick }))}
+              >
+                {({ open, toggle }) => (
+                  <IconButton
+                    size="m"
+                    tone="primary"
+                    icon={<IconPaperclipOutline16 />}
+                    tooltip={t('expandAttachments')}
+                    aria-haspopup="menu"
+                    aria-expanded={open}
+                    disabled={importingHistory}
+                    onClick={toggle}
+                  />
+                )}
+              </Menu>
             ) : (
               <IconButton
                 size="m"
@@ -778,6 +823,19 @@ const Input = ({
               hidden
               onChange={handleFilesSelected}
             />
+            {videoEntry ? (
+              <input
+                ref={videoInputRef}
+                type="file"
+                accept="video/*"
+                hidden
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? [])
+                  event.target.value = ''
+                  void video.add(files)
+                }}
+              />
+            ) : null}
             <input
               ref={albumInputRef}
               type="file"
@@ -815,7 +873,7 @@ const Input = ({
               >
                 <IconSendOutline16 />
               </button>
-            ) : (
+            ) : processingAudio ? null : (
               <VoiceButton
                 status={voice.status}
                 disabled={!voice.available}
@@ -823,7 +881,9 @@ const Input = ({
                 onClick={() => {
                   if (
                     voice.status !== 'idle' ||
-                    (!useChatStore.getState().importingHistory && ensureApiKey())
+                    (!useChatStore.getState().importingHistory &&
+                      !video.isProcessing() &&
+                      ensureApiKey())
                   ) {
                     setAttachMenuOpen(false)
                     cancelAttachToIme()
@@ -900,7 +960,7 @@ const Input = ({
                   </div>
                 ) : null
               ) : null}
-              <div className={styles.attachGrid}>
+              <div className={clsx(styles.attachGrid, callAction && styles.attachGridWithCall)}>
                 {attachActions.map((item) => (
                   <button
                     key={item.key}

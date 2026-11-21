@@ -11,7 +11,8 @@ const subscribe = (onChange: () => void) => {
 export const useIsMobile = () => useSyncExternalStore(subscribe, () => query.matches)
 
 const preventPageScroll = (event: TouchEvent) => {
-  if (event.touches.length !== 1) {
+  if (event.touches.length > 1) {
+    event.preventDefault()
     return
   }
   for (
@@ -31,7 +32,7 @@ const preventPageScroll = (event: TouchEvent) => {
   event.preventDefault()
 }
 
-/** 阻止移动端整页滚动，保留内部可滚动区域的滚动和双指缩放。 */
+/** 阻止移动端整页滚动，关闭双指缩放，保留内部区域的单指滚动。 */
 export const usePreventPageScroll = (enabled: boolean) => {
   useEffect(() => {
     if (!enabled) {
@@ -69,7 +70,7 @@ export const useMobileViewport = (enabled: boolean) => {
       delete document.documentElement.dataset.imeOpen
     }
     const update = () => {
-      // 双指缩放由浏览器处理，保持当前布局尺寸。
+      // 浏览器强制缩放时，不把视觉视口的变化误判为键盘高度变化。
       if (viewport && viewport.scale !== 1) {
         return
       }

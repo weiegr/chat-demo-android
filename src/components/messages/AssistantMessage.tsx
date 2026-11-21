@@ -38,6 +38,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   isLast,
   streaming,
   busy,
+  readOnly,
   versions,
   onSelectVersion,
 }: {
@@ -46,6 +47,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   isLast: boolean
   streaming: boolean
   busy: boolean
+  readOnly: boolean
   versions: MessageVersions
   onSelectVersion: SelectMessageVersion
 }) {
@@ -103,7 +105,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           <IconWarningOutline16 />
           <span>
             {notice.text}
-            {notice.action === 'apiKey' ? (
+            {!readOnly && notice.action === 'apiKey' ? (
               <>
                 {' '}
                 <button
@@ -115,7 +117,7 @@ export const AssistantMessage = memo(function AssistantMessage({
                 </button>
               </>
             ) : null}
-            {notice.action === 'topUp' ? (
+            {!readOnly && notice.action === 'topUp' ? (
               <>
                 {' '}
                 <a
@@ -128,7 +130,7 @@ export const AssistantMessage = memo(function AssistantMessage({
                 </a>
               </>
             ) : null}
-            {notice.action === 'switchRp' ? (
+            {!readOnly && notice.action === 'switchRp' ? (
               <>
                 {' '}
                 <button
@@ -163,7 +165,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           </span>
         </div>
       ) : null}
-      {streaming ? null : (
+      {streaming || readOnly ? null : (
         <div className={styles.bottom}>
           <BranchSwitcher versions={versions} disabled={busy} onSelect={onSelectVersion} />
           <div className={clsx(styles.actions, isLast && styles.alwaysShow)}>

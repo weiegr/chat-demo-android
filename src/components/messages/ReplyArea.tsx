@@ -86,6 +86,7 @@ export const ReplyArea = memo(function ReplyArea({
   const [stuck, setStuck] = useState(false)
   const areaRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
+  const titleRef = useRef<HTMLDivElement>(null)
   const titleActive = streaming && !hasResponse
   useTicker(titleActive, 1000)
 
@@ -102,11 +103,13 @@ export const ReplyArea = memo(function ReplyArea({
       return
     }
     const sentinel = sentinelRef.current
+    const titleElement = titleRef.current
     const scroller = findScrollContainer(areaRef.current)
-    if (!sentinel || !scroller) {
+    if (!sentinel || !scroller || !titleElement) {
       setStuck(false)
       return
     }
+    const inset = Number.parseFloat(getComputedStyle(titleElement).top) || 0
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (!entry) {
@@ -115,7 +118,7 @@ export const ReplyArea = memo(function ReplyArea({
         const rootTop = entry.rootBounds?.top ?? 0
         setStuck(!entry.isIntersecting && entry.boundingClientRect.top <= rootTop)
       },
-      { root: scroller, threshold: [0, 1] }
+      { root: scroller, rootMargin: `${-inset}px 0px 0px`, threshold: [0, 1] }
     )
     observer.observe(sentinel)
     return () => observer.disconnect()
@@ -147,6 +150,7 @@ export const ReplyArea = memo(function ReplyArea({
       ) : null}
       {title ? (
         <div
+          ref={titleRef}
           className={clsx(
             styles.title,
             open && styles.titleSticky,

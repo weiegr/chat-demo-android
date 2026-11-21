@@ -2,6 +2,7 @@ package xyz.app566512.apidemo;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.app.DownloadManager;
 import android.content.ClipData;
 import android.content.ContentUris;
@@ -97,6 +98,7 @@ public class MainActivity extends Activity {
     private final ExecutorService mediaExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<String, Uri> recentMediaUris = new ConcurrentHashMap<>();
+    private final VideoAudio videoAudio = new VideoAudio();
 
     private FrameLayout rootContainer;
     private WebView webView;
@@ -109,7 +111,9 @@ public class MainActivity extends Activity {
     private long lastLocationPermissionRequestAt = 0L;
     private boolean lastLocationPermissionHadCoarse = false;
     private Uri pendingCameraUri;
-    private String nextPickerMode = "file";
+    private volatile String nextPickerMode = "file";
+    private volatile String nextVideoAudioSelection;
+    private String pendingVideoAudioSelection;
     private volatile String cachedUserAgent = "Mozilla/5.0";
     private int safeTopCss = 24;
     private int safeBottomCss = 0;
@@ -169,6 +173,7 @@ public class MainActivity extends Activity {
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(true);
         settings.setSupportMultipleWindows(true);
+        settings.setSupportZoom(false);
         settings.setTextZoom(100);
         cachedUserAgent = settings.getUserAgentString();
 
@@ -185,6 +190,13 @@ public class MainActivity extends Activity {
                     }
                     if (path != null && path.startsWith(MEDIA_PREFIX)) {
                         return serveMediaUri(path.substring(MEDIA_PREFIX.length()));
+                    }
+                    if (path != null && path.startsWith(VideoAudio.PATH_PREFIX)) {
+                        if (request.isForMainFrame() || !"GET".equals(request.getMethod())) {
+                            return notFoundResponse();
+                        }
+                        return videoAudio.serve(
+                                getContentResolver(), path.substring(VideoAudio.PATH_PREFIX.length()));
                     }
                     if (path == null || path.isEmpty() || "/".equals(path)) {
                         path = "/index.html";
@@ -250,13 +262,18 @@ public class MainActivity extends Activity {
 
             @Override
             public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
-                if (MainActivity.this.filePathCallback != null) {
-                    MainActivity.this.filePathCallback.onReceiveValue(null);
-                }
+                cancelFileCallback();
                 MainActivity.this.filePathCallback = filePathCallback;
 
                 String mode = nextPickerMode;
                 nextPickerMode = "file";
+                String selection = nextVideoAudioSelection;
+                nextVideoAudioSelection = null;
+                if ("video".equals(mode)) {
+                    pendingVideoAudioSelection = selection;
+                } else {
+                    videoAudio.releaseSelection(selection);
+                }
                 if ("file".equals(mode) && fileChooserParams != null && fileChooserParams.isCaptureEnabled()) {
                     mode = "camera";
                 }
@@ -266,6 +283,9 @@ public class MainActivity extends Activity {
                 }
                 if ("gallery".equals(mode)) {
                     return launchGalleryChooser(fileChooserParams);
+                }
+                if ("video".equals(mode)) {
+                    return launchVideoChooser();
                 }
                 return launchGenericFileChooser(fileChooserParams);
             }
@@ -339,6 +359,7 @@ public class MainActivity extends Activity {
             cancelActiveLocation = null;
         }
         mainHandler.removeCallbacksAndMessages(null);
+        videoAudio.clear();
         mediaExecutor.shutdownNow();
         super.onDestroy();
     }
@@ -561,6 +582,27 @@ public class MainActivity extends Activity {
         }
     }
 
+    private boolean launchVideoChooser() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            try {
+                Intent intent = new Intent(MediaStore.ACTION_PICK_IMAGES);
+                intent.setType("video/*");
+                startActivityForResult(intent, REQ_FILE_CHOOSER);
+                return true;
+            } catch (ActivityNotFoundException ignored) {
+            }
+        }
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("video/*");
+        try {
+            startActivityForResult(intent, REQ_FILE_CHOOSER);
+        } catch (ActivityNotFoundException ignored) {
+            cancelFileCallback();
+        }
+        return true;
+    }
+
     private boolean launchGenericFileChooser(WebChromeClient.FileChooserParams params) {
         Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -578,6 +620,8 @@ public class MainActivity extends Activity {
     }
 
     private void cancelFileCallback() {
+        videoAudio.releaseSelection(pendingVideoAudioSelection);
+        pendingVideoAudioSelection = null;
         if (filePathCallback != null) {
             filePathCallback.onReceiveValue(null);
             filePathCallback = null;
@@ -1119,6 +1163,7 @@ public class MainActivity extends Activity {
         if (requestCode == REQ_FILE_CHOOSER) {
             if (filePathCallback == null) {
                 clearPendingCameraUri();
+                cancelFileCallback();
                 return;
             }
             Uri[] results = null;
@@ -1140,6 +1185,9 @@ public class MainActivity extends Activity {
                     results = new Uri[]{data.getData()};
                 }
             }
+            videoAudio.acceptSelection(pendingVideoAudioSelection,
+                    results != null && results.length == 1 ? results[0] : null);
+            pendingVideoAudioSelection = null;
             filePathCallback.onReceiveValue(results);
             filePathCallback = null;
             return;
@@ -1569,11 +1617,44 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void setNextPickerMode(String mode) {
-            if ("camera".equals(mode) || "gallery".equals(mode) || "file".equals(mode)) {
+            videoAudio.releaseSelection(nextVideoAudioSelection);
+            nextVideoAudioSelection = null;
+            if ("camera".equals(mode) || "gallery".equals(mode) || "file".equals(mode) || "video".equals(mode)) {
                 nextPickerMode = mode;
             } else {
                 nextPickerMode = "file";
             }
+        }
+
+        @JavascriptInterface
+        public boolean supportsVideoAudio() {
+            return true;
+        }
+
+        @JavascriptInterface
+        public boolean prepareVideoAudioPicker(String selectionId) {
+            if (!videoAudio.reserveSelection(selectionId)) {
+                return false;
+            }
+            videoAudio.releaseSelection(nextVideoAudioSelection);
+            nextVideoAudioSelection = selectionId;
+            nextPickerMode = "video";
+            return true;
+        }
+
+        @JavascriptInterface
+        public void releaseVideoAudioSelection(String selectionId) {
+            videoAudio.releaseSelection(selectionId);
+        }
+
+        @JavascriptInterface
+        public boolean prepareVideoAudioRequest(String selectionId, String requestId) {
+            return videoAudio.reserveRequest(selectionId, requestId);
+        }
+
+        @JavascriptInterface
+        public void cancelVideoAudioRequest(String requestId) {
+            videoAudio.cancelRequest(requestId);
         }
 
         @JavascriptInterface

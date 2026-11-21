@@ -1,13 +1,18 @@
 import clsx from 'clsx'
-import { memo, useState, type ReactNode } from 'react'
+import { memo, useEffect, useState, type ReactNode } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { useUploads, type UploadTask } from '../../services/attachments.js'
-import { shouldSkipDraftUpload, type DraftAttachment } from '../../services/chat/drafts.js'
-import type { FileAttachment } from '../../services/chat/types.js'
+import {
+  shouldSkipDraftUpload,
+  type DraftAttachment,
+  type DraftVideo,
+} from '../../services/chat/drafts.js'
+import type { FileAttachment, VideoAttachment } from '../../services/chat/types.js'
 import { IconCloseFill14, IconPhotoErrorFill20, IconRefreshOutline16 } from '../base/icons.js'
 import { Tooltip } from '../base/Tooltip.js'
 import { FileCard } from '../files/FileCard.js'
 import { useFileUrl } from '../files/useFileUrl.js'
+import { StoredVideoTile, VideoTile } from '../files/VideoTile.js'
 import { openImagePreview } from '../messages/imagePreviewState.js'
 import styles from './ChatInput.module.css'
 
@@ -24,15 +29,23 @@ const openLocalFile = (file: File) => {
 /** 列表只随草稿或正在编辑的消息附件变化更新；每张新上传卡片独立订阅上传状态。 */
 export const DraftAttachments = memo(function DraftAttachments({
   items,
+  sessionId,
   existingFiles = [],
+  existingVideo,
+  video,
   useOcrModel = false,
+  videoAllowed,
   onRetry,
   onRemove,
   onRemoveExisting,
 }: {
   items: DraftAttachment[]
+  sessionId: string | null
   existingFiles?: FileAttachment[]
+  existingVideo?: VideoAttachment
+  video?: DraftVideo
   useOcrModel?: boolean
+  videoAllowed: boolean
   onRetry: (id: string) => void
   onRemove: (id: string) => void
   onRemoveExisting?: (id: string) => void
@@ -42,25 +55,94 @@ export const DraftAttachments = memo(function DraftAttachments({
   }
   return (
     <div className={styles.attachments}>
-      {existingFiles.map((file) => (
-        <ExistingAttachmentItem
-          key={`existing:${file.id}`}
-          file={file}
-          onRemove={onRemoveExisting ? () => onRemoveExisting(file.id) : undefined}
+      {existingVideo && sessionId !== null ? (
+        <StoredVideoTile
+          key={existingVideo.id}
+          video={existingVideo}
+          sessionId={sessionId}
+          onRemove={onRemoveExisting ? () => onRemoveExisting(existingVideo.id) : undefined}
         />
-      ))}
-      {items.map((item) => (
-        <AttachmentItem
-          key={item.id}
-          item={item}
-          useOcrModel={useOcrModel}
-          onRetry={() => onRetry(item.id)}
-          onRemove={() => onRemove(item.id)}
+      ) : null}
+      {existingFiles
+        .filter((file) => !existingVideo?.frameIds.includes(file.id))
+        .map((file) => (
+          <ExistingAttachmentItem
+            key={`existing:${file.id}`}
+            file={file}
+            onRemove={onRemoveExisting ? () => onRemoveExisting(file.id) : undefined}
+          />
+        ))}
+      {video ? (
+        <DraftVideoTile
+          key={video.id}
+          video={video}
+          onRetry={videoAllowed ? onRetry : undefined}
+          onRemove={() => onRemove(video.id)}
         />
-      ))}
+      ) : null}
+      {items
+        .filter((item) => !video?.frameIds.includes(item.id))
+        .map((item) => (
+          <AttachmentItem
+            key={item.id}
+            item={item}
+            useOcrModel={useOcrModel}
+            onRetry={() => onRetry(item.id)}
+            onRemove={() => onRemove(item.id)}
+          />
+        ))}
     </div>
   )
 })
+
+const DraftVideoTile = ({
+  video,
+  onRetry,
+  onRemove,
+}: {
+  video: DraftVideo
+  onRetry?: (id: string) => void
+  onRemove: () => void
+}) => {
+  const t = useTranslate()
+  const [url, setUrl] = useState<string>()
+  useEffect(() => {
+    const originalUrl = URL.createObjectURL(video.file)
+    setUrl(originalUrl)
+    return () => URL.revokeObjectURL(originalUrl)
+  }, [video.file])
+  const task = useUploads((state) => {
+    const errors = video.frameIds
+      .map((id) => state.tasks[id])
+      .filter((task) => task?.status === 'error')
+    return errors.find((error) => !error.retryable) ?? errors[0]
+  })
+  const uploading = useUploads((state) =>
+    video.frameIds.some((id) => !state.tasks[id] || state.tasks[id].status === 'uploading')
+  )
+  return (
+    <VideoTile
+      name={video.name}
+      url={url}
+      uploading={uploading}
+      error={task ? t(task.error.key, task.error.params) : undefined}
+      onRetry={
+        task?.retryable && onRetry
+          ? () => {
+              const tasks = useUploads.getState().tasks
+              for (const id of video.frameIds) {
+                const failure = tasks[id]
+                if (failure?.status === 'error' && failure.retryable) {
+                  onRetry(id)
+                }
+              }
+            }
+          : undefined
+      }
+      onRemove={onRemove}
+    />
+  )
+}
 
 /** 图片缩略图通用外壳：预览图 + 状态蒙层 + 右上角移除按钮 */
 const ImageTileShell = ({
@@ -149,8 +231,8 @@ const AttachmentItem = ({
 }: {
   item: DraftAttachment
   useOcrModel: boolean
-  onRetry: () => void
-  onRemove: () => void
+  onRetry?: () => void
+  onRemove?: () => void
 }) => {
   const t = useTranslate()
   const skipUpload = shouldSkipDraftUpload(

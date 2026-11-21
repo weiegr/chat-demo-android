@@ -51,6 +51,7 @@ const LiveAssistantMessage = ({
   isLast,
   streaming,
   busy,
+  readOnly,
   versions,
   onSelectVersion,
 }: {
@@ -59,6 +60,7 @@ const LiveAssistantMessage = ({
   isLast: boolean
   streaming: boolean
   busy: boolean
+  readOnly: boolean
   versions: MessageVersions
   onSelectVersion: SelectMessageVersion
 }) => {
@@ -72,6 +74,7 @@ const LiveAssistantMessage = ({
       isLast={isLast}
       streaming={streaming}
       busy={busy}
+      readOnly={readOnly}
       versions={versions}
       onSelectVersion={onSelectVersion}
     />
@@ -82,10 +85,12 @@ export const MessageList = ({
   session,
   streaming,
   footer,
+  readOnly = false,
 }: {
   session: Session
   streaming: boolean
-  footer: React.ReactNode
+  footer?: React.ReactNode
+  readOnly?: boolean
 }) => {
   const isMobile = useIsMobile()
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -147,9 +152,15 @@ export const MessageList = ({
   }, [session.id, lastMessageId, scrollToBottom])
 
   useEffect(closeSearchPanel, [session.id, lastMessageId])
-  useEffect(cancelUserEdit, [session.id, lastMessageId])
+  useEffect(() => {
+    if (!readOnly) {
+      cancelUserEdit()
+    }
+  }, [session.id, lastMessageId, readOnly])
 
-  const editingUserMessage = useUserEdit((state) => state.active?.sessionId === session.id)
+  const editingUserMessage = useUserEdit(
+    (state) => !readOnly && state.active?.sessionId === session.id
+  )
   useEffect(() => {
     if (!editingUserMessage) {
       return
@@ -165,7 +176,7 @@ export const MessageList = ({
 
   const selectVersion = useCallback(
     (messageId: string, anchorTop: number) => {
-      if (streaming) {
+      if (readOnly || streaming) {
         return
       }
       restoreScrollRef.current = { messageId, top: anchorTop }
@@ -174,7 +185,7 @@ export const MessageList = ({
       cancelUserEdit()
       selectMessageVersion(session.id, messageId)
     },
-    [session.id, streaming]
+    [session.id, readOnly, streaming]
   )
 
   // 跨移动端断点时切换滚动层，并保持输入框及当前阅读位置。
@@ -204,7 +215,7 @@ export const MessageList = ({
   }, [isMobile, scrollToBottom])
 
   const lastIndex = messages.length - 1
-  const uploadRetryId = getUploadRetryId(messages, streaming)
+  const uploadRetryId = readOnly ? null : getUploadRetryId(messages, streaming)
   return (
     <ScrollToBottomContext.Provider value={scrollToBottom}>
       <div ref={isMobile ? undefined : scrollRef} className={styles.container}>
@@ -228,6 +239,7 @@ export const MessageList = ({
                     isFirst={index === 0}
                     isLast={index === lastIndex || index === lastIndex - 1}
                     busy={streaming}
+                    readOnly={readOnly}
                     versions={versions.get(message.id) ?? EMPTY_VERSIONS}
                     onSelectVersion={selectVersion}
                   />
@@ -239,6 +251,7 @@ export const MessageList = ({
                     isLast
                     streaming={streaming}
                     busy={streaming}
+                    readOnly={readOnly}
                     versions={versions.get(message.id) ?? EMPTY_VERSIONS}
                     onSelectVersion={selectVersion}
                   />
@@ -250,6 +263,7 @@ export const MessageList = ({
                     isLast={false}
                     streaming={false}
                     busy={streaming}
+                    readOnly={readOnly}
                     versions={versions.get(message.id) ?? EMPTY_VERSIONS}
                     onSelectVersion={selectVersion}
                   />

@@ -2,8 +2,9 @@ import { create } from 'zustand'
 import type { TranslationMessage } from '../../i18n/index.js'
 import { ApiError } from '../api/client.js'
 import { classifyApiError } from '../api/errors.js'
-import { synthesize, TTS_SAMPLE_RATE } from '../api/speech.js'
+import { synthesize } from '../api/speech.js'
 import { useSettings } from '../settings.js'
+import { createSpeechOutput, type SpeechOutput } from './pcmPlayback.js'
 
 /**
  * 朗读：同一时间只读一条回复。
@@ -20,16 +21,13 @@ type ReadAloudState = {
 
 export const useReadAloud = create<ReadAloudState>(() => ({ messageId: null, status: 'idle' }))
 
-/** 首帧前多缓冲一点，减少网络抖动造成的断续 */
-const START_DELAY = 0.1
-
-let current: { controller: AbortController; context: AudioContext } | null = null
+let current: { controller: AbortController; output: SpeechOutput } | null = null
 
 const finish = (controller: AbortController) => {
   if (current?.controller !== controller) {
     return
   }
-  void current.context.close()
+  current.output.close()
   current = null
   useReadAloud.setState({ messageId: null, status: 'idle' })
 }
@@ -41,16 +39,6 @@ export const stopReadAloud = () => {
     controller.abort()
     finish(controller)
   }
-}
-
-/** 16-bit 小端 PCM 转成 Float32；奇数字节留到下一段 */
-const toFloat32 = (bytes: Uint8Array) => {
-  const samples = new Float32Array(bytes.length >> 1)
-  const view = new DataView(bytes.buffer, bytes.byteOffset, samples.length * 2)
-  for (let i = 0; i < samples.length; i++) {
-    samples[i] = view.getInt16(i * 2, true) / 0x8000
-  }
-  return samples
 }
 
 export const describeReadAloudError = (error: unknown): TranslationMessage | string => {
@@ -84,57 +72,29 @@ export const startReadAloud = (
 ) => {
   stopReadAloud()
   const controller = new AbortController()
-  const context = new AudioContext({ sampleRate: TTS_SAMPLE_RATE })
-  current = { controller, context }
+  let output: SpeechOutput
+  try {
+    output = createSpeechOutput()
+  } catch (error) {
+    onError(error)
+    return
+  }
+  current = { controller, output }
   useReadAloud.setState({ messageId, status: 'loading' })
-  // 音色在开始朗读时读取，设置中切换后下一次朗读生效
   const { apiKey, ttsVoice } = useSettings.getState()
 
   void (async () => {
-    let nextTime = 0
-    let lastSource: AudioBufferSourceNode | null = null
-    let rest = new Uint8Array(0)
     try {
       const stream = await synthesize(apiKey ?? '', text, ttsVoice, controller.signal)
-      const reader = stream.getReader()
-      controller.signal.addEventListener('abort', () => void reader.cancel().catch(() => {}))
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) {
-          break
-        }
-        const bytes = new Uint8Array(rest.length + value.length)
-        bytes.set(rest)
-        bytes.set(value, rest.length)
-        const samples = toFloat32(bytes)
-        rest = bytes.slice(samples.length * 2)
-        if (samples.length === 0) {
-          continue
-        }
-        const buffer = context.createBuffer(1, samples.length, TTS_SAMPLE_RATE)
-        buffer.copyToChannel(samples, 0)
-        const source = context.createBufferSource()
-        source.buffer = buffer
-        source.connect(context.destination)
-        // 网络慢于播放时从当前时间续上，不补播过去的时间
-        nextTime = Math.max(nextTime, context.currentTime + (lastSource ? 0 : START_DELAY))
-        source.start(nextTime)
-        nextTime += buffer.duration
-        lastSource = source
-        if (useReadAloud.getState().status === 'loading') {
-          useReadAloud.setState({ status: 'playing' })
-        }
-      }
-      if (lastSource) {
-        lastSource.onended = () => finish(controller)
-      } else {
-        finish(controller)
-      }
+      await output.play(stream, controller.signal, () => {
+        useReadAloud.setState({ status: 'playing' })
+      })
     } catch (error) {
       if (!controller.signal.aborted) {
-        finish(controller)
         onError(error)
       }
+    } finally {
+      finish(controller)
     }
   })()
 }
