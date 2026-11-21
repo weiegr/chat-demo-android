@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class VideoAudio {
     static final String PATH_PREFIX = "/__android_video_audio__/";
     private static final int SAMPLE_RATE = 16000;
-    private static final int MAX_SAMPLES = 20 * SAMPLE_RATE;
+    private static final int MAX_SAMPLES = 60 * SAMPLE_RATE;
     private static final long DECODE_TIMEOUT_MS = 12000;
     private static final long CODEC_WAIT_US = 5000;
 

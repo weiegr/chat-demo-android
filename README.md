@@ -5,7 +5,7 @@ English | [简体中文](README.zh-CN.md)
 An **Android WebView app and static chat client (`API demo`)** built on top of [deepseek-ai/chat-demo](https://github.com/deepseek-ai/chat-demo). No application backend is required: the embedded web app connects directly to the configured DeepSeek API service.
 
 - **App Name**: `API demo`
-- **Current Version**: `2.1.0`
+- **Current Version**: `2.1.1`
 - **Android Package Name**: `xyz.app566512.apidemo`
 - **Minimum / Target SDK**: Android 8.0+ (`minSdkVersion 26`, `targetSdkVersion 34`)
 - **Signing**: Gradle-free build using `~/.android/debug.keystore`, outputting `dist-apk/chat-demo.apk`
@@ -52,7 +52,7 @@ pnpm build:single
 - Three welcome modes: Fast mode (Flash), Expert mode (Pro with automatic DeepSeek OCR for images and pre-send bypass search), and RP mode (long-context mode beyond the 32K single-message limit, with local plain-text attachment inlining and configurable Flash/Pro model in RP mode settings).
 - Streaming replies, deep thinking, smart search (expert mode uses bypass search and shares the same source citations), link reading, and source citations; stop generation or continue eligible replies.
 - Attachment uploads (local inlining for plain-text files, automatic OCR for images on Pro, plus documents and code), voice input (ASR), and read-aloud playback (TTS, with optional auto read-aloud when a reply finishes) with a live audio spectrum while recording on mobile.
-- Fast mode accepts one video of up to 20 seconds per message after **Allow video uploads** is enabled in chat settings. Original videos play in the app, and Android can transcribe their dialogue when you send them.
+- Fast mode accepts one video of up to 60 seconds per message after **Allow video uploads** is enabled in chat settings. Each video sends 16 evenly sampled frames arranged into four 2×2 images. Original videos play in the app, and Android can transcribe their dialogue when you send them.
 - Start a **DeepSeek Live** voice call from the Fast mode attachment menu. Calls can continue an existing text conversation, support interruptions, and save the transcript to a separate chat.
 - Editable system prompt, plus optional advanced tool prompt for the real-time location tool, each with one-tap restore to defaults.
 - Markdown, Prism syntax highlighting, KaTeX math, and Mermaid diagrams.

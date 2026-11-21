@@ -274,7 +274,7 @@ export const zh = {
   settingsVideoAudio: '转写视频音频',
   settingsVideoAudioDesc: '发送视频时，将音轨上传到 DeepSeek 转写人声，回答可结合对白和画面。',
   videoQuickModeOnly: '仅支持快速模式',
-  videoTooLong: '视频不能超过 20 秒',
+  videoTooLong: '视频不能超过 {seconds} 秒',
   videoReadFailed: '无法读取或解码视频，请重新选择',
   videoLimitOne: '每条提问只能添加一段视频',
   videoProcessing: '正在处理视频（{progress}%）',

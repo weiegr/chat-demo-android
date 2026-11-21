@@ -285,7 +285,7 @@ export const en = {
   settingsVideoAudioDesc:
     'When you send a video, DeepSeek transcribes its audio so replies can use both speech and visuals.',
   videoQuickModeOnly: 'Quick mode only',
-  videoTooLong: 'Videos must be 20 seconds or shorter',
+  videoTooLong: 'Videos must be {seconds} seconds or shorter',
   videoReadFailed: 'Could not read or decode the video. Choose another video.',
   videoLimitOne: 'You can add one video per message',
   videoProcessing: 'Processing video ({progress}%)',

@@ -14,7 +14,11 @@ import {
   transcribeVideoAudio,
   type VideoAudioPhase,
 } from '../../services/video/audio.js'
-import { extractVideoSheets, VideoTooLongError } from '../../services/video/frames.js'
+import {
+  extractVideoSheets,
+  MAX_VIDEO_SECONDS,
+  VideoTooLongError,
+} from '../../services/video/frames.js'
 import { showToast } from '../base/toastState.js'
 import { ensureApiKey } from '../settings/settingsDialogState.js'
 
@@ -154,7 +158,11 @@ export const useVideoInput = (draftKey: string | null, sessionId: string | null)
       }
     } catch (error) {
       if (!controller.signal.aborted) {
-        showToast({ key: error instanceof VideoTooLongError ? 'videoTooLong' : 'videoReadFailed' })
+        showToast(
+          error instanceof VideoTooLongError
+            ? { key: 'videoTooLong', params: { seconds: MAX_VIDEO_SECONDS } }
+            : { key: 'videoReadFailed' }
+        )
       }
     } finally {
       if (!keptSelection) {

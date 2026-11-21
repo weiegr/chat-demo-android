@@ -1,4 +1,4 @@
-const MAX_SECONDS = 20
+export const MAX_VIDEO_SECONDS = 60
 const FRAMES_PER_SHEET = 4
 const FRAME_COUNT = 16
 const LONG_SIDE = 1600
@@ -96,7 +96,7 @@ export const extractVideoSheets = async (
     if (!Number.isFinite(duration) || duration <= 0 || !videoWidth || !videoHeight) {
       throw new Error('Invalid video metadata')
     }
-    if (duration > MAX_SECONDS) {
+    if (duration > MAX_VIDEO_SECONDS) {
       throw new VideoTooLongError()
     }
 

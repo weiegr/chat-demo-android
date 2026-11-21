@@ -21,11 +21,16 @@ export const DEFAULT_FAST_LIVE_PROMPT = [
   '用户打断或改问时，跟随最新发言。需要核实信息或实际位置时，按可用工具和授权使用搜索或定位。',
 ].join('\n')
 
-const LEGACY_FAST_VIDEO_PROMPT =
-  '带时间戳的 2×2 拼图是用户视频中按时间均匀抽取的画面。按拼图顺序阅读，每张先左后右、先上后下。根据可见画面和时间戳回答，区分画面中可见的内容与推断。你只能看到抽样画面，无法听到音轨或确认两帧之间的细节。普通图片附件仍按普通图片理解。'
+const LEGACY_FAST_VIDEO_PROMPTS = [
+  '带时间戳的 2×2 拼图是用户视频中按时间均匀抽取的画面。按拼图顺序阅读，每张先左后右、先上后下。根据可见画面和时间戳回答，区分画面中可见的内容与推断。你只能看到抽样画面，无法听到音轨或确认两帧之间的细节。普通图片附件仍按普通图片理解。',
+  '「视频画面」后的每张图按左上、右上、左下、右下排列四幅画面。每格对应独立时刻，以单格画面判断该时刻的物体数量和位置。将「视频对白转写」当作视频中人物的发言，结合画面和可用对白直接回答用户的问题。用户问及处理方式时，简短说明收到的是按时间排列的画面和可用的对白转写。证据不足时，只指出影响回答的具体细节。',
+]
 
-export const DEFAULT_FAST_VIDEO_PROMPT =
-  '「视频画面」后的每张图按左上、右上、左下、右下排列四幅画面。每格对应独立时刻，以单格画面判断该时刻的物体数量和位置。将「视频对白转写」当作视频中人物的发言，结合画面和可用对白直接回答用户的问题。用户问及处理方式时，简短说明收到的是按时间排列的画面和可用的对白转写。证据不足时，只指出影响回答的具体细节。'
+export const DEFAULT_FAST_VIDEO_PROMPT = [
+  '「视频画面」后的每张图按左上、右上、左下、右下排列四幅画面。每格对应独立时刻，以单格画面判断该时刻的物体数量和位置。',
+  '「视频对白」是视频中人物说的话。结合画面和对白，用自然的语言直接回答用户的问题。需要引用时，直接说视频里的人讲了什么。',
+  '回答聚焦视频内容。只有用户问到处理方式时，才说明提供了哪些画面和对白。证据不足时，只指出影响回答的具体细节。',
+].join('\n')
 
 /** 专家模式系统提示词默认值；对模型只提档位（Pro），不暴露具体型号 */
 export const DEFAULT_EXPERT_SYSTEM_PROMPT = '该助手为DeepSeek Pro，由深度求索公司创造。'
@@ -241,7 +246,9 @@ const initialRpModel = (): ChatModel =>
 
 const initialVideoPrompt = () => {
   const saved = read(KEYS.fastVideoPrompt)
-  return saved === null || saved === LEGACY_FAST_VIDEO_PROMPT ? DEFAULT_FAST_VIDEO_PROMPT : saved
+  return saved === null || LEGACY_FAST_VIDEO_PROMPTS.includes(saved)
+    ? DEFAULT_FAST_VIDEO_PROMPT
+    : saved
 }
 
 /** 已设置过手动位置的老版本升级时默认保持开启，未配置过或显式关闭时为 false */
