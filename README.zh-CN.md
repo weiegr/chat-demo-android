@@ -5,7 +5,7 @@
 基于 [deepseek-ai/chat-demo](https://github.com/deepseek-ai/chat-demo) 开发的 **Android WebView 应用与静态聊天前端（API demo）**。无需应用后端，应用内页面直接请求配置的 DeepSeek API 服务。
 
 - **应用名称**：`API demo`
-- **当前版本**：`2.0.0`
+- **当前版本**：`2.1.1`
 - **Android 包名**：`xyz.app566512.apidemo`
 - **系统要求**：Android 8.0+（`minSdkVersion 26`，`targetSdkVersion 34`）
 - **签名方式**：免 Gradle 构建，自动使用本地 `~/.android/debug.keystore` 签名，输出 `dist-apk/chat-demo.apk`
@@ -20,20 +20,11 @@
 - **JDK 11+**（需包含 `javac`、`jar`、`keytool`；未加入 `PATH` 时可设置 `JAVA_HOME`）
 - **Android SDK**（需包含 `platforms` 与 `build-tools`，并设置 `ANDROID_HOME` 或 `ANDROID_SDK_ROOT`）
 
-在 Bash / Git Bash / Linux / macOS 下运行：
+在终端运行：
 
 ```sh
 pnpm install
 pnpm build:apk
-```
-
-在 Windows PowerShell 下（因 `package.json` 中的组合命令使用了 `rm -rf` 与行内环境变量）可分步执行：
-
-```powershell
-pnpm install
-$env:NODE_ENV = "production"
-pnpm exec rspack build -c rspack.config.ts
-node scripts/build-apk.mjs
 ```
 
 构建脚本 [scripts/build-apk.mjs](scripts/build-apk.mjs) 不依赖 Gradle，会直接调用 `aapt2`、`javac`、`d8`、`jar`、`zipalign` 与 `apksigner`，将前端 `dist/` 打包进 `assets/web/` 并生成已签名的 `dist-apk/chat-demo.apk`。
@@ -61,6 +52,8 @@ pnpm build:single
 - 欢迎页支持「快速模式（Flash） / 专家模式（Pro + 自动 OCR + 发送前旁路搜索） / RP 模式（长上下文、支持突破单条 32K 上限与纯文本附件本地内联，并在设置页独立切换 Flash/Pro 模型）」。
 - 流式回答、深度思考、智能搜索（专家模式走旁路搜索，先搜后答并复用同一套来源引用）、链接阅读与来源引用；支持停止和符合条件的继续生成。
 - 附件上传（纯文本本地解码内联、图片与多种文档/代码格式，Pro 模型自动接入 DeepSeek OCR 识别图片文字）、语音输入（ASR）与回复朗读（TTS，可开启回答完成后自动朗读）；移动端录音时输入框首行显示实时频谱。
+- 在「对话设置」中开启「允许上传视频」，即可在快速模式的每条提问中附一段最长 60 秒的视频。每段视频均匀抽取 16 帧，拼成 4 张 2×2 图片发送。原视频可在应用内播放，Android 可在发送时转写视频对白。
+- 从快速模式的附件菜单进入 **DeepSeek Live**。语音通话可接续已有文字对话、支持插话打断，通话结束后自动保存在独立会话中。
 - 可自定义系统提示词；「高级设置」中可单独调整实时定位工具提示词，并一键恢复默认。
 - Markdown、Prism 代码高亮、KaTeX 公式和 Mermaid 图表。
 - 简体中文与英文、浅色与深色主题、位置设置、ZIP 历史导入导出。
@@ -76,11 +69,12 @@ pnpm build:single
 
 ## 数据存储与备份
 
-- **存储位置**：API Key 和应用设置保存在 `localStorage`，会话记录、分支与附件原件保存在 IndexedDB（按包名所在的应用私有沙盒隔离）。发送对话、上传附件与使用语音功能时，相应内容会直接提交给配置的 API 服务。
+- Android 版使用 Android Keystore 管理加密密钥，API Key 的密文保存在应用私有目录并排除在系统备份之外。网页版通过 Web Crypto 加密后存入 IndexedDB。页面不支持加密存储时，API Key 仅在本次页面打开期间有效。
+- 应用设置保存在 `localStorage`，会话记录、分支与附件原件保存在 IndexedDB。Android 系统备份和换机迁移会排除 WebView 的 `localStorage`，以防旧版写入过的明文记录一并转移。发送对话、上传附件与使用语音功能时，相应内容会直接提交给配置的 API 服务。
 - **卸载与升级提示**：
   - **直接卸载应用** 会连同应用私有沙盒数据一并清空，导致本地历史对话和 API Key 丢失。
   - **同包名、同签名覆盖安装** 升级新版时，历史会话与设置会保留。
-  - 卸载或更换设备前，请通过 **设置 → 数据管理 → 导出所有历史对话** 将 ZIP 备份保存至手机 `Download/` 目录；重装后再导入即可恢复历史会话（导出包含会话与本地图片原件，不包含 API Key 与非图片附件原件，格式详见 [历史导入导出](src/services/chat/history/README.md)）。
+  - 卸载或更换设备前，请通过 **设置 → 数据管理 → 导出所有历史对话** 将 ZIP 备份保存至手机 `Download/` 目录。备份包含会话及本地图片和视频原件，格式详见 [历史导入导出](src/services/chat/history/README.md)。
 - **删除全部对话**：**设置 → 数据管理 → 删除所有对话** 会在确认后清空全部本地会话、附件原件和未发送草稿，保留 API Key 与应用设置，不影响已上传到 API 服务的文件。
 
 ## 开发命令与目录结构

@@ -5,6 +5,7 @@ import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import {
   DEFAULT_EXPERT_SYSTEM_PROMPT,
   DEFAULT_FAST_SYSTEM_PROMPT,
+  DEFAULT_FAST_LIVE_PROMPT,
   DEFAULT_FAST_VIDEO_PROMPT,
   DEFAULT_LOCATION_TOOL_PROMPT,
   DEFAULT_READ_LINK_TOOL_PROMPT,
@@ -12,6 +13,7 @@ import {
   DEFAULT_SEARCH_TOOL_PROMPT,
   setExpertSystemPrompt,
   setFastLocationToolPrompt,
+  setFastLivePrompt,
   setFastReadLinkToolPrompt,
   setFastSearchToolPrompt,
   setFastSystemPrompt,
@@ -30,6 +32,7 @@ import styles from './Settings.module.css'
 export type PromptTarget =
   | 'fastSystem'
   | 'fastVideo'
+  | 'fastLive'
   | 'fastSearchTool'
   | 'fastReadLinkTool'
   | 'fastLocationTool'
@@ -53,6 +56,14 @@ const PROMPT_TARGET_CONFIG: Record<PromptTarget, PromptConfig> = {
     defaultValue: DEFAULT_FAST_SYSTEM_PROMPT,
     read: () => useSettings.getState().fastSystemPrompt,
     save: setFastSystemPrompt,
+  },
+  fastLive: {
+    titleKey: 'settingsFastLivePrompt',
+    descKey: 'settingsFastLivePromptDesc',
+    placeholderKey: 'settingsSystemPromptPlaceholder',
+    defaultValue: DEFAULT_FAST_LIVE_PROMPT,
+    read: () => useSettings.getState().fastLivePrompt,
+    save: setFastLivePrompt,
   },
   fastVideo: {
     titleKey: 'settingsFastVideoPrompt',
@@ -112,7 +123,8 @@ const MODE_PROMPT_GROUPS: { main: PromptTarget; tools: PromptTarget[] }[] = [
       'fastSearchTool',
       'fastReadLinkTool',
       'fastLocationTool',
-      ...(__BETA__ ? ['fastVideo' as const] : []),
+      'fastVideo',
+      'fastLive',
     ],
   },
   {

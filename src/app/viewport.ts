@@ -11,7 +11,8 @@ const subscribe = (onChange: () => void) => {
 export const useIsMobile = () => useSyncExternalStore(subscribe, () => query.matches)
 
 const preventPageScroll = (event: TouchEvent) => {
-  if (event.touches.length !== 1) {
+  if (event.touches.length > 1) {
+    event.preventDefault()
     return
   }
   for (
@@ -31,7 +32,7 @@ const preventPageScroll = (event: TouchEvent) => {
   event.preventDefault()
 }
 
-/** 阻止移动端整页滚动，保留内部可滚动区域的滚动和双指缩放。 */
+/** 阻止移动端整页滚动，关闭双指缩放，保留内部区域的单指滚动。 */
 export const usePreventPageScroll = (enabled: boolean) => {
   useEffect(() => {
     if (!enabled) {
@@ -53,9 +54,8 @@ export const useMobileViewport = (enabled: boolean) => {
     }
     const viewport = window.visualViewport
     const hasNativeHost = Boolean((window as Window & { AndroidHost?: unknown }).AndroidHost)
-    // Android 原生层通过外层 FrameLayout 真实缩减 WebView 物理高度并托底导航栏安全区，
-    // 100dvh 与原生动画逐帧同步，跳过 JS 改写 --app-viewport-height 以避免键盘收起时因
-    // innerHeight 与 visualViewport 错帧更新引发页面回弹。
+    // Android 原生层保持 WebView 全屏物理尺寸，通过 WindowInsetsAnimation 经 imeMotion
+    // 驱动局部纯 GPU transform，跳过 JS 改写 --app-viewport-height 以避免与原生错帧回弹。
     if (hasNativeHost) {
       return
     }
@@ -69,7 +69,7 @@ export const useMobileViewport = (enabled: boolean) => {
       delete document.documentElement.dataset.imeOpen
     }
     const update = () => {
-      // 双指缩放由浏览器处理，保持当前布局尺寸。
+      // 浏览器强制缩放时，不把视觉视口的变化误判为键盘高度变化。
       if (viewport && viewport.scale !== 1) {
         return
       }

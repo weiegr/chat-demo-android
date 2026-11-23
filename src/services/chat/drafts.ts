@@ -39,6 +39,9 @@ export const useDrafts = create<{ drafts: Map<string | null, Draft> }>(() => ({
 export const getDraft = (sessionId: string | null): Draft =>
   useDrafts.getState().drafts.get(sessionId) ?? EMPTY_DRAFT
 
+export const getEditDraftKey = (sessionId: string, messageId: string) =>
+  `edit:${sessionId}:${messageId}`
+
 const updateDraft = (sessionId: string | null, update: (draft: Draft) => Draft) =>
   useDrafts.setState((state) => {
     const draft = update(state.drafts.get(sessionId) ?? EMPTY_DRAFT)
@@ -201,10 +204,14 @@ export const prepareDraftMessage = (
   draft: Draft,
   tasks: Record<string, UploadTask>,
   useOcrModel: boolean,
-  videoAllowed: boolean
+  videoAllowed: boolean,
+  hasExistingFiles = false
 ) => {
   const text = draft.text.trim()
-  if ((!text && draft.attachments.length === 0) || (draft.video && !videoAllowed)) {
+  if (
+    (!text && !hasExistingFiles && draft.attachments.length === 0) ||
+    (draft.video && !videoAllowed)
+  ) {
     return null
   }
   const files: (FileAttachment & { blob: Blob })[] = []

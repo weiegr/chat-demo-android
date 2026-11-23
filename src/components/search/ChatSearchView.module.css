@@ -1,0 +1,452 @@
+.page {
+  position: absolute;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  color: var(--dsw-alias-label-primary);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.pagePresenting {
+  visibility: visible;
+}
+
+/* 隐藏复位态不保留后台过渡，防止从 pageHolding 静默复位时残留不可见补间 */
+.page:not(.pagePresenting) {
+  .backdrop,
+  .barInner,
+  .backWrap,
+  .field,
+  .results {
+    transition: none;
+  }
+}
+
+.pageOpen {
+  pointer-events: auto;
+}
+
+/* 独立底色层：只过渡 opacity，让侧边栏底色与搜索页纯底色平滑融合，零背景重绘 */
+.backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-color: var(--dsw-alias-bg-base);
+  opacity: 0;
+  transition: opacity 0.2s var(--ds-ease-in-out);
+}
+
+.pageOpen .backdrop {
+  opacity: 1;
+}
+
+/* 顶栏：返回按钮 + 搜索框，桌面端居中限宽。官方搜索页没有分隔线，靠胶囊输入框区分 */
+.bar {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: calc(10px + var(--safe-top)) 12px 6px;
+  contain: layout style;
+}
+
+.barInner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.backWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* 与官方一致：整条胶囊形灰底输入框，聚焦时不换底色 */
+.field {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 10px;
+  box-sizing: border-box;
+  height: 44px;
+  padding: 0 12px 0 14px;
+  border-radius: 999px;
+  background-color: var(--dsw-alias-interactive-bg-hover);
+}
+
+.fieldIcon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: none;
+  font: inherit;
+  font-size: 16px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-primary);
+  caret-color: var(--dsw-alias-brand-text);
+
+  &::placeholder {
+    color: var(--dsw-alias-label-tertiary);
+  }
+}
+
+.clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.results {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px 8px calc(16px + var(--safe-bottom) + var(--ime-settled, 0px));
+  scrollbar-color: var(--scroll-color) transparent;
+  opacity: 0;
+  transform: translate3d(0, 6px, 0);
+  transition:
+    opacity 0.12s ease-out,
+    transform 0.15s ease-out;
+}
+
+.pageOpen .results {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 0.2s ease-out 0.06s,
+    transform 0.24s cubic-bezier(0.22, 1, 0.36, 1) 0.06s;
+}
+
+.list {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: 12px;
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  transition: background-color var(--ds-transition-duration) var(--ds-ease-in-out);
+
+  @media (hover: hover) {
+    &:hover {
+      background-color: var(--dsw-alias-interactive-bg-hover);
+    }
+  }
+
+  &:active {
+    background-color: var(--dsw-alias-interactive-bg-active);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--dsw-alias-brand-primary);
+  }
+}
+
+/* 左侧会话模式图标：40px 空心细描边圆环垂直居中，与官方搜索结果左侧气泡区对齐 */
+.modeIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 50%;
+  background-color: transparent;
+  color: var(--dsw-alias-label-secondary);
+
+  svg {
+    display: block;
+    width: 19px;
+    height: 19px;
+  }
+}
+
+.rowBody {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  gap: 3px;
+}
+
+.rowHead {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.rowTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--dsw-alias-label-primary);
+}
+
+.rowDate {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.rowMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fileIcon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 正文片段：小字单行，与官方一致；命中词另由 .mark 上色 */
+.snippet {
+  display: -webkit-box;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  font-size: 13px;
+  line-height: 21px;
+  word-break: break-word;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.branch {
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 0 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 400;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.mark {
+  padding: 0 2px;
+  border-radius: 2px;
+  background-color: #ffe58f;
+  color: inherit;
+}
+
+[data-ds-dark-theme] .mark {
+  background-color: rgba(250, 204, 21, 0.32);
+}
+
+.state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  min-height: 40vh;
+  padding: 32px 24px;
+  font-size: 14px;
+  line-height: 22px;
+  text-align: center;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.stateHint {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-caption);
+}
+
+.searchStatus {
+  padding: 8px 12px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* 移动端：搜索层位于侧边栏（z=1）与对话卡片（z=3）之间；
+   胶囊从侧边栏搜索框原地右移并向右展开，随主界面滑出无缝铺满全屏 */
+@media not all and (min-width: 768px) {
+  .page {
+    z-index: 2;
+  }
+
+  .backdrop {
+    transition: opacity 0.22s ease-out 0.02s;
+  }
+
+  .pageOpen .backdrop {
+    transition: opacity 0.22s ease-out 0s;
+  }
+
+  .bar {
+    padding: calc(10px + var(--safe-top)) 12px 6px;
+  }
+
+  .barInner {
+    display: block;
+    max-width: none;
+  }
+
+  .backWrap {
+    position: absolute;
+    top: 50%;
+    left: -4px;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate3d(-10px, -50%, 0) scale(0.82);
+    will-change: transform, opacity;
+    transition:
+      opacity 0.07s ease-out 0s,
+      transform 0.1s ease-out 0s;
+  }
+
+  .pageOpen .backWrap {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate3d(0, -50%, 0) scale(1);
+    transition:
+      opacity 0.2s cubic-bezier(0.22, 1, 0.36, 1) 0.065s,
+      transform 0.24s cubic-bezier(0.22, 1, 0.36, 1) 0.065s;
+  }
+
+  .field {
+    height: 44px;
+    margin-left: var(--search-collapsed-left, 0px);
+    margin-right: var(--search-collapsed-right, calc(100vw - var(--mobile-sider-width)));
+    transition:
+      margin-left 0.26s cubic-bezier(0.22, 1, 0.36, 1),
+      margin-right 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .pageOpen .field {
+    margin-left: 38px;
+    margin-right: 0px;
+    transition:
+      margin-left 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+      margin-right 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  /* 点击搜索结果直达会话：保持当前画面静定于主界面下方，等主界面滑回盖严后再复位 */
+  .pageHolding {
+    pointer-events: none;
+
+    .backdrop {
+      opacity: 1;
+      transition: none;
+    }
+
+    .backWrap {
+      opacity: 1;
+      transform: translate3d(0, -50%, 0) scale(1);
+      transition: none;
+    }
+
+    .field {
+      margin-left: 38px;
+      margin-right: 0px;
+      transition: none;
+    }
+
+    .results {
+      opacity: 1;
+      transform: none;
+      transition: none;
+    }
+  }
+
+  .row {
+    padding: 12px 8px;
+  }
+}
+
+@media (min-width: 768px) {
+  .bar {
+    padding: 12px 16px;
+  }
+
+  .barInner {
+    opacity: 0;
+    transform: translate3d(0, -8px, 0) scale(0.985);
+    transition:
+      opacity 0.16s var(--ds-ease-in-out),
+      transform 0.18s var(--ds-ease-in-out);
+  }
+
+  .pageOpen .barInner {
+    opacity: 1;
+    transform: none;
+    transition:
+      opacity 0.2s var(--ds-ease-in-out),
+      transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .results {
+    padding: 12px 16px 24px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backdrop,
+  .barInner,
+  .backWrap,
+  .field,
+  .results {
+    transition: none !important;
+  }
+}

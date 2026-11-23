@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { TtsVoice } from './api/speech.js'
 import type { ChatModel } from './api/types.js'
+import { loadStoredApiKey, saveStoredApiKey } from './apiKeyStorage.js'
 import { normalizeLocation, type UserLocation } from './location.js'
 
 export type Locale = 'zh-CN' | 'en-US'
@@ -10,15 +11,28 @@ export type ThemePreference = 'light' | 'dark' | 'system'
 
 /** 对话模式：快速（Flash 全功能）/ 专家（Pro 复杂问题 + OCR）/ RP（长上下文纯净模式） */
 export type ChatMode = 'fast' | 'expert' | 'rp'
+export type QuickCameraShortcut = 'on' | 'when-occupied' | 'off'
 
 /** 快速模式系统提示词默认值；可在设置中修改或清空（清空后请求不带基础 system 内容） */
 export const DEFAULT_FAST_SYSTEM_PROMPT = '该助手为DeepSeek Flash，由深度求索公司创造。'
 
-const LEGACY_FAST_VIDEO_PROMPT =
-  '带时间戳的 2×2 拼图是用户视频中按时间均匀抽取的画面。按拼图顺序阅读，每张先左后右、先上后下。根据可见画面和时间戳回答，区分画面中可见的内容与推断。你只能看到抽样画面，无法听到音轨或确认两帧之间的细节。普通图片附件仍按普通图片理解。'
+export const DEFAULT_FAST_LIVE_PROMPT = [
+  '你正在 DeepSeek Live 通话模式中，由 DeepSeek Flash 模型提供回答。',
+  '像当面聊天一样，用自然口语和简短连贯的句子直接回答。少用书面语、列表、分点、括号注释和复杂长句。',
+  '复杂话题先讲当前最关键的一小段，把后续逻辑拆成几轮对话，给用户留出插话和追问的空间。',
+  '用户打断或改问时，跟随最新发言。需要核实信息或实际位置时，按可用工具和授权使用搜索或定位。',
+].join('\n')
 
-export const DEFAULT_FAST_VIDEO_PROMPT =
-  '「视频画面」后的每张图按左上、右上、左下、右下排列四幅画面。每格对应独立时刻，以单格画面判断该时刻的物体数量和位置。将「视频对白转写」当作视频中人物的发言，结合画面和可用对白直接回答用户的问题。用户问及处理方式时，简短说明收到的是按时间排列的画面和可用的对白转写。证据不足时，只指出影响回答的具体细节。'
+const LEGACY_FAST_VIDEO_PROMPTS = [
+  '带时间戳的 2×2 拼图是用户视频中按时间均匀抽取的画面。按拼图顺序阅读，每张先左后右、先上后下。根据可见画面和时间戳回答，区分画面中可见的内容与推断。你只能看到抽样画面，无法听到音轨或确认两帧之间的细节。普通图片附件仍按普通图片理解。',
+  '「视频画面」后的每张图按左上、右上、左下、右下排列四幅画面。每格对应独立时刻，以单格画面判断该时刻的物体数量和位置。将「视频对白转写」当作视频中人物的发言，结合画面和可用对白直接回答用户的问题。用户问及处理方式时，简短说明收到的是按时间排列的画面和可用的对白转写。证据不足时，只指出影响回答的具体细节。',
+]
+
+export const DEFAULT_FAST_VIDEO_PROMPT = [
+  '「视频画面」后的每张图按左上、右上、左下、右下排列四幅画面。每格对应独立时刻，以单格画面判断该时刻的物体数量和位置。',
+  '「视频对白」是视频中人物说的话。结合画面和对白，用自然的语言直接回答用户的问题。需要引用时，直接说视频里的人讲了什么。',
+  '回答聚焦视频内容。只有用户问到处理方式时，才说明提供了哪些画面和对白。证据不足时，只指出影响回答的具体细节。',
+].join('\n')
 
 /** 专家模式系统提示词默认值；对模型只提档位（Pro），不暴露具体型号 */
 export const DEFAULT_EXPERT_SYSTEM_PROMPT = '该助手为DeepSeek Pro，由深度求索公司创造。'
@@ -60,9 +74,10 @@ export const resolveModeModel = (mode: ChatMode, rpModel: ChatModel): ChatModel 
   return 'deepseek-flash'
 }
 
-/** 本机设置，存 localStorage：API Key、语言、主题、位置与 AI 定位权限、朗读音色、各模式系统与工具提示词、对话模式与 RP 模型、深度思考与智能搜索开关、侧边栏收起状态 */
+/** API Key 从加密存储载入，其他本机设置保存在 localStorage。 */
 type Settings = {
   apiKey: string | null
+  apiKeyStorageMode: 'loading' | 'ready' | 'temporary' | 'error'
   locale: Locale
   themePreference: ThemePreference
   location: UserLocation | null
@@ -70,10 +85,12 @@ type Settings = {
   allowAiLocation: boolean
   allowVideoUpload: boolean
   videoAudioEnabled: boolean
+  quickCameraShortcut: QuickCameraShortcut
   ttsVoice: TtsVoice
   /** 回答完成后是否自动朗读回复内容 */
   autoReadAloud: boolean
   fastSystemPrompt: string
+  fastLivePrompt: string
   fastVideoPrompt: string
   fastSearchToolPrompt: string
   fastReadLinkToolPrompt: string
@@ -133,17 +150,18 @@ export const getModePrompts = (
 }
 
 const KEYS = {
-  apiKey: 'chat-demo:api-key',
   locale: 'chat-demo:locale',
   location: 'chat-demo:location',
   locationEnabled: 'chat-demo:location-enabled',
   allowAiLocation: 'chat-demo:allow-ai-location',
   allowVideoUpload: 'chat-demo:allow-video-upload',
   videoAudioEnabled: 'chat-demo:transcribe-video-audio',
+  quickCameraShortcut: 'chat-demo:quick-camera-shortcut',
   themePreference: 'chat-demo:theme-preference',
   ttsVoice: 'chat-demo:tts-voice',
   autoReadAloud: 'chat-demo:auto-read-aloud',
   fastSystemPrompt: 'chat-demo:fast-system-prompt',
+  fastLivePrompt: 'chat-demo:fast-live-prompt',
   fastVideoPrompt: 'chat-demo:fast-video-prompt',
   fastSearchToolPrompt: 'chat-demo:fast-search-tool-prompt',
   fastReadLinkToolPrompt: 'chat-demo:fast-read-link-tool-prompt',
@@ -230,9 +248,16 @@ const initialChatMode = (): ChatMode => {
 const initialRpModel = (): ChatModel =>
   read(KEYS.rpModel) === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-flash'
 
+const initialQuickCameraShortcut = (): QuickCameraShortcut => {
+  const saved = read(KEYS.quickCameraShortcut)
+  return saved === 'when-occupied' || saved === 'off' ? saved : 'on'
+}
+
 const initialVideoPrompt = () => {
   const saved = read(KEYS.fastVideoPrompt)
-  return saved === null || saved === LEGACY_FAST_VIDEO_PROMPT ? DEFAULT_FAST_VIDEO_PROMPT : saved
+  return saved === null || LEGACY_FAST_VIDEO_PROMPTS.includes(saved)
+    ? DEFAULT_FAST_VIDEO_PROMPT
+    : saved
 }
 
 /** 已设置过手动位置的老版本升级时默认保持开启，未配置过或显式关闭时为 false */
@@ -246,17 +271,20 @@ const initialLocationEnabled = (): boolean => {
 }
 
 export const useSettings = create<Settings>(() => ({
-  apiKey: read(KEYS.apiKey),
+  apiKey: null,
+  apiKeyStorageMode: 'loading',
   locale: initialLocale(),
   location: initialLocationValue,
   locationEnabled: initialLocationEnabled(),
   allowAiLocation: read(KEYS.allowAiLocation) === 'true',
-  allowVideoUpload: __BETA__ && read(KEYS.allowVideoUpload) === 'true',
-  videoAudioEnabled: __BETA__ && read(KEYS.videoAudioEnabled) === 'true',
+  allowVideoUpload: read(KEYS.allowVideoUpload) === 'true',
+  videoAudioEnabled: read(KEYS.videoAudioEnabled) === 'true',
+  quickCameraShortcut: initialQuickCameraShortcut(),
   themePreference: initialThemePreference(),
   ttsVoice: initialTtsVoice(),
   autoReadAloud: read(KEYS.autoReadAloud) === 'true',
   fastSystemPrompt: read(KEYS.fastSystemPrompt) ?? legacySystemPrompt ?? DEFAULT_FAST_SYSTEM_PROMPT,
+  fastLivePrompt: read(KEYS.fastLivePrompt) ?? DEFAULT_FAST_LIVE_PROMPT,
   fastVideoPrompt: initialVideoPrompt(),
   fastSearchToolPrompt: read(KEYS.fastSearchToolPrompt) ?? DEFAULT_SEARCH_TOOL_PROMPT,
   fastReadLinkToolPrompt: read(KEYS.fastReadLinkToolPrompt) ?? DEFAULT_READ_LINK_TOOL_PROMPT,
@@ -298,10 +326,15 @@ export const setAllowVideoUpload = (allowVideoUpload: boolean) => {
   useSettings.setState({ allowVideoUpload })
 }
 
+export const setQuickCameraShortcut = (quickCameraShortcut: QuickCameraShortcut) => {
+  write(KEYS.quickCameraShortcut, quickCameraShortcut)
+  useSettings.setState({ quickCameraShortcut })
+}
+
 export const canUploadVideo = (
   mode: ChatMode,
   { allowVideoUpload }: Pick<Settings, 'allowVideoUpload'> = useSettings.getState()
-) => __BETA__ && mode === 'fast' && allowVideoUpload
+) => mode === 'fast' && allowVideoUpload
 
 export const setVideoAudioEnabled = (videoAudioEnabled: boolean) => {
   write(KEYS.videoAudioEnabled, String(videoAudioEnabled))
@@ -331,6 +364,11 @@ export const setAutoReadAloud = (autoReadAloud: boolean) => {
 export const setFastSystemPrompt = (fastSystemPrompt: string) => {
   write(KEYS.fastSystemPrompt, fastSystemPrompt)
   useSettings.setState({ fastSystemPrompt })
+}
+
+export const setFastLivePrompt = (fastLivePrompt: string) => {
+  write(KEYS.fastLivePrompt, fastLivePrompt)
+  useSettings.setState({ fastLivePrompt })
 }
 
 export const setFastVideoPrompt = (fastVideoPrompt: string) => {
@@ -373,9 +411,23 @@ export const setRpModel = (rpModel: ChatModel) => {
   useSettings.setState({ rpModel })
 }
 
+let apiKeyInitialization: Promise<void> | undefined
+let apiKeyWrite = Promise.resolve()
+
+export const initApiKey = () =>
+  (apiKeyInitialization ??= loadStoredApiKey().then(
+    (stored) => useSettings.setState(stored),
+    () => useSettings.setState({ apiKeyStorageMode: 'error' })
+  ))
+
 export const setApiKey = (apiKey: string | null) => {
-  write(KEYS.apiKey, apiKey)
-  useSettings.setState({ apiKey })
+  const write = apiKeyWrite.then(async () => {
+    await initApiKey()
+    const apiKeyStorageMode = await saveStoredApiKey(apiKey)
+    useSettings.setState({ apiKey, apiKeyStorageMode })
+  })
+  apiKeyWrite = write.catch(() => {})
+  return write
 }
 
 export const setThinking = (thinking: boolean) => {

@@ -4,7 +4,14 @@
   display: flex;
 }
 
+@media (min-width: 768px) {
+  .container {
+    padding-bottom: var(--safe-bottom);
+  }
+}
+
 .welcome {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -16,6 +23,11 @@
   padding: 0 32px 64px;
 }
 
+.inputSlot {
+  width: 100%;
+  flex-shrink: 0;
+}
+
 .hero {
   display: flex;
   flex-direction: column;
@@ -24,10 +36,11 @@
   margin-bottom: 24px;
 }
 
+/* 三条标题共用同一网格槽位自然撑开最大高度，零空白帧交叉淡入淡出 */
 .greeting {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
+  width: 100%;
   margin-bottom: 22px;
   font-size: 24px;
   line-height: 32px;
@@ -37,8 +50,9 @@
 }
 
 .greetingText {
-  opacity: 1;
-  transition: opacity 0.18s ease;
+  grid-area: 1 / 1;
+  opacity: 0;
+  visibility: hidden;
 }
 
 .modeSwitch {
@@ -81,7 +95,7 @@
   cursor: grabbing;
 }
 
-/* 与单格等宽的位移层：0..2 精确对应三档，由 JS 统一按 progress 驱动以与高亮裁剪和提示语同帧同步 */
+/* 与单格等宽的位移层：由二阶弹簧连续 progress 驱动 */
 .modeThumbSlot {
   position: absolute;
   z-index: 1;
@@ -90,10 +104,9 @@
   left: 0;
   width: calc(100% / 3);
   pointer-events: none;
-  will-change: transform;
 }
 
-/* 蓝色高亮区大于外层胶囊范围，上下与左右均适度突出浮于胶囊之上；不透明背景天然遮盖底层默认文字 */
+/* 蓝色高亮区略大于外层胶囊范围，上下与左右适度突出；拖拽/按压时微膨 */
 .modeThumb {
   position: absolute;
   top: -5px;
@@ -153,29 +166,22 @@
   cursor: grab;
 }
 
-/* 与底层选项像素级重合的蓝色覆盖层，按滑块胶囊精确轮廓 clip-path 裁切，落入胶囊内的文字与图标实时变蓝 */
+/* 与底层选项像素级重合的蓝色覆盖层；左右多留 12px 缓冲以完整容纳弹簧微过冲与边界橡皮筋 */
 .modeActiveLayer {
-  --mode-clip-left: 0;
-  --mode-clip-right: 0.666667;
   --mode-clip-radius: 9999px;
   position: absolute;
   z-index: 2;
   top: -5px;
-  right: -4px;
+  right: -16px;
   bottom: -5px;
-  left: -4px;
+  left: -16px;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: stretch;
   box-sizing: border-box;
-  padding: 5px 4px;
+  padding: 5px 16px;
   pointer-events: none;
   user-select: none;
-  will-change: clip-path;
-  clip-path: inset(
-    0px calc((100% - 8px) * var(--mode-clip-right)) 0px calc((100% - 8px) * var(--mode-clip-left))
-      round var(--mode-clip-radius)
-  );
 }
 
 .modeOptionOverlay {
@@ -211,6 +217,22 @@
     display: block;
     width: 16px;
     height: 16px;
+  }
+}
+
+.modeIconPop {
+  animation: mode-icon-pop 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes mode-icon-pop {
+  0% {
+    transform: scale(0.86);
+  }
+  45% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
   }
 }
 
@@ -252,31 +274,17 @@
   }
 }
 
-/* 提示语滑动视口：内容区与模式滑块等宽对齐，左右外扩 4px 与胶囊外沿齐平并用于边缘柔和渐隐 */
+/* 提示语视口：内部舞台与滑块胶囊外沿齐平，仅在模式切换动效期间启用边缘羽化蒙版以省去静止态离屏 Pass */
 .modeHintViewport {
-  --hint-edge-fade: 4px;
+  --hint-edge-fade: 12px;
   position: relative;
   box-sizing: border-box;
-  width: 100%;
-  max-width: 404px;
+  width: calc(100% + 16px);
+  max-width: 420px;
   min-height: 40px;
-  margin: 14px 0 0;
+  margin: 14px -8px 0;
   padding: 0 var(--hint-edge-fade);
   overflow: hidden;
-  -webkit-mask-image: linear-gradient(
-    to right,
-    transparent 0,
-    #000 var(--hint-edge-fade),
-    #000 calc(100% - var(--hint-edge-fade)),
-    transparent 100%
-  );
-  mask-image: linear-gradient(
-    to right,
-    transparent 0,
-    #000 var(--hint-edge-fade),
-    #000 calc(100% - var(--hint-edge-fade)),
-    transparent 100%
-  );
 }
 
 .modeHintStage {
@@ -299,8 +307,42 @@
   line-height: 20px;
   color: var(--dsw-alias-label-tertiary);
   white-space: pre-line;
+  opacity: 0;
   visibility: hidden;
-  will-change: transform;
+}
+
+/* 仅在模式滑块弹簧运行或拖拽期间按需提升合成层并开启边缘羽化，静止与弹键盘时保持零多余离屏层 */
+.heroAnimating {
+  .greetingText,
+  .modeHintItem {
+    will-change: transform, opacity;
+  }
+
+  .modeThumbSlot,
+  .modeThumb {
+    will-change: transform;
+  }
+
+  .modeActiveLayer {
+    will-change: clip-path;
+  }
+
+  .modeHintViewport {
+    -webkit-mask-image: linear-gradient(
+      to right,
+      transparent 0,
+      #000 var(--hint-edge-fade),
+      #000 calc(100% - var(--hint-edge-fade)),
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to right,
+      transparent 0,
+      #000 var(--hint-edge-fade),
+      #000 calc(100% - var(--hint-edge-fade)),
+      transparent 100%
+    );
+  }
 }
 
 .modeHintStart {
@@ -313,11 +355,6 @@
 
 .modeHintEnd {
   text-align: right;
-}
-
-.textHidden {
-  opacity: 0;
-  transition-duration: 0.14s;
 }
 
 @media (max-width: 439px) {
@@ -361,8 +398,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .greetingText,
   .modeOption {
     transition: none;
+  }
+
+  .modeIconPop {
+    animation: none;
   }
 }

@@ -85,10 +85,19 @@ import java.util.concurrent.atomic.AtomicReference;
 public class MainActivity extends Activity {
     private static final String APP_HOST = "appassets.androidplatform.net";
     private static final String APP_ORIGIN = "https://" + APP_HOST;
+    private static final String APP_PAGE = APP_ORIGIN + "/index.html";
     private static final String MEDIA_PREFIX = "/__android_media__/";
     private static final String PROXY_PATH = "/__android_proxy__";
     private static final String PREF_IME_LAYOUT = "ime_layout_prefs";
     private static final String KEY_LAST_IME_RAISE_CSS = "last_ime_raise_css";
+    /** 弹出动画前瞻时间（ms），温和抵消 WebView 跨进程渲染上屏的 ~2 帧延迟 */
+    private static final float IME_OPEN_LEAD_MS = 18f;
+    /** 弹出前瞻速度上限（css px / ms）与单帧前瞻偏移上限（css px），防止中途打断或跳帧时冲过头再回砸 */
+    private static final float MAX_IME_LEAD_VEL = 2.4f;
+    private static final float MAX_IME_OPEN_LEAD_PX = 36f;
+    /** 非动画 Insets 确认延迟（ms），避免 120Hz 下 onApplyWindowInsets 早于 onPrepare 1~3 帧到达时提前闪现回原位 */
+    private static final long NON_ANIM_INSETS_DELAY_MS = 56L;
+    private static final long IME_ANIM_WATCHDOG_MS = 800L;
     private static final int REQ_FILE_CHOOSER = 1001;
     private static final int REQ_AUDIO_PERMISSION = 1002;
     private static final int REQ_GALLERY_PERMISSION = 1003;
@@ -102,6 +111,7 @@ public class MainActivity extends Activity {
 
     private FrameLayout rootContainer;
     private WebView webView;
+    private ApiKeyStorage apiKeyStorage;
     private ValueCallback<Uri[]> filePathCallback;
     private PermissionRequest pendingPermissionRequest;
     private GeolocationPermissions.Callback pendingGeolocationCallback;
@@ -117,13 +127,21 @@ public class MainActivity extends Activity {
     private volatile String cachedUserAgent = "Mozilla/5.0";
     private int safeTopCss = 24;
     private int safeBottomCss = 0;
-    private int imePaddingPx = 0;
     private int lastNavBottomPx = 0;
+    private volatile float currentImeRaiseCss = 0f;
+    private float lastDispatchedImeRaiseCss = -1f;
     private volatile int lastKnownImeRaiseCss = 0;
+    private final Set<WindowInsetsAnimation> activeImeAnims = new HashSet<>();
     private boolean imeAnimating = false;
     private boolean isImeVisible = false;
-    private boolean wasImeVisibleBeforeAnim = false;
-    private boolean lastSyncedImeOpen = false;
+    private boolean imeAnimOpening = false;
+    private boolean waitingForAnimTarget = false;
+    private boolean hasAnimTarget = false;
+    private float animStartRaiseCss = 0f;
+    private float animTargetRaiseCss = 0f;
+    private float prevAnimRawRaiseCss = 0f;
+    private float smoothedOpenVel = 0f;
+    private long prevAnimFrameNs = 0L;
     private WindowInsets pendingNonAnimInsets = null;
     private final Runnable applyPendingNonAnimInsets = () -> {
         WindowInsets pending = pendingNonAnimInsets;
@@ -133,13 +151,22 @@ public class MainActivity extends Activity {
         }
     };
     private final Runnable imeAnimWatchdog = () -> {
+        activeImeAnims.clear();
         imeAnimating = false;
+        imeAnimOpening = false;
+        waitingForAnimTarget = false;
+        hasAnimTarget = false;
+        animTargetRaiseCss = 0f;
+        smoothedOpenVel = 0f;
+        prevAnimFrameNs = 0L;
         if (rootContainer != null) {
             WindowInsets rootInsets = rootContainer.getRootWindowInsets();
             if (rootInsets != null) {
-                applyWindowInsetsNow(rootInsets, false);
+                syncFinalWindowInsetsState(rootInsets);
             }
         }
+        lastDispatchedImeRaiseCss = currentImeRaiseCss;
+        dispatchImeEnd(currentImeRaiseCss, isImeVisible);
     };
 
     @Override
@@ -173,9 +200,11 @@ public class MainActivity extends Activity {
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(true);
         settings.setSupportMultipleWindows(true);
+        settings.setSupportZoom(false);
         settings.setTextZoom(100);
         cachedUserAgent = settings.getUserAgentString();
 
+        apiKeyStorage = new ApiKeyStorage(getNoBackupFilesDir());
         webView.addJavascriptInterface(new AndroidBridge(), "AndroidHost");
 
         webView.setWebViewClient(new WebViewClient() {
@@ -339,7 +368,7 @@ public class MainActivity extends Activity {
             }
         });
 
-        webView.loadUrl(APP_ORIGIN + "/index.html");
+        webView.loadUrl(APP_PAGE);
     }
 
     @Override
@@ -450,6 +479,8 @@ public class MainActivity extends Activity {
                 long contentLength = conn.getContentLengthLong();
                 if (contentLength >= 0) {
                     headers.put("Content-Length", String.valueOf(contentLength));
+                    // WebView 可能过滤拦截响应的 Content-Length，通过自定义头保留下载总量。
+                    headers.put("X-Archive-Content-Length", String.valueOf(contentLength));
                 }
 
                 if (rawStream == null) {
@@ -765,25 +796,37 @@ public class MainActivity extends Activity {
             decor.setSystemUiVisibility(flags);
         }
         rootContainer.setOnApplyWindowInsetsListener((v, insets) -> {
-            if (imeAnimating) {
+            if (waitingForAnimTarget) {
+                // Android 规范保证：onPrepare() 与 onStart() 之间派发的 onApplyWindowInsets 即为本次动画的终态目标 Insets。
+                syncTopSafeAreaFromInsets(insets);
+                float density = getDisplayDensity();
+                int navBottomPx = extractNavBottomPx(insets);
+                int imeBottomPx = extractImeBottomPx(insets);
+                lastNavBottomPx = navBottomPx;
+                animTargetRaiseCss = imeBottomPx > navBottomPx
+                        ? Math.max(0f, (imeBottomPx - navBottomPx) / density)
+                        : 0f;
+                hasAnimTarget = true;
+                waitingForAnimTarget = false;
+            } else if (imeAnimating) {
                 syncTopSafeAreaFromInsets(insets);
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
                     && (extractImeBottomPx(insets) > extractNavBottomPx(insets)) != isImeVisible) {
-                // 延迟 1 帧确认是否进入 WindowInsetsAnimation，避免个别 ROM 在 onPrepare 前先闪一帧终值高度。
+                // 延迟确认是否进入 WindowInsetsAnimation，彻底避免 120Hz 下 onApplyWindowInsets 比 onPrepare 早到 1~3 帧时
+                // 提前发 dispatchImeEnd(0, false) 闪现回原位，以及把 isImeVisible 改错引发后续动画方向反判。
                 syncTopSafeAreaFromInsets(insets);
                 pendingNonAnimInsets = insets;
-                rootContainer.removeCallbacks(applyPendingNonAnimInsets);
-                rootContainer.postOnAnimation(applyPendingNonAnimInsets);
+                mainHandler.removeCallbacks(applyPendingNonAnimInsets);
+                mainHandler.postDelayed(applyPendingNonAnimInsets, NON_ANIM_INSETS_DELAY_MS);
             } else {
                 pendingNonAnimInsets = null;
-                rootContainer.removeCallbacks(applyPendingNonAnimInsets);
+                mainHandler.removeCallbacks(applyPendingNonAnimInsets);
                 applyWindowInsetsNow(insets, false);
             }
-            return consumeBottomInsets(insets, imePaddingPx);
+            return consumeBottomInsets(insets, Math.max(extractImeBottomPx(insets), lastNavBottomPx));
         });
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            final Set<WindowInsetsAnimation> activeImeAnims = new HashSet<>();
             rootContainer.setWindowInsetsAnimationCallback(new WindowInsetsAnimation.Callback(
                     WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
                 @Override
@@ -792,37 +835,52 @@ public class MainActivity extends Activity {
                         return;
                     }
                     pendingNonAnimInsets = null;
-                    rootContainer.removeCallbacks(applyPendingNonAnimInsets);
-                    if (activeImeAnims.isEmpty()) {
-                        wasImeVisibleBeforeAnim = isImeVisible;
+                    mainHandler.removeCallbacks(applyPendingNonAnimInsets);
+                    boolean wasEmpty = activeImeAnims.isEmpty();
+                    // 每次新动画（含中途打断反转）都以当前实时高度为起点，并等待紧随其后的终态 onApplyWindowInsets
+                    animStartRaiseCss = currentImeRaiseCss;
+                    waitingForAnimTarget = true;
+                    hasAnimTarget = false;
+                    prevAnimRawRaiseCss = currentImeRaiseCss;
+                    smoothedOpenVel = 0f;
+                    prevAnimFrameNs = 0L;
+                    if (wasEmpty) {
+                        dispatchImePrepare();
                     }
                     activeImeAnims.add(animation);
                     imeAnimating = true;
                     mainHandler.removeCallbacks(imeAnimWatchdog);
-                    mainHandler.postDelayed(imeAnimWatchdog, 600L);
+                    mainHandler.postDelayed(imeAnimWatchdog, IME_ANIM_WATCHDOG_MS);
                 }
 
                 @Override
                 public WindowInsetsAnimation.Bounds onStart(
                         WindowInsetsAnimation animation, WindowInsetsAnimation.Bounds bounds) {
                     if ((animation.getTypeMask() & WindowInsets.Type.ime()) != 0) {
-                        if (!wasImeVisibleBeforeAnim) {
-                            float density = getResources().getDisplayMetrics().density;
-                            if (density <= 0f) {
-                                density = 1f;
-                            }
-                            int targetRaisePx = Math.max(0, bounds.getUpperBound().bottom - lastNavBottomPx);
-                            int targetRaiseCss = Math.round(targetRaisePx / density);
-                            if (targetRaiseCss > 80) {
-                                rememberKeyboardRaiseCss(targetRaiseCss);
-                            }
-                            long rawDuration = animation.getDurationMillis();
-                            long duration = rawDuration > 0 ? Math.max(180L, Math.min(360L, rawDuration)) : 220L;
-                            dispatchImeStart(duration, targetRaiseCss);
+                        waitingForAnimTarget = false;
+                        float density = getDisplayDensity();
+                        float upperRaiseCss = Math.max(0f, (bounds.getUpperBound().bottom - lastNavBottomPx) / density);
+                        float targetRaiseCss;
+                        boolean opening;
+                        if (hasAnimTarget) {
+                            targetRaiseCss = animTargetRaiseCss;
+                            opening = targetRaiseCss > animStartRaiseCss + 1f;
                         } else {
-                            // 键盘开始收起瞬间即恢复底距状态，避免落底后滞后弹一下。
-                            syncImeOpenAttr(false, false);
+                            // 兜底：若个别系统未在 onPrepare 与 onStart 间派发 onApplyWindowInsets，根据起点高度判定方向
+                            opening = animStartRaiseCss <= 1f && upperRaiseCss > 1f;
+                            targetRaiseCss = opening ? upperRaiseCss : 0f;
+                            animTargetRaiseCss = targetRaiseCss;
                         }
+                        imeAnimOpening = opening;
+                        prevAnimRawRaiseCss = currentImeRaiseCss;
+                        smoothedOpenVel = 0f;
+                        prevAnimFrameNs = 0L;
+                        if (opening && targetRaiseCss > 80f) {
+                            rememberKeyboardRaiseCss(Math.round(targetRaiseCss));
+                        }
+                        long rawDuration = animation.getDurationMillis();
+                        long duration = rawDuration > 0 ? Math.max(180L, Math.min(360L, rawDuration)) : 220L;
+                        dispatchImeStart(targetRaiseCss, duration, opening);
                     }
                     return bounds;
                 }
@@ -839,7 +897,7 @@ public class MainActivity extends Activity {
                     if (hasImeAnim) {
                         applyWindowInsetsNow(insets, true);
                     }
-                    return consumeBottomInsets(insets, imePaddingPx);
+                    return consumeBottomInsets(insets, Math.max(extractImeBottomPx(insets), lastNavBottomPx));
                 }
 
                 @Override
@@ -853,16 +911,21 @@ public class MainActivity extends Activity {
                     }
                     mainHandler.removeCallbacks(imeAnimWatchdog);
                     imeAnimating = false;
+                    imeAnimOpening = false;
+                    waitingForAnimTarget = false;
+                    hasAnimTarget = false;
+                    animTargetRaiseCss = 0f;
+                    smoothedOpenVel = 0f;
+                    prevAnimFrameNs = 0L;
                     WindowInsets rootInsets = rootContainer.getRootWindowInsets();
                     if (rootInsets != null) {
-                        applyWindowInsetsNow(rootInsets, true);
+                        syncFinalWindowInsetsState(rootInsets);
                     }
-                    syncImeOpenAttr(isImeVisible, false);
-                    if (wasImeVisibleBeforeAnim && !isImeVisible) {
-                        dispatchImeHidden();
-                    } else if (!wasImeVisibleBeforeAnim && isImeVisible) {
-                        dispatchImeShown();
+                    if (isImeVisible && currentImeRaiseCss > 80f) {
+                        rememberKeyboardRaiseCss(Math.round(currentImeRaiseCss));
                     }
+                    lastDispatchedImeRaiseCss = currentImeRaiseCss;
+                    dispatchImeEnd(currentImeRaiseCss, isImeVisible);
                 }
             });
         }
@@ -904,11 +967,13 @@ public class MainActivity extends Activity {
         return sysBottom > stableBottom ? sysBottom : 0;
     }
 
-    private void syncTopSafeAreaFromInsets(WindowInsets insets) {
+    private float getDisplayDensity() {
         float density = getResources().getDisplayMetrics().density;
-        if (density <= 0f) {
-            density = 1f;
-        }
+        return density > 0f ? density : 1f;
+    }
+
+    private void syncTopSafeAreaFromInsets(WindowInsets insets) {
+        float density = getDisplayDensity();
         int nextSafeTop = Math.round(extractStatusTopPx(insets) / density);
         if (nextSafeTop != safeTopCss) {
             safeTopCss = nextSafeTop;
@@ -916,11 +981,27 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void applyWindowInsetsNow(WindowInsets insets, boolean fromAnimation) {
-        float density = getResources().getDisplayMetrics().density;
-        if (density <= 0f) {
-            density = 1f;
+    /** 仅同步终态 Insets 到原生状态与安全区变量，不重复发送 progress，交由紧随其后的 dispatchImeEnd 一次落位 */
+    private void syncFinalWindowInsetsState(WindowInsets insets) {
+        float density = getDisplayDensity();
+        int topPx = extractStatusTopPx(insets);
+        int navBottomPx = extractNavBottomPx(insets);
+        int imeBottomPx = extractImeBottomPx(insets);
+        lastNavBottomPx = navBottomPx;
+        isImeVisible = imeBottomPx > navBottomPx;
+        currentImeRaiseCss = isImeVisible ? Math.max(0f, (imeBottomPx - navBottomPx) / density) : 0f;
+        int nextSafeTop = Math.round(topPx / density);
+        int nextSafeBottom = Math.round(navBottomPx / density);
+        boolean safeChanged = nextSafeTop != safeTopCss || nextSafeBottom != safeBottomCss;
+        safeTopCss = nextSafeTop;
+        safeBottomCss = nextSafeBottom;
+        if (safeChanged && webView != null) {
+            syncSafeAreaToWeb();
         }
+    }
+
+    private void applyWindowInsetsNow(WindowInsets insets, boolean fromAnimation) {
+        float density = getDisplayDensity();
         int topPx = extractStatusTopPx(insets);
         int navBottomPx = extractNavBottomPx(insets);
         int imeBottomPx = extractImeBottomPx(insets);
@@ -928,45 +1009,72 @@ public class MainActivity extends Activity {
 
         boolean prevVisible = isImeVisible;
         isImeVisible = imeBottomPx > navBottomPx;
-        // 原生容器始终以 max(navBottomPx, imeBottomPx) 托底，Web 侧 --safe-bottom 恒定为 0px；
-        // 键盘收起落到导航栏上沿即自然停住，彻底消除原生归零与 JS 恢复安全区异步错帧导致的回弹。
-        int nextBottomPadding = Math.max(Math.max(0, navBottomPx), Math.max(0, imeBottomPx));
+        // WebView 始终保持全屏物理尺寸，不再在键盘动画期间逐帧 setPadding 触发 WebView.onSizeChanged，
+        // 仅将高出导航栏的键盘实时 CSS 像素高度同步给网页侧做纯 GPU transform 位移。
+        float raiseCss = isImeVisible ? Math.max(0f, (imeBottomPx - navBottomPx) / density) : 0f;
+        currentImeRaiseCss = raiseCss;
         int nextSafeTop = Math.round(topPx / density);
-        int nextSafeBottom = 0;
+        int nextSafeBottom = Math.round(navBottomPx / density);
         boolean safeChanged = nextSafeTop != safeTopCss || nextSafeBottom != safeBottomCss;
         safeTopCss = nextSafeTop;
         safeBottomCss = nextSafeBottom;
 
-        if (isImeVisible && !imeAnimating) {
-            int raiseCss = Math.round((imeBottomPx - navBottomPx) / density);
-            if (raiseCss > 80) {
-                rememberKeyboardRaiseCss(raiseCss);
-            }
+        if (isImeVisible && !imeAnimating && raiseCss > 80f) {
+            rememberKeyboardRaiseCss(Math.round(raiseCss));
         }
 
-        if (rootContainer != null && imePaddingPx != nextBottomPadding) {
-            imePaddingPx = nextBottomPadding;
-            rootContainer.setPadding(0, 0, 0, imePaddingPx);
-        }
         if (safeChanged && webView != null) {
             syncSafeAreaToWeb();
         }
-        if (!imeAnimating) {
-            syncImeOpenAttr(isImeVisible, false);
-        } else if (!wasImeVisibleBeforeAnim && imeBottomPx > navBottomPx + Math.round(16f * density)) {
-            // 待键盘实际抬升超过 16dp 后再同步收窄底距，确保不出现第 0 帧向下跳 6~8dp。
-            syncImeOpenAttr(true, false);
-        }
-        if (!fromAnimation) {
-            if (!prevVisible && isImeVisible) {
-                int targetRaiseCss = Math.round(Math.max(0, imeBottomPx - navBottomPx) / density);
-                lastSyncedImeOpen = true;
-                dispatchImeStartWithAttr(180L, targetRaiseCss);
-                dispatchImeShown();
-            } else if (prevVisible && !isImeVisible) {
-                syncImeOpenAttr(false, false);
-                dispatchImeHidden();
+        if (fromAnimation) {
+            float effectiveRaise = raiseCss;
+            if (imeAnimating) {
+                long nowNs = System.nanoTime();
+                float rawDelta = raiseCss - prevAnimRawRaiseCss;
+                // 运行期方向自纠：只要检测到键盘高度实际在回落，立即退出弹出前瞻，杜绝任何方向误判下的死锁顿挫
+                if (imeAnimOpening && prevAnimFrameNs != 0L && rawDelta < -0.5f) {
+                    imeAnimOpening = false;
+                    smoothedOpenVel = 0f;
+                }
+                if (imeAnimOpening && raiseCss > 0f && animTargetRaiseCss > 0f) {
+                    if (prevAnimFrameNs != 0L) {
+                        float dtMs = (nowNs - prevAnimFrameNs) / 1_000_000f;
+                        if (dtMs >= 3f && dtMs <= 45f && rawDelta > 0f) {
+                            float instVel = Math.min(MAX_IME_LEAD_VEL, rawDelta / dtMs);
+                            smoothedOpenVel = smoothedOpenVel <= 0f
+                                    ? instVel
+                                    : (smoothedOpenVel * 0.45f + instVel * 0.55f);
+                        } else if (rawDelta <= 0f) {
+                            smoothedOpenVel *= 0.5f;
+                        }
+                    }
+                    float leadPx = Math.min(MAX_IME_OPEN_LEAD_PX, smoothedOpenVel * IME_OPEN_LEAD_MS);
+                    float predicted = Math.min(animTargetRaiseCss, raiseCss + leadPx);
+                    // 仅在确凿单调上升且未越过终值时防止前瞻减速导致的微回缩，绝不锁死下降帧
+                    if (rawDelta >= 0f && lastDispatchedImeRaiseCss >= 0f && lastDispatchedImeRaiseCss <= animTargetRaiseCss) {
+                        effectiveRaise = Math.max(lastDispatchedImeRaiseCss, predicted);
+                    } else {
+                        effectiveRaise = predicted;
+                    }
+                }
+                prevAnimFrameNs = nowNs;
+                prevAnimRawRaiseCss = raiseCss;
             }
+            if (Math.abs(effectiveRaise - lastDispatchedImeRaiseCss) >= 0.25f) {
+                lastDispatchedImeRaiseCss = effectiveRaise;
+                dispatchImeProgress(effectiveRaise);
+            }
+            return;
+        }
+        if (!prevVisible && isImeVisible) {
+            lastDispatchedImeRaiseCss = raiseCss;
+            dispatchImeInstant(raiseCss, true);
+        } else if (prevVisible && !isImeVisible) {
+            lastDispatchedImeRaiseCss = 0f;
+            dispatchImeEnd(0f, false);
+        } else if (isImeVisible && Math.abs(raiseCss - lastDispatchedImeRaiseCss) >= 0.5f) {
+            lastDispatchedImeRaiseCss = raiseCss;
+            dispatchImeEnd(raiseCss, true);
         }
     }
 
@@ -991,45 +1099,49 @@ public class MainActivity extends Activity {
                 Math.max(0, insets.getSystemWindowInsetBottom() - consumedBottomPx));
     }
 
-    private void syncImeOpenAttr(boolean visible, boolean force) {
-        if ((!force && visible == lastSyncedImeOpen) || webView == null) {
-            return;
-        }
-        lastSyncedImeOpen = visible;
-        String js = visible
-                ? "document.documentElement.dataset.imeOpen='true';"
-                : "delete document.documentElement.dataset.imeOpen;";
-        webView.evaluateJavascript(js, null);
+    private String formatCssPx(float px) {
+        return String.format(Locale.US, "%.2f", Math.max(0f, px));
     }
 
-    private void dispatchImeStart(long durationMs, int targetRaiseCss) {
+    private void dispatchImePrepare() {
+        if (webView != null) {
+            webView.evaluateJavascript("window.__imeBridge&&window.__imeBridge.prepare();", null);
+        }
+    }
+
+    private void dispatchImeStart(float targetRaiseCss, long durationMs, boolean opening) {
         if (webView != null) {
             webView.evaluateJavascript(
-                    "window.dispatchEvent(new CustomEvent('android-ime-start',{detail:{durationMs:"
-                            + durationMs + ",targetRaiseCss:" + targetRaiseCss + "}}));",
+                    "window.__imeBridge&&window.__imeBridge.start("
+                            + formatCssPx(targetRaiseCss) + "," + durationMs + "," + opening + ");",
                     null);
         }
     }
 
-    private void dispatchImeStartWithAttr(long durationMs, int targetRaiseCss) {
+    private void dispatchImeProgress(float raiseCss) {
         if (webView != null) {
             webView.evaluateJavascript(
-                    "document.documentElement.dataset.imeOpen='true';"
-                            + "window.dispatchEvent(new CustomEvent('android-ime-start',{detail:{durationMs:"
-                            + durationMs + ",targetRaiseCss:" + targetRaiseCss + "}}));",
+                    "window.__imeBridge&&window.__imeBridge.progress(" + formatCssPx(raiseCss) + ");",
                     null);
         }
     }
 
-    private void dispatchImeShown() {
+    private void dispatchImeEnd(float finalRaiseCss, boolean visible) {
         if (webView != null) {
-            webView.evaluateJavascript("window.dispatchEvent(new Event('android-ime-shown'));", null);
+            webView.evaluateJavascript(
+                    "window.__imeBridge&&window.__imeBridge.end("
+                            + formatCssPx(finalRaiseCss) + "," + visible + ");",
+                    null);
         }
     }
 
-    private void dispatchImeHidden() {
+    private void dispatchImeInstant(float raiseCss, boolean visible) {
         if (webView != null) {
-            webView.evaluateJavascript("window.dispatchEvent(new Event('android-ime-hidden'));", null);
+            String px = formatCssPx(raiseCss);
+            webView.evaluateJavascript(
+                    "window.__imeBridge&&(window.__imeBridge.start(" + px + ",180," + visible
+                            + "),window.__imeBridge.end(" + px + "," + visible + "));",
+                    null);
         }
     }
 
@@ -1044,7 +1156,7 @@ public class MainActivity extends Activity {
 
     private void injectThemeAndDownloadHooks() {
         syncSafeAreaToWeb();
-        syncImeOpenAttr(isImeVisible, true);
+        dispatchImeEnd(currentImeRaiseCss, isImeVisible);
         String js = "(function(){"
                 + "if(window.__androidHooksInstalled)return;"
                 + "window.__androidHooksInstalled=true;"
@@ -1088,10 +1200,11 @@ public class MainActivity extends Activity {
             }
         } else {
             int flags = decor.getSystemUiVisibility();
+            int mask = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
             if (isDark) {
-                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                flags &= ~mask;
             } else {
-                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                flags |= mask;
             }
             decor.setSystemUiVisibility(flags);
         }
@@ -1559,6 +1672,18 @@ public class MainActivity extends Activity {
 
     private class AndroidBridge {
         @JavascriptInterface
+        public void connectApiKeyStorage(String requestId) {
+            if (requestId == null || requestId.length() != 36) {
+                return;
+            }
+            runOnUiThread(() -> {
+                if (!isDestroyed() && webView != null && APP_PAGE.equals(webView.getUrl())) {
+                    apiKeyStorage.connect(webView, Uri.parse(APP_ORIGIN), requestId);
+                }
+            });
+        }
+
+        @JavascriptInterface
         public boolean hasUrlDownloadProxy() {
             return true;
         }
@@ -1574,12 +1699,16 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public float getCurrentImeRaiseCss() {
+            return currentImeRaiseCss;
+        }
+
+        @JavascriptInterface
         public void hideKeyboard() {
             runOnUiThread(() -> {
                 if (webView == null) {
                     return;
                 }
-                syncImeOpenAttr(false, false);
                 webView.clearFocus();
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     WindowInsetsController controller = webView.getWindowInsetsController();
@@ -1627,12 +1756,12 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public boolean supportsVideoAudio() {
-            return getPackageName().endsWith(".beta");
+            return true;
         }
 
         @JavascriptInterface
         public boolean prepareVideoAudioPicker(String selectionId) {
-            if (!supportsVideoAudio() || !videoAudio.reserveSelection(selectionId)) {
+            if (!videoAudio.reserveSelection(selectionId)) {
                 return false;
             }
             videoAudio.releaseSelection(nextVideoAudioSelection);
@@ -1648,7 +1777,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public boolean prepareVideoAudioRequest(String selectionId, String requestId) {
-            return supportsVideoAudio() && videoAudio.reserveRequest(selectionId, requestId);
+            return videoAudio.reserveRequest(selectionId, requestId);
         }
 
         @JavascriptInterface

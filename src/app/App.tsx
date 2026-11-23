@@ -1,9 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import clsx from 'clsx'
 import { useTranslate } from '../i18n/index.js'
-import { useSettings } from '../services/settings.js'
+import { initApiKey, useSettings } from '../services/settings.js'
 import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport.js'
 import {
   bindChatPersistence,
+  createLiveSession,
   initChat,
   newChat,
   retrySaveSessions,
@@ -12,7 +14,12 @@ import {
 } from '../services/chat/store.js'
 import { SearchPanel } from '../components/search/SearchPanel.js'
 import { closeSearchPanel } from '../components/search/searchPanelState.js'
+import { ChatSearchView } from '../components/search/ChatSearchView.js'
+import { openChatSearch, useChatSearch } from '../components/search/chatSearchState.js'
 import { SessionView } from '../components/session/SessionView.js'
+import { LiveCallView } from '../components/live/LiveCallView.js'
+import type { LiveCall } from '../components/live/useLiveCall.js'
+import { createSpeechOutput, type SpeechOutput } from '../services/speech/pcmPlayback.js'
 import { MobileHeader } from '../components/session/MobileHeader.js'
 import { Welcome } from '../components/session/Welcome.js'
 import { ensureApiKey } from '../components/settings/settingsDialogState.js'
@@ -26,13 +33,19 @@ import { onUploadNotice } from '../services/attachments.js'
 import { Button } from '../components/base/Button.js'
 import { stopReadAloud } from '../services/speech/readAloud.js'
 import { CollapsedSider } from '../components/sider/CollapsedSider.js'
-import { closeMobileSider } from '../components/sider/mobileSiderState.js'
+import {
+  bindSiderMain,
+  clearSiderMainInline,
+  closeMobileSider,
+  useMobileSider,
+} from '../components/sider/mobileSiderState.js'
 import { MobileSider } from '../components/sider/Sider.js'
 import { Sidebar } from '../components/sider/Sidebar.js'
 import styles from './App.module.css'
 
 export const App = () => {
   const t = useTranslate()
+  const [liveCall, setLiveCall] = useState<LiveCall | null>(null)
   const isMobile = useIsMobile()
   const locale = useSettings((state) => state.locale)
   // 移动端侧边栏以独立抽屉管理开合状态
@@ -54,6 +67,27 @@ export const App = () => {
     state.activeId === null ? false : Object.hasOwn(state.streaming, state.activeId)
   )
   const activeId = useChatStore((state) => state.activeId)
+  const mobileSiderOpen = useMobileSider((state) => state.open)
+  const chatSearchOpen = useChatSearch((state) => state.open)
+  const [siderSettling, setSiderSettling] = useState(false)
+  const siderCardOpen = isMobile && (mobileSiderOpen || chatSearchOpen)
+  const prevSiderCardOpenRef = useRef(false)
+
+  // 侧边栏/搜索收起后的 320ms 过渡期内保留圆角与合成层，合拢完毕后自动释放整屏离屏层
+  useEffect(() => {
+    const wasOpen = prevSiderCardOpenRef.current
+    prevSiderCardOpenRef.current = siderCardOpen
+    if (siderCardOpen) {
+      setSiderSettling(false)
+      return
+    }
+    if (!wasOpen) {
+      return
+    }
+    setSiderSettling(true)
+    const timer = window.setTimeout(() => setSiderSettling(false), 320)
+    return () => window.clearTimeout(timer)
+  }, [siderCardOpen])
 
   usePreventPageScroll(isMobile)
 
@@ -99,10 +133,35 @@ export const App = () => {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [isMobile])
 
+  // 电脑端 Ctrl+K（macOS 上 ⌘K）打开会话搜索，与侧边栏搜索框是同一个入口
+  useEffect(() => {
+    if (isMobile) {
+      return
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.repeat ||
+        event.isComposing ||
+        event.altKey ||
+        event.shiftKey ||
+        !(event.ctrlKey || event.metaKey) ||
+        event.key.toLowerCase() !== 'k' ||
+        document.querySelector('[role="dialog"][aria-modal="true"]')
+      ) {
+        return
+      }
+      event.preventDefault()
+      openChatSearch()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isMobile])
+
   useEffect(() => {
     void initChat()
-    // 首次打开先在设置里输入 API Key
-    ensureApiKey()
+    // 等待读取或迁移完成，只有需要输入 API Key 时才打开设置。
+    void initApiKey().then(ensureApiKey)
   }, [])
 
   // 不透明来源（content:// 等）下存储不可用，只在此次会话内有效，打开时说明一次
@@ -115,64 +174,122 @@ export const App = () => {
     showToast(t('storageEphemeral'))
   }, [t])
 
+  const openLiveCall = useCallback(
+    (sourceId: string | null) => {
+      const session = createLiveSession(sourceId)
+      if (!session || liveCall || !ensureApiKey()) {
+        return
+      }
+      stopReadAloud()
+      let output: SpeechOutput | null = null
+      try {
+        // 同步在点击事件内解锁输出，后续收到回复时可直接播放。
+        output = createSpeechOutput()
+      } catch {
+        // 设备无法播放时仍可在通话界面发送和阅读文字。
+      }
+      newChat()
+      setLiveCall({ session, output })
+    },
+    [liveCall]
+  )
+
+  const handleMainInputEngage = (target: EventTarget | null) => {
+    if (
+      !isMobile ||
+      !mobileSiderOpen ||
+      chatSearchOpen ||
+      !(target instanceof Element) ||
+      !target.closest('textarea, input:not([type="file"])')
+    ) {
+      return
+    }
+    clearSiderMainInline()
+    closeMobileSider()
+  }
+
   return (
     <>
       <div ref={frameRef} className={styles.frame}>
-        {isMobile ? <MobileSider /> : <Sidebar collapsed={siderCollapsed} />}
-        <main className={styles.main}>
-          {saveError ? (
-            <div className={styles.saveError} role="alert">
-              <span>{t('sessionSaveFailed')}</span>
-              <Button
-                variant="outlined"
-                size="s"
-                disabled={importingHistory}
-                onClick={retrySaveSessions}
-              >
-                {t('retry')}
-              </Button>
-            </div>
-          ) : null}
-          <div className={styles.content}>
-            {isMobile ? null : <CollapsedSider collapsed={siderCollapsed} />}
-            {!ready || (activeId !== null && !session) ? (
-              <div className={styles.loadingView}>
-                {isMobile ? <MobileHeader /> : null}
-                <div className={styles.loadingState} role="status" aria-live="polite">
-                  <span>
-                    {(!ready ? initError : sessionLoadError)
-                      ? t(!ready ? 'sessionListLoadFailed' : 'sessionLoadFailed')
-                      : t('sessionLoading')}
-                  </span>
-                  {(!ready ? initError : sessionLoadError) ? (
-                    <Button
-                      variant="outlined"
-                      size="m"
-                      onClick={() => {
-                        if (!ready) {
-                          void initChat()
-                        } else if (activeId !== null) {
-                          selectSession(activeId)
-                        }
-                      }}
-                    >
-                      {t('retry')}
-                    </Button>
-                  ) : null}
+        {liveCall ? (
+          <LiveCallView
+            call={liveCall}
+            onHangUp={() => {
+              setLiveCall(null)
+              selectSession(liveCall.session.id)
+            }}
+          />
+        ) : (
+          <>
+            {isMobile ? <MobileSider /> : <Sidebar collapsed={siderCollapsed} />}
+            <main
+              ref={bindSiderMain}
+              data-sider-active={siderCardOpen || siderSettling ? 'true' : undefined}
+              className={clsx(
+                styles.main,
+                isMobile && mobileSiderOpen && styles.mainPushed,
+                isMobile && chatSearchOpen && styles.mainSearchPushed
+              )}
+              onFocusCapture={(event) => handleMainInputEngage(event.target)}
+              onClickCapture={(event) => handleMainInputEngage(event.target)}
+            >
+              {saveError ? (
+                <div className={styles.saveError} role="alert">
+                  <span>{t('sessionSaveFailed')}</span>
+                  <Button
+                    variant="outlined"
+                    size="s"
+                    disabled={importingHistory}
+                    onClick={retrySaveSessions}
+                  >
+                    {t('retry')}
+                  </Button>
                 </div>
+              ) : null}
+              <div className={styles.content}>
+                {isMobile ? null : <CollapsedSider collapsed={siderCollapsed} />}
+                {!ready || (activeId !== null && !session) ? (
+                  <div className={styles.loadingView}>
+                    {isMobile ? <MobileHeader /> : null}
+                    <div className={styles.loadingState} role="status" aria-live="polite">
+                      <span>
+                        {(!ready ? initError : sessionLoadError)
+                          ? t(!ready ? 'sessionListLoadFailed' : 'sessionLoadFailed')
+                          : t('sessionLoading')}
+                      </span>
+                      {(!ready ? initError : sessionLoadError) ? (
+                        <Button
+                          variant="outlined"
+                          size="m"
+                          onClick={() => {
+                            if (!ready) {
+                              void initChat()
+                            } else if (activeId !== null) {
+                              selectSession(activeId)
+                            }
+                          }}
+                        >
+                          {t('retry')}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : session ? (
+                  <SessionView
+                    session={session}
+                    streaming={streaming}
+                    siderCollapsed={siderCollapsed}
+                    onStartCall={openLiveCall}
+                  />
+                ) : (
+                  <Welcome onStartCall={openLiveCall} />
+                )}
               </div>
-            ) : session ? (
-              <SessionView
-                session={session}
-                streaming={streaming}
-                siderCollapsed={siderCollapsed}
-              />
-            ) : (
-              <Welcome />
-            )}
-          </div>
-        </main>
+            </main>
+          </>
+        )}
         <SearchPanel />
+        <ChatSearchView />
       </div>
       <SettingsDialog />
       <ImagePreview />

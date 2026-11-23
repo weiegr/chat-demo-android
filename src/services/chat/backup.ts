@@ -212,11 +212,11 @@ export const openExportFolder = (): boolean => {
  * 确认覆盖后调用：先检查 ZIP 格式与版本，校验失败时保留正在生成的回答；
  * 通过后从 ZIP 流式写入暂存，成功才替换原有会话与图片原件。返回导入的会话数。
  */
-export const importHistory = (file: File): Promise<number> =>
+export const importHistory = (file: File, onRead?: (bytesRead: number) => void): Promise<number> =>
   enqueueBackup(async () => {
     const { checkArchiveFormat, importArchive } = await import('./history/importArchive.js')
     await checkArchiveFormat(file)
-    return replaceHistory(() => importArchive(file))
+    return replaceHistory(() => importArchive(file, onRead))
   })
 
 interface AndroidDownloadBridge {
@@ -248,13 +248,16 @@ export const parseArchiveDownloadUrl = (raw: string): string => {
   }
 }
 
+export type HistoryUrlImportProgress = { percent: number } | { downloadedBytes: number }
+
 /**
  * 通过 DeepSeek 历史对话导出 URL 直接下载 ZIP 并覆盖导入。
  * Android WebView 下通过同源原生代理绕过跨站 CORS 限制，校验通过后再替换本地数据。
  */
 export const importHistoryFromUrl = async (
   rawUrl: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onProgress?: (progress: HistoryUrlImportProgress) => void
 ): Promise<number> => {
   const targetUrl = parseArchiveDownloadUrl(rawUrl)
   const useAndroidProxy = Boolean(getAndroidDownloadBridge()?.hasUrlDownloadProxy?.())
@@ -279,7 +282,48 @@ export const importHistoryFromUrl = async (
     throw new BackupError('historyUrlHttpFailed', { status: response.status })
   }
 
-  const blob = await response.blob()
+  // 下载与归档读取共用一条进度，成功替换历史后才报 100%。
+  const downloadWeight = 70
+  let lastPercent = -1
+  const reportPercent = (percent: number) => {
+    if (percent !== lastPercent) {
+      lastPercent = percent
+      onProgress?.({ percent })
+    }
+  }
+
+  let download = response
+  if (onProgress && response.body) {
+    const proxyLength = useAndroidProxy ? response.headers.get('X-Archive-Content-Length') : null
+    const length = Number(proxyLength ?? response.headers.get('Content-Length'))
+    const encoding = response.headers.get('Content-Encoding')
+    const hasTotal =
+      Number.isSafeInteger(length) && length > 0 && (!encoding || encoding === 'identity')
+    let downloadedBytes = 0
+    let lastBytesUpdate = -Infinity
+    const stream = response.body.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          downloadedBytes += chunk.byteLength
+          if (hasTotal) {
+            reportPercent(
+              Math.min(downloadWeight - 1, Math.floor((downloadedBytes / length) * downloadWeight))
+            )
+          } else {
+            const now = performance.now()
+            if (now - lastBytesUpdate >= 100) {
+              lastBytesUpdate = now
+              onProgress({ downloadedBytes })
+            }
+          }
+          controller.enqueue(chunk)
+        },
+      })
+    )
+    download = new Response(stream, { headers: response.headers })
+  }
+
+  const blob = await download.blob()
   if (signal?.aborted) {
     throw signal.reason ?? new DOMException('Aborted', 'AbortError')
   }
@@ -290,7 +334,21 @@ export const importHistoryFromUrl = async (
   const file = new File([blob], 'deepseek-history.zip', {
     type: blob.type || 'application/zip',
   })
-  return importHistory(file)
+  reportPercent(downloadWeight)
+  const count = await importHistory(
+    file,
+    onProgress &&
+      ((bytesRead) => {
+        reportPercent(
+          Math.min(
+            99,
+            downloadWeight + Math.floor((bytesRead / file.size) * (100 - downloadWeight))
+          )
+        )
+      })
+  )
+  reportPercent(100)
+  return count
 }
 
 /** 确认删除后调用：以空历史原子替换全部本地会话与附件，保留 API Key 和其他设置。 */

@@ -12,7 +12,7 @@ interface AndroidVideoAudioBridge {
 const getBridge = () =>
   (window as Window & { AndroidHost?: AndroidVideoAudioBridge }).AndroidHost
 
-export const hasVideoAudioSupport = () => __BETA__ && Boolean(getBridge()?.supportsVideoAudio?.())
+export const hasVideoAudioSupport = () => Boolean(getBridge()?.supportsVideoAudio?.())
 
 /** 原生端在系统选择器返回后把这个标识和实际选中的视频关联。 */
 export const prepareVideoAudioPicker = (): string | undefined => {

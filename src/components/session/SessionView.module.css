@@ -101,7 +101,7 @@
   width: calc(var(--message-list-max-width) - 64px);
   max-width: calc(100% - 32px);
   margin: auto auto 0;
-  padding-bottom: 24px;
+  padding-bottom: calc(24px + var(--safe-bottom));
   background: linear-gradient(
     to bottom,
     transparent 0%,

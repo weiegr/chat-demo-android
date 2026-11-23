@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import {
   addDraftVideoFrames,
   getDraft,
+  getEditDraftKey,
   useDrafts,
   type DraftVideoTranscript,
 } from '../../services/chat/drafts.js'
@@ -14,8 +15,13 @@ import {
   transcribeVideoAudio,
   type VideoAudioPhase,
 } from '../../services/video/audio.js'
-import { extractVideoSheets, VideoTooLongError } from '../../services/video/frames.js'
+import {
+  extractVideoSheets,
+  MAX_VIDEO_SECONDS,
+  VideoTooLongError,
+} from '../../services/video/frames.js'
 import { showToast } from '../base/toastState.js'
+import { useUserEdit, type ActiveUserEdit } from '../messages/userEditState.js'
 import { ensureApiKey } from '../settings/settingsDialogState.js'
 
 const getModeForVideo = (sessionId: string | null) =>
@@ -23,9 +29,17 @@ const getModeForVideo = (sessionId: string | null) =>
     ? useSettings.getState().chatMode
     : (useChatStore.getState().sessionCache[sessionId]?.mode ?? 'fast')
 
+const getEditForDraft = (draftKey: string | null, edit: ActiveUserEdit | null) =>
+  edit && getEditDraftKey(edit.sessionId, edit.messageId) === draftKey ? edit : null
+
 type Work =
   | { kind: 'frames'; controller: AbortController }
-  | { kind: 'audio'; controller: AbortController; videoId: string; apiKey: string }
+  | {
+      kind: 'audio'
+      controller: AbortController
+      draft: ReturnType<typeof getDraft>
+      apiKey: string
+    }
 
 type Status = { phase: 'frames'; progress: number } | { phase: VideoAudioPhase }
 
@@ -42,9 +56,6 @@ export const useVideoInput = (draftKey: string | null, sessionId: string | null)
   }, [])
 
   useLayoutEffect(() => {
-    if (!__BETA__) {
-      return
-    }
     const unsubscribeSettings = useSettings.subscribe((settings) => {
       const work = current.current
       const mode = getModeForVideo(sessionId)
@@ -69,14 +80,32 @@ export const useVideoInput = (draftKey: string | null, sessionId: string | null)
     })
     const unsubscribeDrafts = useDrafts.subscribe(() => {
       const work = current.current
-      if (work?.kind === 'audio' && getDraft(draftKey).video?.id !== work.videoId) {
+      const draft = getDraft(draftKey)
+      if (work?.kind === 'audio' && draft !== work.draft) {
         cancel()
+        if (draft.video === work.draft.video) {
+          showToast({ key: 'videoDraftChanged' })
+        }
+      }
+    })
+    const unsubscribeEdit = useUserEdit.subscribe(({ active }, previous) => {
+      const work = current.current
+      if (!work || active === previous.active || !getEditForDraft(draftKey, previous.active)) {
+        return
+      }
+      const stillEditing = getEditForDraft(draftKey, active) !== null
+      if (!stillEditing || work.kind === 'audio') {
+        cancel()
+        if (stillEditing) {
+          showToast({ key: 'videoDraftChanged' })
+        }
       }
     })
     return () => {
       unsubscribeSettings()
       unsubscribeChat()
       unsubscribeDrafts()
+      unsubscribeEdit()
       current.current?.controller.abort()
       current.current = null
       releaseVideoAudioSelection(pendingSelection.current)
@@ -88,7 +117,8 @@ export const useVideoInput = (draftKey: string | null, sessionId: string | null)
     if (!canUploadVideo(getModeForVideo(sessionId)) || useChatStore.getState().importingHistory) {
       return false
     }
-    if (current.current || getDraft(draftKey).video) {
+    const edit = getEditForDraft(draftKey, useUserEdit.getState().active)
+    if (current.current || getDraft(draftKey).video || edit?.video) {
       showToast({ key: 'videoLimitOne' })
       return false
     }
@@ -148,7 +178,11 @@ export const useVideoInput = (draftKey: string | null, sessionId: string | null)
       }
     } catch (error) {
       if (!controller.signal.aborted) {
-        showToast({ key: error instanceof VideoTooLongError ? 'videoTooLong' : 'videoReadFailed' })
+        showToast(
+          error instanceof VideoTooLongError
+            ? { key: 'videoTooLong', params: { seconds: MAX_VIDEO_SECONDS } }
+            : { key: 'videoReadFailed' }
+        )
       }
     } finally {
       if (!keptSelection) {
@@ -165,7 +199,9 @@ export const useVideoInput = (draftKey: string | null, sessionId: string | null)
     if (current.current) {
       return
     }
-    const video = getDraft(draftKey).video
+    // 音频准备完成后只提交点击发送时的草稿，后续修改需要重新确认发送。
+    const draft = getDraft(draftKey)
+    const video = draft.video
     const settings = useSettings.getState()
     if (
       !video ||
@@ -181,13 +217,16 @@ export const useVideoInput = (draftKey: string | null, sessionId: string | null)
       return
     }
     const controller = new AbortController()
-    const work: Work = { kind: 'audio', controller, videoId: video.id, apiKey }
+    const work: Work = { kind: 'audio', controller, draft, apiKey }
     current.current = work
     setAudioFailureId(undefined)
     let text: string
     try {
-      text = await transcribeVideoAudio(video.audioSelectionId, apiKey, controller.signal, (phase) =>
-        setStatus({ phase })
+      text = await transcribeVideoAudio(
+        video.audioSelectionId,
+        apiKey,
+        controller.signal,
+        (phase) => setStatus({ phase })
       )
     } catch {
       if (!controller.signal.aborted) {
@@ -197,7 +236,7 @@ export const useVideoInput = (draftKey: string | null, sessionId: string | null)
     } finally {
       finish(work)
     }
-    if (!controller.signal.aborted && getDraft(draftKey).video?.id === video.id) {
+    if (!controller.signal.aborted && getDraft(draftKey) === draft) {
       if (submit({ videoId: video.id, text }) && !text) {
         showToast({ key: 'videoAudioNoSpeech' })
       }

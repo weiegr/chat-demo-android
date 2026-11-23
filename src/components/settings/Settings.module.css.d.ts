@@ -1,12 +1,25 @@
 declare const styles: {
+  readonly settingsOverlay: string
+  readonly settingsOverlayVisible: string
   readonly dialog: string
+  readonly dialogVisible: string
   readonly dialogMain: string
   readonly navigation: string
   readonly navItem: string
   readonly navItemActive: string
   readonly content: string
   readonly mobileSubHeader: string
+  readonly mobileTitleStack: string
+  readonly mobileTitleItem: string
+  readonly mobileTitleActive: string
+  readonly mobileTitleExitLeft: string
+  readonly mobileTitleEnterRight: string
   readonly mobileBackButton: string
+  readonly mobilePageViewport: string
+  readonly mobileMainPage: string
+  readonly mobileMainPagePushed: string
+  readonly mobileSubPage: string
+  readonly mobileSubPageVisible: string
   readonly mobileDataContent: string
   readonly mobileLocationContent: string
   readonly mobileSubActionRow: string
@@ -30,6 +43,7 @@ declare const styles: {
   readonly mobileNavRight: string
   readonly mobileNavValue: string
   readonly themeModal: string
+  readonly themeModalVisible: string
   readonly themeRadioList: string
   readonly themeRadioRow: string
   readonly radioCircle: string

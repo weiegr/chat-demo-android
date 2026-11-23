@@ -34,6 +34,7 @@ import {
   clearDraft,
   clearSentDraft,
   getDraft,
+  getEditDraftKey,
   prepareDraftMessage,
   type DraftVideoTranscript,
 } from './drafts.js'
@@ -44,6 +45,7 @@ import {
   applyEvent,
   canContinueReply,
   getContextRounds,
+  getReplyText,
   settleReply,
   toRequestMessages,
 } from './reply.js'
@@ -784,11 +786,159 @@ export const setSessionMode = (sessionId: string, mode: ChatMode) => {
   persist(sessionId)
 }
 
+const insertSession = (session: Session, activate: boolean) => {
+  touchSession(session.id)
+  set((state) => ({
+    sessions: [toSessionSummary(session), ...state.sessions],
+    sessionCache: { ...state.sessionCache, [session.id]: session },
+    activeId: activate ? session.id : state.activeId,
+  }))
+}
+
+/** 为通话复制可用的纯文本轮次，首轮发送后再保存独立会话。 */
+export const createLiveSession = (sourceId: string | null): Session | null => {
+  const { ready, importingHistory, activeId } = get()
+  if (!ready || importingHistory || activeId !== sourceId) {
+    return null
+  }
+  const source = sourceId === null ? undefined : getSession(sourceId)
+  if ((sourceId === null ? useSettings.getState().chatMode : (source?.mode ?? 'fast')) !== 'fast') {
+    return null
+  }
+  if (sourceId !== null && !source) {
+    return null
+  }
+  const messages: Message[] = []
+  const history = source ? getVisibleMessages(source) : []
+  for (const [user, assistant] of getContextRounds(history)) {
+    const text = getReplyText(assistant).trim()
+    if (user.content.trim() && text) {
+      messages.push(
+        {
+          id: createId(),
+          role: 'user',
+          content: user.content,
+          files: [],
+          createdAt: user.createdAt,
+        },
+        {
+          id: createId(),
+          role: 'assistant',
+          model: assistant.model,
+          createdAt: assistant.createdAt,
+          status: 'done',
+          prefix: false,
+          blocks: [{ type: 'text', text }],
+        }
+      )
+    }
+  }
+  const now = Date.now()
+  return {
+    id: createId(),
+    title: 'DeepSeek Live',
+    mode: 'fast',
+    createdAt: now,
+    updatedAt: now,
+    messages,
+  }
+}
+
+/** 通话首轮建立自己的会话，挂断前由通话页接管展示与朗读。 */
+export const sendLiveMessage = async (
+  initialSession: Session,
+  content: string,
+  controller: AbortController
+): Promise<AssistantMessage | null> => {
+  const sessionId = initialSession.id
+  if (getStreamController(sessionId)) {
+    await waitForIdle(sessionId)
+  }
+  if (
+    !get().ready ||
+    get().importingHistory ||
+    deletingSessions.has(sessionId) ||
+    controller.signal.aborted ||
+    !content.trim()
+  ) {
+    return null
+  }
+  const now = Date.now()
+  const question: UserMessage = {
+    id: createId(),
+    role: 'user',
+    content: content.trim(),
+    files: [],
+    createdAt: now,
+  }
+  const reply = createReply('fast', 'deepseek-flash')
+  const current = getSession(sessionId)
+  const session = current ?? initialSession
+  const history = getVisibleMessages(session)
+  const next = {
+    ...appendBranch(session, history.at(-1)?.id ?? null, [question, reply]),
+    updatedAt: now,
+  }
+  if (current) {
+    updateSession(sessionId, () => next)
+  } else {
+    insertSession({ ...next, title: session.title + ' · ' + buildLocalTitle(question) }, true)
+  }
+  persist(sessionId)
+  return streamReply(sessionId, reply, { history, question, live: true }, controller)
+}
+
+const prepareQuestionDraft = (
+  draftKey: string | null,
+  mode: ChatMode,
+  model: ChatModel,
+  videoTranscript?: DraftVideoTranscript,
+  existingFiles: FileAttachment[] = []
+) => {
+  const settings = useSettings.getState()
+  const prepared = prepareDraftMessage(
+    getDraft(draftKey),
+    useUploads.getState().tasks,
+    model === 'deepseek-v4-pro',
+    canUploadVideo(mode, settings),
+    existingFiles.length > 0
+  )
+  if (
+    !prepared ||
+    (videoTranscript &&
+      (prepared.video?.id !== videoTranscript.videoId || !canTranscribeVideo(mode, settings)))
+  ) {
+    return null
+  }
+  const { text, video } = prepared
+  const files = [...existingFiles]
+  const blobs: db.StoredFile[] = []
+  for (const { blob, ...file } of prepared.files) {
+    files.push(file)
+    blobs.push({ id: file.id, blob })
+  }
+  if (video) {
+    blobs.push({ id: video.id, blob: video.file })
+  }
+  const videoMetadata = video && {
+    id: video.id,
+    name: video.name,
+    size: video.size,
+    mimeType: video.mimeType,
+    frameIds: video.frameIds,
+    ...(videoTranscript?.text && { transcript: videoTranscript.text }),
+  }
+  return { text, files, video: videoMetadata, blobs }
+}
+
 /**
  * 提交指定会话的最新草稿；null 表示新建会话。
  * 同步接收成功才清空草稿，附件原件由会话接管；保存失败仍通过保存入口重试。
  */
-export const sendMessage = (targetSessionId: string | null, videoTranscript?: DraftVideoTranscript) => {
+export const sendMessage = (
+  targetSessionId: string | null,
+  videoTranscript?: DraftVideoTranscript
+) => {
   if (get().importingHistory || !get().ready) {
     return false
   }
@@ -803,22 +953,11 @@ export const sendMessage = (targetSessionId: string | null, videoTranscript?: Dr
   const mode: ChatMode =
     sessionId === null ? settings.chatMode : (getSession(sessionId)?.mode ?? 'fast')
   const model = resolveModeModel(mode, settings.rpModel)
-  const prepared = prepareDraftMessage(
-    getDraft(targetSessionId),
-    useUploads.getState().tasks,
-    model === 'deepseek-v4-pro',
-    canUploadVideo(mode, settings)
-  )
+  const prepared = prepareQuestionDraft(targetSessionId, mode, model, videoTranscript)
   if (!prepared) {
     return false
   }
-  const { text, files, video } = prepared
-  if (
-    videoTranscript &&
-    (video?.id !== videoTranscript.videoId || !canTranscribeVideo(mode, settings))
-  ) {
-    return false
-  }
+  const { text, files, video, blobs } = prepared
   const now = Date.now()
   if (sessionId === null) {
     const session: Session = {
@@ -831,48 +970,24 @@ export const sendMessage = (targetSessionId: string | null, videoTranscript?: Dr
       rootMessageId: null,
     }
     sessionId = session.id
-    touchSession(session.id)
-    set((state) => ({
-      sessions: [toSessionSummary(session), ...state.sessions],
-      sessionCache: { ...state.sessionCache, [session.id]: session },
-      activeId: session.id,
-    }))
+    insertSession(session, true)
   }
   const current = getSession(sessionId)
   if (!current) {
     return false
   }
   const history = getVisibleMessages(current)
-  const videoMetadata = video && {
-    id: video.id,
-    name: video.name,
-    size: video.size,
-    mimeType: video.mimeType,
-    frameIds: video.frameIds,
-    ...(videoTranscript?.text && { transcript: videoTranscript.text }),
-  }
   const question: UserMessage = {
     id: createId(),
     role: 'user',
     content: text,
-    files: files.map(({ id, serverId, name, size, isImage, mimeType }) => ({
-      id,
-      serverId,
-      name,
-      size,
-      isImage,
-      mimeType,
-    })),
-    ...(videoMetadata && { video: videoMetadata }),
+    files,
+    ...(video && { video }),
     createdAt: now,
   }
   const reply = createReply(mode, model)
-  if (files.length > 0) {
-    pendingFiles.set(sessionId, [
-      ...(pendingFiles.get(sessionId) ?? []),
-      ...files.map(({ id, blob }) => ({ id, blob })),
-      ...(video ? [{ id: video.id, blob: video.file }] : []),
-    ])
+  if (blobs.length > 0) {
+    pendingFiles.set(sessionId, [...(pendingFiles.get(sessionId) ?? []), ...blobs])
   }
   updateSession(sessionId, (session) => ({
     ...appendBranch(session, history.at(-1)?.id ?? null, [question, reply]),
@@ -912,13 +1027,12 @@ export const regenerateReply = (sessionId: string, messageId?: string) => {
   void streamReply(sessionId, reply, { history, question })
 }
 
-/** 编辑提问：替换文本，附件按传入的列表保留（可在编辑时增删），新增原件并入待保存队列避免读写竞态。 */
+/** 编辑提问：将保留的附件和新草稿合入一个分支，原消息及其附件仍可切换查看。 */
 export const editMessage = (
   sessionId: string,
   messageId: string,
-  content: string,
-  files?: FileAttachment[],
-  newBlobs: db.StoredFile[] = []
+  existingFiles: FileAttachment[],
+  videoTranscript?: DraftVideoTranscript
 ): boolean => {
   if (get().importingHistory || deletingSessions.has(sessionId)) {
     return false
@@ -930,38 +1044,44 @@ export const editMessage = (
   const path = getVisibleMessages(session)
   const index = path.findIndex((message) => message.id === messageId)
   const previous = path[index]
-  const text = content.trim()
   if (previous?.role !== 'user') {
     return false
   }
-  let nextFiles = files ?? previous.files
-  const video = previous.video
-  const keepVideo = video?.frameIds.every((id) => nextFiles.some((file) => file.id === id))
-  if (video && !keepVideo) {
-    nextFiles = nextFiles.filter((file) => !video.frameIds.includes(file.id))
-  }
-  if (!text && nextFiles.length === 0) {
+  const previousVideo = previous.video
+  const keepVideo = previousVideo?.frameIds.every((id) =>
+    existingFiles.some((file) => file.id === id)
+  )
+  const retainedFiles =
+    previousVideo && !keepVideo
+      ? existingFiles.filter((file) => !previousVideo.frameIds.includes(file.id))
+      : existingFiles
+  const mode = session.mode ?? 'fast'
+  const model = resolveModeModel(mode, useSettings.getState().rpModel)
+  const draftKey = getEditDraftKey(sessionId, messageId)
+  const prepared = prepareQuestionDraft(draftKey, mode, model, videoTranscript, retainedFiles)
+  if (!prepared || (keepVideo && prepared.video)) {
     return false
   }
+  const { text, files, blobs } = prepared
+  const video = keepVideo ? previousVideo : prepared.video
   const question: UserMessage = {
     id: createId(),
     role: 'user',
     content: text,
-    files: nextFiles,
-    ...(keepVideo && { video }),
+    files,
+    ...(video && { video }),
     createdAt: Date.now(),
   }
-  const mode = session.mode ?? 'fast'
-  const model = resolveModeModel(mode, useSettings.getState().rpModel)
   const reply = createReply(mode, model)
+  if (blobs.length > 0) {
+    pendingFiles.set(sessionId, [...(pendingFiles.get(sessionId) ?? []), ...blobs])
+  }
   updateSession(sessionId, (s) => ({
     ...appendBranch(s, path[index - 1]?.id ?? null, [question, reply]),
     updatedAt: Date.now(),
   }))
-  if (newBlobs.length > 0) {
-    pendingFiles.set(sessionId, [...(pendingFiles.get(sessionId) ?? []), ...newBlobs])
-  }
   persist(sessionId)
+  clearSentDraft(draftKey)
   void streamReply(sessionId, reply, { history: path.slice(0, index), question })
   return true
 }
@@ -1043,7 +1163,12 @@ export const retryUpload = (sessionId: string, messageId: string) => {
   void streamReply(sessionId, reply, { history: path.slice(0, index - 1), question })
 }
 
-type Request = { history: Message[]; question: UserMessage; prefix?: AssistantMessage }
+type Request = {
+  history: Message[]
+  question: UserMessage
+  prefix?: AssistantMessage
+  live?: boolean
+}
 type PreparedRequest = Request & {
   texts?: Map<string, string>
   ocrTexts?: Map<string, string>
@@ -1477,8 +1602,12 @@ const getPendingClientToolUses = (reply: AssistantMessage): ClientToolUseBlock[]
  * 服务端判定 file_id 失效时重新补传后重发，退避重试且次数有上限，超过则按原始报错收尾。
  * 服务端返回客户端 tool_use（如请求真实位置）时执行本地工具，并将 tool_result 回传继续流式生成。
  */
-const streamReply = async (sessionId: string, initial: AssistantMessage, request: Request) => {
-  const controller = new AbortController()
+const streamReply = async (
+  sessionId: string,
+  initial: AssistantMessage,
+  request: Request,
+  controller = new AbortController()
+) => {
   if (!getSession(sessionId)?.title) {
     titleRequests.add(controller)
   }
@@ -1514,7 +1643,9 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
       let receivedContent = false
       try {
         if (toolRound === 0) {
-          prepared = await prepareFiles(sessionId, request, model, controller.signal)
+          if (!request.live) {
+            prepared = await prepareFiles(sessionId, request, model, controller.signal)
+          }
           preparing = false
           // 附件就绪后获取本轮信息；续写沿用原回答快照，重新生成的快照独立保存。
           const latestReminder = prepared.prefix
@@ -1630,13 +1761,17 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             omitServerTools: isRpMode,
             omitLatestReminder: isV4Pro,
             useOcrForVisual,
-            includeVideo: __BETA__ && sessionMode === 'fast',
+            includeVideo: sessionMode === 'fast' && !request.live,
             searchContext,
           }
         )
         const currentSettings = useSettings.getState()
         const { apiKey } = currentSettings
         const modePrompts = getModePrompts(sessionMode, currentSettings, hasVideoContext)
+        const livePrompt = request.live ? currentSettings.fastLivePrompt.trim() : ''
+        const systemPrompt = [modePrompts.systemPrompt.trim(), livePrompt]
+          .filter(Boolean)
+          .join('\n\n')
         // 服务端约束：v4-pro 不支持 server-side 工具（web_search/read_url）与 title 生成，
         // 请求携带任一项即整体报错，因此连同依赖 search 的定位工具一并停用，标题走本地兜底
         const serverToolsAllowed = !isRpMode && !isV4Pro
@@ -1659,7 +1794,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           apiKey ?? '',
           {
             model,
-            system: buildRequestSystem(modePrompts.systemPrompt, {
+            system: buildRequestSystem(systemPrompt, {
               isRpMode,
               search: searchEnabled,
               hasLink,
@@ -1697,12 +1832,12 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           }
         }
         flush()
+        if (controller.signal.aborted) {
+          reply = settleReply(reply, 'stopped', Date.now())
+          break
+        }
         const pendingToolUses = getPendingClientToolUses(reply)
-        if (
-          !controller.signal.aborted &&
-          pendingToolUses.length > 0 &&
-          toolRound < MAX_TOOL_ROUNDS
-        ) {
+        if (pendingToolUses.length > 0 && toolRound < MAX_TOOL_ROUNDS) {
           for (const toolUse of pendingToolUses) {
             const resultBlock = await executeClientTool(toolUse, controller.signal)
             reply = { ...reply, blocks: [...reply.blocks, resultBlock] }
@@ -1725,7 +1860,9 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           titleRequests.delete(controller)
         }
         reply = settleReply(reply, 'done', Date.now())
-        autoReadReply(sessionId, reply, prepared.prefix)
+        if (!request.live) {
+          autoReadReply(sessionId, reply, prepared.prefix)
+        }
         break
       } catch (error) {
         if (controller.signal.aborted) {
@@ -1773,7 +1910,9 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         if (error instanceof ApiError && error.kind === 'interrupted' && reply.stopReason) {
           // 已收到 message_delta 的结束原因，只是缺了结尾的 message_stop
           reply = settleReply(reply, 'done', Date.now())
-          autoReadReply(sessionId, reply, prepared.prefix)
+          if (!request.live) {
+            autoReadReply(sessionId, reply, prepared.prefix)
+          }
         } else if (error instanceof ApiError) {
           reply = settleReply(reply, 'error', Date.now(), {
             kind: error.kind,
@@ -1803,4 +1942,5 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
     }))
     persist(sessionId)
   }
+  return reply
 }

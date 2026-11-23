@@ -8,27 +8,41 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from 'react'
+import { getImeMotionState, hasNativeImeMotion, subscribeImeMotion } from '../../app/imeMotion.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
 import { setChatMode, useSettings, type ChatMode } from '../../services/settings.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
-import { CHAT_MODE_OPTIONS, getChatModeMeta } from './chatModeMeta.js'
+import { CHAT_MODE_OPTIONS } from './chatModeMeta.js'
 import { MobileHeader } from './MobileHeader.js'
 import styles from './Welcome.module.css'
 
 const OPTION_COUNT = CHAT_MODE_OPTIONS.length
 const MAX_INDEX = OPTION_COUNT - 1
-const TEXT_FADE_OUT_MS = 140
-/** 松手吸附与点击切换动画时长（与原 CSS 过渡保持一致） */
-const SNAP_DURATION_MS = 280
+
+/** 二阶弹簧物理参数：阻尼比 ~0.78，起步跟手清脆、落位带 ~1.8% 极致克制的微弹手感 */
+const SPRING_STIFFNESS = 380
+const SPRING_DAMPING = 30.5
+/** 固定物理积分步长（2ms），保证 60/90/120Hz 刷新率下弹簧手感完全一致 */
+const PHYSICS_STEP_SEC = 0.002
+const MAX_FRAME_DT_SEC = 0.05
+const MAX_FLING_VELOCITY = 16
+/** 左右边界橡皮筋最大越界幅度（档位） */
+const MAX_OVERDRAG = 0.085
+/** 胶囊外扩缓冲（与 CSS .modeActiveLayer 左右额外留白一致，确保微弹与橡皮筋不裁边） */
+const ACTIVE_LAYER_EXTRA_PAD_PX = 12
+const THUMB_BASE_OUTSET_PX = 4
+
 /** 横向拖动超过该像素后进入滑块跟手拖拽态 */
 const DRAG_THRESHOLD_PX = 5
 /** 轻甩手势速度阈值（px/ms） */
-const FLICK_VELOCITY_PX_PER_MS = 0.3
-/** 判定滑块已完整滑过到下一档的容差（约 2px，避免手动贴边差一两像素未触发） */
-const SETTLE_EPSILON = 0.02
-/** 提示语离场/进场额外缓冲像素，须大于视口边缘 4px 渐隐区以确保静置态不露边 */
-const HINT_OFFSCREEN_PAD_PX = 8
+const FLICK_VELOCITY_PX_PER_MS = 0.28
+
+/** 标题与提示语的连续交叉淡入淡出参数：0.56 窗口兼顾零空白感与中点零重影 */
+const TITLE_FADE_SPAN = 0.56
+const TITLE_SHIFT_PX = 16
+const HINT_FADE_SPAN = 0.56
+const HINT_SHIFT_PX = 28
 
 const HINT_ALIGN_CLASS: Record<ChatMode, string> = {
   fast: styles.modeHintStart,
@@ -52,12 +66,17 @@ interface DragState {
   pressedOnThumb: boolean
   dragging: boolean
   progress: number
-  settledIndex: number
 }
 
-interface SnapAnimation {
-  rafId: number
-  target: number
+/** 点击跨两档（0 <-> 2）直达信息：跳过中间档文字闪现，拖拽接管时立即清空 */
+interface DirectTransition {
+  from: number
+  to: number
+}
+
+export interface ModeMotionFrame {
+  progress: number
+  direct: DirectTransition | null
 }
 
 interface HintMetrics {
@@ -65,9 +84,25 @@ interface HintMetrics {
   itemWidths: number[]
 }
 
-const clampProgress = (value: number) => Math.max(0, Math.min(MAX_INDEX, value))
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
 
-const lerp = (from: number, to: number, t: number) => from + (to - from) * t
+const smoothstep = (t: number) => {
+  const x = clamp(t, 0, 1)
+  return x * x * (3 - 2 * x)
+}
+
+/** 边界橡皮筋阻尼：区间 [0, 2] 内 1:1 跟手，越界后渐进增加阻力 */
+const rubberBandProgress = (raw: number): number => {
+  if (raw < 0) {
+    const over = -raw
+    return -(MAX_OVERDRAG * over) / (over + 0.35)
+  }
+  if (raw > MAX_INDEX) {
+    const over = raw - MAX_INDEX
+    return MAX_INDEX + (MAX_OVERDRAG * over) / (over + 0.35)
+  }
+  return raw
+}
 
 const getModeIndex = (mode: ChatMode) =>
   Math.max(
@@ -80,160 +115,330 @@ const prefersReducedMotion = () =>
   typeof window.matchMedia === 'function' &&
   window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
-/** 精确求值 cubic-bezier(0.22, 1, 0.36, 1)，与滑块吸附缓动曲线一致 */
-const easeOutQuarticLike = (t: number): number => {
-  if (t <= 0) {
-    return 0
-  }
-  if (t >= 1) {
-    return 1
-  }
-  const p1x = 0.22
-  const p2x = 0.36
-  const sampleX = (u: number) =>
-    3 * (1 - u) * (1 - u) * u * p1x + 3 * (1 - u) * u * u * p2x + u * u * u
-  const sampleY = (u: number) => 3 * (1 - u) * (1 - u) * u + 3 * (1 - u) * u * u + u * u * u
-
-  let lo = 0
-  let hi = 1
-  for (let i = 0; i < 12; i++) {
-    const mid = (lo + hi) * 0.5
-    if (sampleX(mid) < t) {
-      lo = mid
-    } else {
-      hi = mid
-    }
-  }
-  return sampleY((lo + hi) * 0.5)
-}
-
-/** 仅当滑块完整滑过到下一档（或回退完整跨档）时才更新当前已到达模式，半途徘徊保持上一模式 */
-const resolveSettledIndex = (settledIndex: number, progress: number) => {
-  if (progress >= settledIndex + 1 - SETTLE_EPSILON) {
-    return Math.min(MAX_INDEX, Math.floor(progress + SETTLE_EPSILON))
-  }
-  if (progress <= settledIndex - 1 + SETTLE_EPSILON) {
-    return Math.max(0, Math.ceil(progress - SETTLE_EPSILON))
-  }
-  return settledIndex
-}
-
 const computeDragProgress = (drag: DragState, clientX: number) => {
-  if (drag.pressedOnThumb) {
-    return clampProgress(drag.startProgress + (clientX - drag.originX) / drag.slotWidth)
-  }
-  return clampProgress((clientX - drag.trackLeft) / drag.slotWidth - 0.5)
+  const raw = drag.pressedOnThumb
+    ? drag.startProgress + (clientX - drag.originX) / drag.slotWidth
+    : (clientX - drag.trackLeft) / drag.slotWidth - 0.5
+  return rubberBandProgress(raw)
 }
 
-/** 可点击、可拖拽的三模式分段滑块；由单一连续 progress 同帧驱动胶囊位姿、蓝色文字裁剪与下方提示语 */
+/**
+ * 解析各选项相对当前动效状态的带符号距离 d：
+ * - 拖拽 / 单档切换：d = i - progress，完全连续跟手；
+ * - 点击跨两档直达（0 <-> 2）：仅在 from 与 to 之间平滑过渡，中间档不闪现。
+ */
+const resolveTextDistance = (
+  index: number,
+  progress: number,
+  direct: DirectTransition | null
+): number | null => {
+  if (direct && Math.abs(direct.to - direct.from) > 1) {
+    if (index !== direct.from && index !== direct.to) {
+      return null
+    }
+    const span = direct.to - direct.from
+    const dir = Math.sign(span)
+    const u = clamp((progress - direct.from) / span, 0, 1)
+    return index === direct.from ? -dir * u : dir * (1 - u)
+  }
+  return index - progress
+}
+
+/** 由单一连续动效帧同步驱动三条标题：零空白期、带方向微移与轻微景深缩放 */
+const positionTitleItems = (
+  items: (HTMLSpanElement | null)[],
+  progress: number,
+  direct: DirectTransition | null
+) => {
+  for (let i = 0; i < OPTION_COUNT; i++) {
+    const el = items[i]
+    if (!el) {
+      continue
+    }
+    const d = resolveTextDistance(i, progress, direct)
+    if (d === null || Math.abs(d) >= TITLE_FADE_SPAN) {
+      el.style.opacity = '0'
+      el.style.visibility = 'hidden'
+      continue
+    }
+    const alpha = smoothstep(1 - Math.abs(d) / TITLE_FADE_SPAN)
+    const tx = d * TITLE_SHIFT_PX
+    const scale = 0.965 + 0.035 * alpha
+    el.style.visibility = 'visible'
+    el.style.opacity = alpha.toFixed(4)
+    el.style.transform = `translate3d(${tx.toFixed(2)}px, 0, 0) scale(${scale.toFixed(4)})`
+  }
+}
+
+/** 由单一连续动效帧同步驱动三条模式说明：在各自对齐锚点附近短距柔滑移并交叉淡入淡出 */
+const positionHintItems = (
+  items: (HTMLParagraphElement | null)[],
+  metrics: HintMetrics,
+  progress: number,
+  direct: DirectTransition | null
+) => {
+  const { stageWidth, itemWidths } = metrics
+  if (stageWidth <= 0) {
+    return
+  }
+  for (let i = 0; i < OPTION_COUNT; i++) {
+    const el = items[i]
+    if (!el) {
+      continue
+    }
+    const d = resolveTextDistance(i, progress, direct)
+    if (d === null || Math.abs(d) >= HINT_FADE_SPAN) {
+      el.style.opacity = '0'
+      el.style.visibility = 'hidden'
+      continue
+    }
+    const width = itemWidths[i] ?? 0
+    const restX = i === 0 ? 0 : i === 1 ? (stageWidth - width) * 0.5 : stageWidth - width
+    const alpha = smoothstep(1 - Math.abs(d) / HINT_FADE_SPAN)
+    const tx = restX + d * HINT_SHIFT_PX
+    el.style.visibility = 'visible'
+    el.style.opacity = alpha.toFixed(4)
+    el.style.transform = `translate3d(${tx.toFixed(2)}px, 0, 0)`
+  }
+}
+
+/**
+ * 可点击、可拖拽的三模式分段滑块：
+ * 二阶弹簧物理驱动胶囊位姿、按压微膨、速度果冻拉伸与边界橡皮筋阻尼，
+ * 并像素级锁步同步蓝字高亮裁切与上下文字过渡。
+ */
 const ModeSwitch = ({
   mode,
-  onProgressChange,
-  onPreviewChange,
+  onMotionFrame,
+  onMotionActiveChange,
   onCommit,
 }: {
   mode: ChatMode
-  onProgressChange: (progress: number) => void
-  onPreviewChange: (next: ChatMode) => void
+  onMotionFrame: (frame: ModeMotionFrame) => void
+  onMotionActiveChange: (active: boolean) => void
   onCommit: (next: ChatMode) => void
 }) => {
   const t = useTranslate()
   const switchRef = useRef<HTMLDivElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const thumbSlotRef = useRef<HTMLDivElement>(null)
+  const thumbRef = useRef<HTMLDivElement>(null)
   const activeLayerRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState | null>(null)
-  const animRef = useRef<SnapAnimation | null>(null)
   const initializedRef = useRef(false)
   const suppressClickRef = useRef(false)
   const suppressTimerRef = useRef<number | null>(null)
   const lastTouchEndTimeRef = useRef(0)
 
-  const activeIndex = getModeIndex(mode)
-  const progressRef = useRef(activeIndex)
-  const latestRef = useRef({ activeIndex, mode, onProgressChange, onPreviewChange, onCommit })
-  latestRef.current = { activeIndex, mode, onProgressChange, onPreviewChange, onCommit }
+  const [popTick, setPopTick] = useState(0)
+  const [popIndex, setPopIndex] = useState(-1)
 
-  const applyVisualProgress = useCallback((rawProgress: number) => {
-    const progress = clampProgress(rawProgress)
-    progressRef.current = progress
+  const activeIndex = getModeIndex(mode)
+  const trackWidthRef = useRef(0)
+  const progressRef = useRef(activeIndex)
+  const velocityRef = useRef(0)
+  const targetRef = useRef(activeIndex)
+  const pressRef = useRef(0)
+  const targetPressRef = useRef(0)
+  const stretchRef = useRef(0)
+  const directRef = useRef<DirectTransition | null>(null)
+  const rafIdRef = useRef<number | null>(null)
+  const lastFrameTimeRef = useRef(0)
+  const motionActiveRef = useRef(false)
+
+  const latestRef = useRef({ activeIndex, mode, onMotionFrame, onMotionActiveChange, onCommit })
+  latestRef.current = { activeIndex, mode, onMotionFrame, onMotionActiveChange, onCommit }
+
+  const setMotionActive = useCallback((active: boolean) => {
+    if (motionActiveRef.current === active) {
+      return
+    }
+    motionActiveRef.current = active
+    latestRef.current.onMotionActiveChange(active)
+  }, [])
+
+  const renderVisuals = useCallback(() => {
+    const progress = progressRef.current
+    const press = pressRef.current
+    const stretch = stretchRef.current
+
+    // 按压时胶囊轻盈膨起，高速掠过时水平微拉、纵向微收（保持体积感的果冻形变）
+    const scaleX = 1 + 0.022 * press + stretch
+    const scaleY = 1 + 0.032 * press - 0.45 * stretch
 
     const thumbSlot = thumbSlotRef.current
     if (thumbSlot) {
       thumbSlot.style.transform = `translate3d(${progress * 100}%, 0, 0)`
     }
 
+    const thumb = thumbRef.current
+    if (thumb) {
+      thumb.style.transform = `scale3d(${scaleX.toFixed(4)}, ${scaleY.toFixed(4)}, 1)`
+    }
+
     const activeLayer = activeLayerRef.current
-    if (activeLayer) {
-      activeLayer.style.setProperty('--mode-clip-left', String(progress / OPTION_COUNT))
-      activeLayer.style.setProperty(
-        '--mode-clip-right',
-        String((MAX_INDEX - progress) / OPTION_COUNT)
+    const trackWidth = trackWidthRef.current || trackRef.current?.clientWidth || 0
+    if (activeLayer && trackWidth > 0) {
+      const slotWidth = trackWidth / OPTION_COUNT
+      const baseThumbWidth = slotWidth + THUMB_BASE_OUTSET_PX * 2
+      const extraX = baseThumbWidth * (scaleX - 1) * 0.5
+      const clipLeft = Math.max(0, ACTIVE_LAYER_EXTRA_PAD_PX + progress * slotWidth - extraX)
+      const clipRight = Math.max(
+        0,
+        ACTIVE_LAYER_EXTRA_PAD_PX + (MAX_INDEX - progress) * slotWidth - extraX
       )
+      activeLayer.style.clipPath = `inset(0px ${clipRight.toFixed(2)}px 0px ${clipLeft.toFixed(2)}px round var(--mode-clip-radius))`
     }
 
-    latestRef.current.onProgressChange(progress)
+    latestRef.current.onMotionFrame({
+      progress,
+      direct: directRef.current,
+    })
   }, [])
 
-  const stopAnimation = useCallback(() => {
-    const running = animRef.current
-    if (running) {
-      window.cancelAnimationFrame(running.rafId)
-      animRef.current = null
+  const stopLoop = useCallback(() => {
+    if (rafIdRef.current !== null) {
+      window.cancelAnimationFrame(rafIdRef.current)
+      rafIdRef.current = null
     }
-  }, [])
+    lastFrameTimeRef.current = 0
+    setMotionActive(false)
+  }, [setMotionActive])
 
-  const animateTo = useCallback(
-    (target: number) => {
-      const clampedTarget = clampProgress(target)
-      const running = animRef.current
-      if (running && Math.abs(running.target - clampedTarget) < 1e-4) {
-        return
-      }
-      stopAnimation()
+  const startLoop = useCallback(() => {
+    setMotionActive(true)
+    if (rafIdRef.current !== null) {
+      return
+    }
+    lastFrameTimeRef.current = performance.now()
 
-      const startProgress = progressRef.current
-      if (Math.abs(clampedTarget - startProgress) < 1e-4 || prefersReducedMotion()) {
-        applyVisualProgress(clampedTarget)
-        return
-      }
+    const step = (now: number) => {
+      const rawDt = Math.max(0, (now - lastFrameTimeRef.current) / 1000)
+      lastFrameTimeRef.current = now
+      const dt = Math.min(MAX_FRAME_DT_SEC, rawDt)
 
-      const startTime = performance.now()
-      const step = (now: number) => {
-        const elapsed = now - startTime
-        const tRatio = Math.min(1, elapsed / SNAP_DURATION_MS)
-        const eased = easeOutQuarticLike(tRatio)
-        applyVisualProgress(lerp(startProgress, clampedTarget, eased))
+      const dragging = Boolean(dragRef.current?.dragging)
 
-        if (tRatio < 1) {
-          animRef.current = { rafId: window.requestAnimationFrame(step), target: clampedTarget }
-        } else {
-          animRef.current = null
-          applyVisualProgress(clampedTarget)
+      if (!dragging) {
+        let remaining = dt
+        while (remaining > 0) {
+          const h = Math.min(PHYSICS_STEP_SEC, remaining)
+          const accel =
+            SPRING_STIFFNESS * (targetRef.current - progressRef.current) -
+            SPRING_DAMPING * velocityRef.current
+          velocityRef.current += accel * h
+          progressRef.current += velocityRef.current * h
+          remaining -= h
         }
       }
 
-      animRef.current = { rafId: window.requestAnimationFrame(step), target: clampedTarget }
+      // 按压与速度形变做一阶平滑跟随，避免瞬时加速度跳跃
+      const targetStretch = clamp(Math.abs(velocityRef.current) * 0.0044, 0, 0.055)
+      const pressBlend = 1 - Math.exp(-dt * 28)
+      const stretchBlend = 1 - Math.exp(-dt * 26)
+      pressRef.current += (targetPressRef.current - pressRef.current) * pressBlend
+      stretchRef.current += (targetStretch - stretchRef.current) * stretchBlend
+
+      const settledSpring =
+        !dragging &&
+        Math.abs(targetRef.current - progressRef.current) < 0.0008 &&
+        Math.abs(velocityRef.current) < 0.008
+      const settledMorph =
+        Math.abs(targetPressRef.current - pressRef.current) < 0.002 && stretchRef.current < 0.0008
+
+      if (settledSpring) {
+        progressRef.current = targetRef.current
+        velocityRef.current = 0
+        directRef.current = null
+      }
+      if (settledMorph) {
+        pressRef.current = targetPressRef.current
+        stretchRef.current = 0
+      }
+
+      renderVisuals()
+
+      if (dragging || !settledSpring || !settledMorph) {
+        rafIdRef.current = window.requestAnimationFrame(step)
+      } else {
+        rafIdRef.current = null
+        lastFrameTimeRef.current = 0
+        setMotionActive(false)
+      }
+    }
+
+    rafIdRef.current = window.requestAnimationFrame(step)
+  }, [renderVisuals, setMotionActive])
+
+  const springTo = useCallback(
+    (
+      nextIndex: number,
+      options?: { initialVelocity?: number; directFrom?: number | null; triggerPop?: boolean }
+    ) => {
+      const clampedTarget = clamp(nextIndex, 0, MAX_INDEX)
+      targetRef.current = clampedTarget
+
+      if (options?.initialVelocity !== undefined) {
+        velocityRef.current = clamp(
+          options.initialVelocity,
+          -MAX_FLING_VELOCITY,
+          MAX_FLING_VELOCITY
+        )
+      }
+
+      if (options?.directFrom !== undefined) {
+        directRef.current =
+          options.directFrom !== null && Math.abs(clampedTarget - options.directFrom) > 1
+            ? { from: options.directFrom, to: clampedTarget }
+            : null
+      }
+
+      if (options?.triggerPop && !prefersReducedMotion()) {
+        setPopIndex(clampedTarget)
+        setPopTick((tick) => tick + 1)
+      }
+
+      if (prefersReducedMotion()) {
+        stopLoop()
+        progressRef.current = clampedTarget
+        velocityRef.current = 0
+        pressRef.current = 0
+        targetPressRef.current = 0
+        stretchRef.current = 0
+        directRef.current = null
+        renderVisuals()
+        return
+      }
+
+      startLoop()
     },
-    [applyVisualProgress, stopAnimation]
+    [renderVisuals, startLoop, stopLoop]
   )
 
-  // 首次挂载直接对齐初始档位，后续非拖拽态切档时平滑过渡
+  // 首次挂载直接对齐初始档位，后续非拖拽态切档时以弹簧丝滑过渡
   useLayoutEffect(() => {
     if (!initializedRef.current) {
       initializedRef.current = true
-      applyVisualProgress(activeIndex)
+      trackWidthRef.current = trackRef.current?.clientWidth ?? 0
+      progressRef.current = activeIndex
+      targetRef.current = activeIndex
+      velocityRef.current = 0
+      directRef.current = null
+      renderVisuals()
       return
     }
     if (dragRef.current?.dragging) {
       return
     }
-    animateTo(activeIndex)
-  }, [activeIndex, animateTo, applyVisualProgress])
+    if (Math.abs(targetRef.current - activeIndex) > 1e-4) {
+      const from = Math.round(clamp(progressRef.current, 0, MAX_INDEX))
+      springTo(activeIndex, { directFrom: from, triggerPop: true })
+    }
+  }, [activeIndex, renderVisuals, springTo])
 
-  useEffect(() => () => stopAnimation(), [stopAnimation])
+  useEffect(() => () => stopLoop(), [stopLoop])
 
-  // 检测分段滑块横向空间是否拥挤：放不下时自动切为文字在上、图标在下
+  // 检测分段滑块横向空间是否拥挤并同步轨道宽度，保证 clip-path 像素级精确
   useLayoutEffect(() => {
     const container = switchRef.current
     const track = trackRef.current
@@ -252,13 +457,15 @@ const ModeSwitch = ({
         }
       }
       container.classList.toggle(styles.stacked, crowded)
+      trackWidthRef.current = track.clientWidth
+      renderVisuals()
     }
 
     updateLayout()
     const observer = new ResizeObserver(updateLayout)
     observer.observe(track)
     return () => observer.disconnect()
-  }, [t])
+  }, [renderVisuals, t])
 
   // 原生 Touch + Mouse 拖拽监听：仅挂载一次，拖动过程中不会因父组件更新而重绑或中断
   useEffect(() => {
@@ -278,11 +485,12 @@ const ModeSwitch = ({
       if (rect.width <= 0) {
         return
       }
+      trackWidthRef.current = rect.width
       const slotWidth = rect.width / OPTION_COUNT
       const startProgress = progressRef.current
       const pointerSlot = (clientX - rect.left) / slotWidth
       const pressedOnThumb =
-        pointerSlot >= startProgress - 0.05 && pointerSlot <= startProgress + 1.05
+        pointerSlot >= startProgress - 0.08 && pointerSlot <= startProgress + 1.08
       const startIndex = latestRef.current.activeIndex
       dragRef.current = {
         source,
@@ -300,7 +508,10 @@ const ModeSwitch = ({
         pressedOnThumb,
         dragging: false,
         progress: startProgress,
-        settledIndex: startIndex,
+      }
+      if (pressedOnThumb && !prefersReducedMotion()) {
+        targetPressRef.current = 1
+        startLoop()
       }
     }
 
@@ -324,19 +535,24 @@ const ModeSwitch = ({
         // 仅在非常明显的纵向滑动时放弃，避免手指轻斜误判中断横滑
         if (Math.abs(dy) > Math.abs(dx) * 1.8 && Math.abs(dy) > 18) {
           dragRef.current = null
+          targetPressRef.current = 0
+          startLoop()
           return
         }
         if (Math.abs(dx) < DRAG_THRESHOLD_PX) {
           return
         }
         drag.dragging = true
-        if (animRef.current) {
-          // 吸附动画中途接管拖拽时，以当前实时进度为基准，避免跳变
-          stopAnimation()
-          drag.startProgress = progressRef.current
-          drag.originX = clientX
-        }
+        // 拖拽接管：切回全连续 scrub 模式，以当前实时进度为基准零跳变跟手
+        directRef.current = null
+        drag.startProgress = clamp(progressRef.current, 0, MAX_INDEX)
+        drag.originX = clientX
+        drag.lastX = clientX
+        drag.lastTime = timeStamp
+        velocityRef.current = 0
+        targetPressRef.current = 1
         track.classList.add(styles.modeTrackDragging)
+        startLoop()
       }
 
       preventDefault?.()
@@ -351,16 +567,14 @@ const ModeSwitch = ({
 
       const nextProgress = computeDragProgress(drag, clientX)
       drag.progress = nextProgress
-      applyVisualProgress(nextProgress)
-
-      const nextSettledIndex = resolveSettledIndex(drag.settledIndex, nextProgress)
-      if (nextSettledIndex !== drag.settledIndex) {
-        drag.settledIndex = nextSettledIndex
-        const nextOption = CHAT_MODE_OPTIONS[nextSettledIndex]
-        if (nextOption) {
-          latestRef.current.onPreviewChange(nextOption.value)
-        }
-      }
+      progressRef.current = nextProgress
+      // 同步速度用于驱动跟手期间极轻的果冻微拉伸
+      velocityRef.current = clamp(
+        (drag.velocityX * 1000) / drag.slotWidth,
+        -MAX_FLING_VELOCITY,
+        MAX_FLING_VELOCITY
+      )
+      renderVisuals()
     }
 
     const finishDrag = (clientX: number | null, cancelled: boolean) => {
@@ -369,13 +583,13 @@ const ModeSwitch = ({
         return
       }
       dragRef.current = null
+      targetPressRef.current = 0
 
       if (!drag.dragging) {
-        if (
-          !animRef.current &&
-          Math.abs(progressRef.current - latestRef.current.activeIndex) > 1e-4
-        ) {
-          animateTo(latestRef.current.activeIndex)
+        if (Math.abs(progressRef.current - latestRef.current.activeIndex) > 1e-4) {
+          springTo(latestRef.current.activeIndex, { directFrom: null })
+        } else if (!prefersReducedMotion()) {
+          startLoop()
         }
         return
       }
@@ -391,27 +605,31 @@ const ModeSwitch = ({
 
       const finalProgress =
         cancelled || clientX === null ? drag.progress : computeDragProgress(drag, clientX)
-      let finalIndex = Math.round(finalProgress)
+      const clampedForRound = clamp(finalProgress, 0, MAX_INDEX)
+      let finalIndex = Math.round(clampedForRound)
       if (!cancelled && clientX !== null && drag.pressedOnThumb && finalIndex === drag.startIndex) {
         const totalDx = clientX - drag.startX
         if (
-          Math.abs(totalDx) > drag.slotWidth * 0.18 &&
+          Math.abs(totalDx) > drag.slotWidth * 0.16 &&
           Math.abs(drag.velocityX) >= FLICK_VELOCITY_PX_PER_MS &&
           Math.sign(drag.velocityX) === Math.sign(totalDx)
         ) {
-          finalIndex = Math.max(0, Math.min(MAX_INDEX, drag.startIndex + Math.sign(totalDx)))
+          finalIndex = clamp(drag.startIndex + Math.sign(totalDx), 0, MAX_INDEX)
         }
       }
 
       track.classList.remove(styles.modeTrackDragging)
-      animateTo(finalIndex)
+      const releaseVelocity = cancelled ? 0 : (drag.velocityX * 1000) / drag.slotWidth
+      const changed = CHAT_MODE_OPTIONS[finalIndex]?.value !== latestRef.current.mode
+      springTo(finalIndex, {
+        initialVelocity: releaseVelocity,
+        directFrom: null,
+        triggerPop: changed,
+      })
 
       const nextOption = CHAT_MODE_OPTIONS[finalIndex]
-      if (nextOption) {
-        latestRef.current.onPreviewChange(nextOption.value)
-        if (nextOption.value !== latestRef.current.mode) {
-          latestRef.current.onCommit(nextOption.value)
-        }
+      if (nextOption && nextOption.value !== latestRef.current.mode) {
+        latestRef.current.onCommit(nextOption.value)
       }
     }
 
@@ -527,7 +745,7 @@ const ModeSwitch = ({
         suppressTimerRef.current = null
       }
     }
-  }, [animateTo, applyVisualProgress, stopAnimation])
+  }, [renderVisuals, springTo, startLoop])
 
   const handleClickCapture = (event: MouseEvent<HTMLDivElement>) => {
     if (!suppressClickRef.current) {
@@ -542,19 +760,31 @@ const ModeSwitch = ({
     event.stopPropagation()
   }
 
+  const selectIndex = useCallback(
+    (index: number) => {
+      const nextOption = CHAT_MODE_OPTIONS[index]
+      if (!nextOption) {
+        return
+      }
+      const from = activeIndex
+      if (nextOption.value !== mode) {
+        onCommit(nextOption.value)
+        springTo(index, { directFrom: from, triggerPop: true })
+      } else if (Math.abs(progressRef.current - index) > 1e-3) {
+        springTo(index, { directFrom: null })
+      }
+    },
+    [activeIndex, mode, onCommit, springTo]
+  )
+
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
       return
     }
     event.preventDefault()
     const delta = event.key === 'ArrowRight' ? 1 : -1
-    const nextIndex = Math.max(0, Math.min(MAX_INDEX, activeIndex + delta))
-    const nextOption = CHAT_MODE_OPTIONS[nextIndex]
-    if (nextOption && nextOption.value !== mode) {
-      onPreviewChange(nextOption.value)
-      onCommit(nextOption.value)
-      animateTo(nextIndex)
-    }
+    const nextIndex = clamp(activeIndex + delta, 0, MAX_INDEX)
+    selectIndex(nextIndex)
   }
 
   return (
@@ -574,11 +804,7 @@ const ModeSwitch = ({
             role="tab"
             aria-selected={option.value === mode}
             className={clsx(styles.modeOption, option.value === mode && styles.modeOptionActive)}
-            onClick={() => {
-              onPreviewChange(option.value)
-              onCommit(option.value)
-              animateTo(index)
-            }}
+            onClick={() => selectIndex(index)}
           >
             <span className={styles.modeOptionInner}>
               <span className={styles.modeIcon} aria-hidden="true">
@@ -590,14 +816,22 @@ const ModeSwitch = ({
         ))}
 
         <div ref={thumbSlotRef} aria-hidden="true" className={styles.modeThumbSlot}>
-          <div className={styles.modeThumb} />
+          <div ref={thumbRef} className={styles.modeThumb} />
         </div>
 
         <div ref={activeLayerRef} aria-hidden="true" className={styles.modeActiveLayer}>
-          {CHAT_MODE_OPTIONS.map((option) => (
+          {CHAT_MODE_OPTIONS.map((option, index) => (
             <div key={option.value} className={styles.modeOptionOverlay}>
               <span className={styles.modeOptionInner}>
-                <span className={styles.modeIcon}>{option.icon}</span>
+                <span
+                  key={index === popIndex ? `pop-${popTick}` : option.value}
+                  className={clsx(
+                    styles.modeIcon,
+                    index === popIndex && popTick > 0 && styles.modeIconPop
+                  )}
+                >
+                  {option.icon}
+                </span>
                 <span className={styles.modeLabel}>{t(option.labelKey)}</span>
               </span>
             </div>
@@ -608,82 +842,173 @@ const ModeSwitch = ({
   )
 }
 
-/** 根据连续进度（0..2）定位各模式提示语：两档之间同屏呈现离开项后半段与进入项前段 */
-const positionHintItems = (
-  items: (HTMLParagraphElement | null)[],
-  metrics: HintMetrics,
-  rawProgress: number
-) => {
-  const { stageWidth, itemWidths } = metrics
-  if (stageWidth <= 0) {
-    return
-  }
-  const progress = clampProgress(rawProgress)
-  const enterRight = stageWidth + HINT_OFFSCREEN_PAD_PX
-
-  for (let i = 0; i < OPTION_COUNT; i++) {
-    const el = items[i]
-    if (!el) {
-      continue
-    }
-    const width = itemWidths[i] ?? 0
-    const exitLeft = -(width + HINT_OFFSCREEN_PAD_PX)
-    let x = enterRight
-    let visible = false
-
-    if (i === 0) {
-      if (progress < 1) {
-        x = lerp(0, exitLeft, progress)
-        visible = true
-      } else {
-        x = exitLeft
-      }
-    } else if (i === 1) {
-      const restCenter = (stageWidth - width) * 0.5
-      if (progress <= 0) {
-        x = enterRight
-      } else if (progress <= 1) {
-        x = lerp(enterRight, restCenter, progress)
-        visible = true
-      } else if (progress < 2) {
-        x = lerp(restCenter, exitLeft, progress - 1)
-        visible = true
-      } else {
-        x = exitLeft
-      }
-    } else {
-      const restRight = stageWidth - width
-      if (progress > 1) {
-        x = lerp(enterRight, restRight, progress - 1)
-        visible = true
-      } else {
-        x = enterRight
-      }
-    }
-
-    el.style.transform = `translate3d(${x}px, 0, 0)`
-    el.style.visibility = visible ? 'visible' : 'hidden'
-  }
-}
-
-/** 新对话：模式标题 + 可拖拽三模式滑块 + 模式说明 + 输入框。桌面端居中；移动端输入框吸底 */
-export const Welcome = () => {
+/** 新对话：模式标题 + 物理弹性三模式滑块 + 模式说明 + 输入框。桌面端居中；移动端输入框吸底 */
+export const Welcome = ({ onStartCall }: { onStartCall?: (sessionId: string | null) => void }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
   const chatMode = useSettings((state) => state.chatMode)
-  const [targetMode, setTargetMode] = useState<ChatMode>(chatMode)
-  const [displayedMode, setDisplayedMode] = useState<ChatMode>(chatMode)
-  const [textHidden, setTextHidden] = useState(false)
 
+  const heroRef = useRef<HTMLDivElement>(null)
+  const cameraShortcutRef = useRef<(() => void) | null>(null)
+  const inputSlotRef = useRef<HTMLDivElement>(null)
+  const maxHeroLiftRef = useRef(0)
+  const prewarmTimerRef = useRef<number | null>(null)
+  const titleItemRefs = useRef<(HTMLSpanElement | null)[]>([])
   const hintStageRef = useRef<HTMLDivElement>(null)
   const hintItemRefs = useRef<(HTMLParagraphElement | null)[]>([])
   const hintMetricsRef = useRef<HintMetrics>({ stageWidth: 0, itemWidths: [] })
-  const hintProgressRef = useRef(getModeIndex(chatMode))
+  const motionFrameRef = useRef<ModeMotionFrame>({
+    progress: getModeIndex(chatMode),
+    direct: null,
+  })
 
-  const handleProgressChange = useCallback((progress: number) => {
-    hintProgressRef.current = progress
-    positionHintItems(hintItemRefs.current, hintMetricsRef.current, progress)
+  const handleMotionFrame = useCallback((frame: ModeMotionFrame) => {
+    motionFrameRef.current = frame
+    positionTitleItems(titleItemRefs.current, frame.progress, frame.direct)
+    positionHintItems(hintItemRefs.current, hintMetricsRef.current, frame.progress, frame.direct)
   }, [])
+
+  const handleMotionActiveChange = useCallback((active: boolean) => {
+    heroRef.current?.classList.toggle(styles.heroAnimating, active)
+  }, [])
+
+  // 手指刚触碰输入框时（早于系统 IME onPrepare ~50ms）提前预热两个小合成层，消除冷启动首帧上传尖峰
+  const prewarmImeLayers = useCallback(() => {
+    if (!isMobile || !hasNativeImeMotion()) {
+      return
+    }
+    const hero = heroRef.current
+    const inputSlot = inputSlotRef.current
+    if (!hero || !inputSlot) {
+      return
+    }
+    hero.style.willChange = 'transform'
+    inputSlot.style.willChange = 'transform'
+    if (prewarmTimerRef.current !== null) {
+      window.clearTimeout(prewarmTimerRef.current)
+    }
+    prewarmTimerRef.current = window.setTimeout(() => {
+      prewarmTimerRef.current = null
+      const ime = getImeMotionState()
+      if (!ime.animating && ime.shift <= 0.05) {
+        heroRef.current?.style.removeProperty('will-change')
+        inputSlotRef.current?.style.removeProperty('will-change')
+      }
+    }, 500)
+  }, [isMobile])
+
+  // Android 原生键盘动效：由纯 GPU translate3d 同步驱动输入框与 hero 区，零重排零 WebView Resize
+  useLayoutEffect(() => {
+    const hero = heroRef.current
+    const inputSlot = inputSlotRef.current
+    if (!isMobile || !hasNativeImeMotion() || !hero || !inputSlot) {
+      return
+    }
+
+    const SMOOTH_SETTLE_TRANSITION = 'transform 180ms cubic-bezier(0.22, 1, 0.36, 1)'
+    let smoothTimer: number | null = null
+
+    const clearSmoothTransition = () => {
+      if (smoothTimer !== null) {
+        window.clearTimeout(smoothTimer)
+        smoothTimer = null
+      }
+      hero.style.removeProperty('transition')
+      inputSlot.style.removeProperty('transition')
+    }
+
+    const cacheMaxHeroLift = () => {
+      // 附件面板展开或向键盘收拢期间 hero 已被临时顶高，保持自然态上移余量，避免截断或收起首帧回跳
+      if (
+        inputSlot.querySelector('[data-open="true"], [aria-hidden="true"][style*="height"]') &&
+        maxHeroLiftRef.current > 0
+      ) {
+        return
+      }
+      // offsetTop 不受 transform 影响，直接反映自然状态下 hero 距顶栏下沿的可用上移余量
+      maxHeroLiftRef.current = Math.max(0, hero.offsetTop - 8)
+    }
+
+    const applyShift = (shift: number, animating: boolean, smoothSettle = false) => {
+      clearSmoothTransition()
+      if (smoothSettle && !prefersReducedMotion()) {
+        hero.style.willChange = 'transform'
+        inputSlot.style.willChange = 'transform'
+        hero.style.transition = SMOOTH_SETTLE_TRANSITION
+        inputSlot.style.transition = SMOOTH_SETTLE_TRANSITION
+        const heroShift = shift > 0.05 ? Math.min(shift * 0.5, maxHeroLiftRef.current) : 0
+        inputSlot.style.transform =
+          shift > 0.05 ? `translate3d(0, ${(-shift).toFixed(2)}px, 0)` : 'translate3d(0, 0, 0)'
+        hero.style.transform =
+          heroShift > 0.05
+            ? `translate3d(0, ${(-heroShift).toFixed(2)}px, 0)`
+            : 'translate3d(0, 0, 0)'
+        smoothTimer = window.setTimeout(() => {
+          smoothTimer = null
+          hero.style.removeProperty('transition')
+          inputSlot.style.removeProperty('transition')
+          if (shift <= 0.05) {
+            inputSlot.style.removeProperty('transform')
+            hero.style.removeProperty('transform')
+            hero.style.removeProperty('will-change')
+            inputSlot.style.removeProperty('will-change')
+          }
+        }, 200)
+        return
+      }
+      if (animating) {
+        hero.style.willChange = 'transform'
+        inputSlot.style.willChange = 'transform'
+      } else if (shift <= 0.05) {
+        hero.style.removeProperty('will-change')
+        inputSlot.style.removeProperty('will-change')
+      }
+      if (shift > 0.05) {
+        const heroShift = Math.min(shift * 0.5, maxHeroLiftRef.current)
+        inputSlot.style.transform = `translate3d(0, ${(-shift).toFixed(2)}px, 0)`
+        hero.style.transform =
+          heroShift > 0.05 ? `translate3d(0, ${(-heroShift).toFixed(2)}px, 0)` : ''
+      } else {
+        inputSlot.style.removeProperty('transform')
+        hero.style.removeProperty('transform')
+      }
+    }
+
+    cacheMaxHeroLift()
+    const initial = getImeMotionState()
+    applyShift(initial.shift, initial.animating)
+
+    const unsubscribe = subscribeImeMotion((phase, ime) => {
+      if (prewarmTimerRef.current !== null) {
+        window.clearTimeout(prewarmTimerRef.current)
+        prewarmTimerRef.current = null
+      }
+      if (phase === 'prepare') {
+        clearSmoothTransition()
+        cacheMaxHeroLift()
+        hero.style.willChange = 'transform'
+        inputSlot.style.willChange = 'transform'
+        return
+      }
+      if (phase === 'start' && ime.opening && maxHeroLiftRef.current <= 0) {
+        cacheMaxHeroLift()
+      }
+      applyShift(ime.shift, ime.animating, phase === 'end' && ime.smoothSettle)
+    })
+
+    return () => {
+      unsubscribe()
+      clearSmoothTransition()
+      if (prewarmTimerRef.current !== null) {
+        window.clearTimeout(prewarmTimerRef.current)
+        prewarmTimerRef.current = null
+      }
+      hero.style.removeProperty('transform')
+      hero.style.removeProperty('will-change')
+      inputSlot.style.removeProperty('transform')
+      inputSlot.style.removeProperty('will-change')
+    }
+  }, [isMobile])
 
   // 测量视口及三条提示语的实际宽度与最大高度，仅在布局/语言变动时执行，拖拽期间零布局读取
   useLayoutEffect(() => {
@@ -707,7 +1032,9 @@ export const Welcome = () => {
       if (stage.style.minHeight !== nextMinHeight) {
         stage.style.minHeight = nextMinHeight
       }
-      positionHintItems(hintItemRefs.current, hintMetricsRef.current, hintProgressRef.current)
+      const { progress, direct } = motionFrameRef.current
+      positionTitleItems(titleItemRefs.current, progress, direct)
+      positionHintItems(hintItemRefs.current, hintMetricsRef.current, progress, direct)
     }
 
     measureAndSync()
@@ -740,46 +1067,30 @@ export const Welcome = () => {
     }
   }, [t])
 
-  // 外部直接改变 chatMode 时同步目标模式
-  useEffect(() => {
-    setTargetMode(chatMode)
-  }, [chatMode])
-
-  // 标题仅在完整滑过到下一档或切档提交时淡出切换，连续滑过时平滑收敛到最新模式
-  useEffect(() => {
-    if (targetMode === displayedMode) {
-      if (!textHidden) {
-        return
-      }
-      const rafId = window.requestAnimationFrame(() => setTextHidden(false))
-      return () => window.cancelAnimationFrame(rafId)
-    }
-    setTextHidden(true)
-    const timer = window.setTimeout(() => {
-      setDisplayedMode(targetMode)
-    }, TEXT_FADE_OUT_MS)
-    return () => {
-      window.clearTimeout(timer)
-    }
-  }, [targetMode, displayedMode, textHidden])
-
-  const displayedOption = getChatModeMeta(displayedMode)
-
   return (
     <div className={styles.container}>
-      {isMobile ? <MobileHeader /> : null}
+      {isMobile ? <MobileHeader onTakePhoto={() => cameraShortcutRef.current?.()} /> : null}
       <div className={styles.welcome}>
-        <div className={styles.hero}>
+        <div ref={heroRef} className={styles.hero}>
           <div className={styles.greeting}>
-            <span className={clsx(styles.greetingText, textHidden && styles.textHidden)}>
-              {t(displayedOption.titleKey)}
-            </span>
+            {CHAT_MODE_OPTIONS.map((option, index) => (
+              <span
+                key={option.value}
+                ref={(el) => {
+                  titleItemRefs.current[index] = el
+                }}
+                aria-hidden={option.value !== chatMode}
+                className={styles.greetingText}
+              >
+                {t(option.titleKey)}
+              </span>
+            ))}
           </div>
 
           <ModeSwitch
             mode={chatMode}
-            onProgressChange={handleProgressChange}
-            onPreviewChange={setTargetMode}
+            onMotionFrame={handleMotionFrame}
+            onMotionActiveChange={handleMotionActiveChange}
             onCommit={setChatMode}
           />
 
@@ -801,7 +1112,18 @@ export const Welcome = () => {
           </div>
         </div>
 
-        <ChatInput sessionId={null} />
+        <div
+          ref={inputSlotRef}
+          className={styles.inputSlot}
+          onTouchStartCapture={prewarmImeLayers}
+          onFocusCapture={prewarmImeLayers}
+        >
+          <ChatInput
+            sessionId={null}
+            onStartCall={onStartCall}
+            cameraShortcutRef={cameraShortcutRef}
+          />
+        </div>
       </div>
     </div>
   )

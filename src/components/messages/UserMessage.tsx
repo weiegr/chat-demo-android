@@ -1,7 +1,10 @@
 import clsx from 'clsx'
 import { memo } from 'react'
+import { useTranslate } from '../../i18n/index.js'
 import { retryUpload } from '../../services/chat/store.js'
 import type { UserMessage as UserMessageType } from '../../services/chat/types.js'
+import { IconButton } from '../base/IconButton.js'
+import { IconEditOutline16 } from '../base/icons.js'
 import { StoredVideoTile } from '../files/VideoTile.js'
 import {
   BranchSwitcher,
@@ -18,6 +21,7 @@ export const UserMessage = memo(function UserMessage({
   retryUploadId,
   isFirst,
   busy,
+  readOnly,
   versions,
   onSelectVersion,
 }: {
@@ -28,17 +32,25 @@ export const UserMessage = memo(function UserMessage({
   isFirst: boolean
   isLast?: boolean
   busy: boolean
+  readOnly: boolean
   versions: MessageVersions
   onSelectVersion: SelectMessageVersion
 }) {
+  const t = useTranslate()
   const isEditing = useUserEdit(
-    (state) => state.active?.sessionId === sessionId && state.active.messageId === message.id
+    (state) =>
+      !readOnly && state.active?.sessionId === sessionId && state.active.messageId === message.id
   )
+  const editable = !readOnly && !busy
   const video = message.video
-  const files = video ? message.files.filter((file) => !video.frameIds.includes(file.id)) : message.files
+  const files = video
+    ? message.files.filter((file) => !video.frameIds.includes(file.id))
+    : message.files
+  const attachmentOnly = !message.content && (files.length > 0 || video !== undefined)
 
   return (
     <div
+      data-message-id={message.id}
       data-editing={isEditing ? 'true' : undefined}
       className={clsx(styles.container, isFirst && styles.isFirst)}
     >
@@ -64,21 +76,25 @@ export const UserMessage = memo(function UserMessage({
         <div
           className={clsx(
             styles.bubble,
-            !busy && styles.clickableBubble,
+            editable && styles.clickableBubble,
             isEditing && styles.editingTarget
           )}
-          onClick={() => {
-            if (!busy && !isEditing) {
-              startUserEdit(sessionId, message)
-            }
-          }}
+          onClick={editable && !isEditing ? () => startUserEdit(sessionId, message) : undefined}
         >
           {message.content}
         </div>
       ) : null}
-      {versions.ids.length > 1 ? (
+      {!readOnly && (attachmentOnly || versions.ids.length > 1) ? (
         <div className={styles.bottom}>
           <BranchSwitcher versions={versions} disabled={busy} onSelect={onSelectVersion} />
+          {attachmentOnly ? (
+            <IconButton
+              icon={<IconEditOutline16 />}
+              tooltip={t('editMessage')}
+              disabled={!editable || isEditing}
+              onClick={() => startUserEdit(sessionId, message)}
+            />
+          ) : null}
         </div>
       ) : null}
     </div>

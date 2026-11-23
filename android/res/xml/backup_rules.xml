@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- WebView's storage logs can retain the API key written by older versions. -->
+    <exclude domain="root" path="app_webview/Default/Local Storage" />
+    <exclude domain="root" path="app_webview/Local Storage" />
+</full-backup-content>

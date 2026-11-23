@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import type { ReactNode } from 'react'
+import type { AriaAttributes, ReactNode } from 'react'
 import { InfoModalButton } from './InfoModalButton.js'
 import styles from './Settings.module.css'
 
@@ -18,6 +18,8 @@ export const MobileActionCard = ({
   embedded = false,
   disabled = false,
   danger = false,
+  ariaHasPopup,
+  ariaExpanded,
   className,
   onAction,
   children,
@@ -30,6 +32,8 @@ export const MobileActionCard = ({
   embedded?: boolean
   disabled?: boolean
   danger?: boolean
+  ariaHasPopup?: AriaAttributes['aria-haspopup']
+  ariaExpanded?: boolean
   className?: string
   onAction: () => void
   children?: ReactNode
@@ -45,6 +49,8 @@ export const MobileActionCard = ({
       type="button"
       className={styles.mobileActionHit}
       aria-label={label}
+      aria-haspopup={ariaHasPopup}
+      aria-expanded={ariaExpanded}
       disabled={disabled}
       onClick={onAction}
     />

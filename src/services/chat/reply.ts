@@ -304,7 +304,7 @@ const toUserParam = (
   }
   const transcript = videoSource?.transcript?.trim()
   if (transcript) {
-    blocks.push({ type: 'text', text: `【视频对白转写】\n${JSON.stringify(transcript)}` })
+    blocks.push({ type: 'text', text: `【视频对白】\n${transcript}` })
   }
   const inline = files.flatMap((file) => {
     if (isInlinedText(file)) {

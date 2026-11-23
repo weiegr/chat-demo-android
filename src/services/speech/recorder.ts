@@ -1,26 +1,12 @@
-/**
- * 录音并编码为 ASR 接受的 WAV（单声道、16-bit PCM、16kHz）。
- *
- * AudioContext 以 16kHz 创建，浏览器负责重采样；ScriptProcessorNode 采集 PCM 样本。
- * 录音处理在页面内完成。
- */
+/** WAV 输入固定为 16 kHz、单声道、16-bit PCM。 */
 export const SAMPLE_RATE = 16000
-/** ASR 单次时长上限 120 秒 */
 export const MAX_SECONDS = 120
 
-const BUFFER_SIZE = 4096
-
-export type Recording = {
-  /** 停止录音并返回 WAV；没有采到声音时返回 null */
-  stop: () => Promise<Blob | null>
-  /** 放弃录音，释放麦克风 */
-  cancel: () => void
-  /** 频谱分析节点，只读；采样率与录音一致 */
-  analyser: AnalyserNode
-}
-
-/** 开始录音；到达时长上限时调用 onLimit，由调用方决定何时 stop */
-export const startRecording = async (onLimit: () => void): Promise<Recording> => {
+export const startMicrophone = async (
+  onSamples: (samples: Float32Array) => void,
+  { bufferSize = 4096, signal }: { bufferSize?: number; signal?: AbortSignal } = {}
+) => {
+  signal?.throwIfAborted()
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
   })
@@ -35,15 +21,15 @@ export const startRecording = async (onLimit: () => void): Promise<Recording> =>
       return
     }
     released = true
+    signal?.removeEventListener('abort', release)
     if (processor) {
       processor.onaudioprocess = null
     }
-    // 初始化可能只完成了一部分；单个节点断开失败也不能阻止麦克风释放。
     for (const node of [processor, analyser, source]) {
       try {
         node?.disconnect()
       } catch {
-        // 继续释放其余资源。
+        // 一个节点断开失败时仍继续释放其他资源。
       }
     }
     for (const track of stream.getTracks()) {
@@ -53,51 +39,59 @@ export const startRecording = async (onLimit: () => void): Promise<Recording> =>
   }
 
   try {
+    signal?.throwIfAborted()
+    signal?.addEventListener('abort', release, { once: true })
     context = new AudioContext({ sampleRate: SAMPLE_RATE })
     source = context.createMediaStreamSource(stream)
-    processor = context.createScriptProcessor(BUFFER_SIZE, 1, 1)
-    // 频谱分析用：串在录音链路中间（原样透传），WebKit 不会处理未连到输出的分析节点
+    processor = context.createScriptProcessor(bufferSize, 1, 1)
     analyser = context.createAnalyser()
     analyser.fftSize = 512
     analyser.smoothingTimeConstant = 0.2
-    const chunks: Float32Array[] = []
-    let length = 0
-    let limited = false
-    processor.onaudioprocess = (event) => {
-      if (limited) {
-        return
-      }
-      chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)))
-      length += BUFFER_SIZE
-      if (length >= MAX_SECONDS * SAMPLE_RATE) {
-        limited = true
-        onLimit()
-      }
-    }
+    processor.onaudioprocess = (event) => onSamples(event.inputBuffer.getChannelData(0))
     source.connect(analyser)
     analyser.connect(processor)
-    // ScriptProcessorNode 只有连到输出才会持续回调；输出缓冲保持静音
+    // 保持处理节点运行，输出缓冲始终静音。
     processor.connect(context.destination)
-    // 在 await getUserMedia 之后创建，iOS 上可能处于 suspended
     if (context.state === 'suspended') {
       void context.resume().catch(() => {})
     }
-
-    return {
-      stop: async () => {
-        release()
-        return length === 0 ? null : encodeWav(chunks, length)
-      },
-      cancel: release,
-      analyser,
-    }
+    return { analyser, release }
   } catch (error) {
     release()
     throw error
   }
 }
 
-const encodeWav = (chunks: Float32Array[], length: number) => {
+export type Recording = {
+  stop: () => Promise<Blob | null>
+  cancel: () => void
+  analyser: AnalyserNode
+}
+
+/** 开始一次录音；到达时长上限后由调用方决定何时提交。 */
+export const startRecording = async (onLimit: () => void): Promise<Recording> => {
+  const chunks: Float32Array[] = []
+  let length = 0
+  const microphone = await startMicrophone((samples) => {
+    if (length < MAX_SECONDS * SAMPLE_RATE) {
+      chunks.push(new Float32Array(samples))
+      length += samples.length
+      if (length >= MAX_SECONDS * SAMPLE_RATE) {
+        onLimit()
+      }
+    }
+  })
+  return {
+    stop: async () => {
+      microphone.release()
+      return length === 0 ? null : encodeWav(chunks, length)
+    },
+    cancel: microphone.release,
+    analyser: microphone.analyser,
+  }
+}
+
+export const encodeWav = (chunks: Float32Array[], length: number) => {
   const samples = Math.min(length, MAX_SECONDS * SAMPLE_RATE)
   const buffer = new ArrayBuffer(44 + samples * 2)
   const view = new DataView(buffer)

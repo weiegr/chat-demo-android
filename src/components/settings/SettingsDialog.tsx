@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import {
   IconChevronRightOutline14,
   IconDarkOutline16,
@@ -22,7 +22,9 @@ import {
   openExportFolder,
   parseArchiveDownloadUrl,
   type ExportRecord,
+  type HistoryUrlImportProgress,
 } from '../../services/chat/backup.js'
+import { formatSize } from '../../services/attachments.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { useChatStore } from '../../services/chat/store.js'
 import {
@@ -54,6 +56,7 @@ import {
   MobileLocationPage,
 } from './LocationSettings.js'
 import { MobileActionCard } from './MobileActionCard.js'
+import { QuickCameraShortcutSetting } from './QuickCameraShortcutSetting.js'
 import { MobileRpModeNavRow, MobileRpModePage, RpModeSetting } from './RpModeSettings.js'
 import {
   MobileSystemPromptNavRow,
@@ -63,13 +66,23 @@ import {
 import { closeSettings, useSettingsDialog, type SettingsSection } from './settingsDialogState.js'
 import styles from './Settings.module.css'
 
+type MobileSubPage = 'data' | 'location' | 'systemPrompt' | 'rpMode'
+
+const MOBILE_SUB_TITLE_KEY: Record<MobileSubPage, TranslationKey> = {
+  data: 'settingDialogAsideDataOptionLabel',
+  location: 'settingsLocation',
+  systemPrompt: 'settingsSystemPrompt',
+  rpMode: 'settingsRpMode',
+}
+
 /**
  * 设置弹窗：分「通用设置」（主题、语言、朗读音色、位置）与「数据管理」（API Key、导入、导出、删除）。
- * 桌面端为居中弹窗、左侧导航；移动端为底部弹层、导航横排在内容上方
+ * 桌面端为居中弹窗、左侧导航；移动端为右侧滑入全屏页、二级子页带原生 Push/Pop 视差过渡
  */
 export const SettingsDialog = () => {
   const open = useSettingsDialog((state) => state.open)
-  return open ? <SettingsContent /> : null
+  const presence = usePresence(open, 280)
+  return presence.mounted ? <SettingsContent open={open} visible={presence.visible} /> : null
 }
 
 const sections: { value: SettingsSection; label: TranslationKey; icon: ReactNode }[] = [
@@ -81,14 +94,26 @@ const sections: { value: SettingsSection; label: TranslationKey; icon: ReactNode
   { value: 'data', label: 'settingDialogAsideDataOptionLabel', icon: <IconDataOutline16 /> },
 ]
 
-const SettingsContent = () => {
+const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
-  // 打开时按调用方指定的分组选中，之后在弹窗内切换
-  const [section, setSection] = useState(() => useSettingsDialog.getState().section)
-  const [mobilePage, setMobilePage] = useState<
-    'main' | 'data' | 'location' | 'systemPrompt' | 'rpMode'
-  >('main')
+  const storeSection = useSettingsDialog((state) => state.section)
+  // 打开时按调用方指定的分组选中，之后在弹窗内切换；退场未结束时快速重开同步复位
+  const [section, setSection] = useState<SettingsSection>(storeSection)
+  const [mobilePage, setMobilePage] = useState<'main' | MobileSubPage>('main')
+  const [renderedSubPage, setRenderedSubPage] = useState<MobileSubPage | null>(null)
+  const prevOpenRef = useRef(open)
+  const mobileMainRef = useRef<HTMLDivElement>(null)
+  const mobileSubRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (open && !prevOpenRef.current) {
+      setSection(storeSection)
+      setMobilePage('main')
+    }
+    prevOpenRef.current = open
+  }, [open, storeSection])
+
   // 切换分组不丢失导入状态
   const historyImport = useHistoryImport()
   const historyUrlImport = useHistoryUrlImport()
@@ -97,16 +122,26 @@ const SettingsContent = () => {
   const historyBusy =
     historyImport.busy || historyUrlImport.busy || historyDelete.busy || replacingHistory
   const inMobileSubPage = isMobile && mobilePage !== 'main'
-  const mobileTitleKey: TranslationKey =
-    mobilePage === 'data'
-      ? 'settingDialogAsideDataOptionLabel'
-      : mobilePage === 'location'
-        ? 'settingsLocation'
-        : mobilePage === 'systemPrompt'
-          ? 'settingsSystemPrompt'
-          : mobilePage === 'rpMode'
-            ? 'settingsRpMode'
-            : 'settings'
+  const subPresence = usePresence(inMobileSubPage, 280)
+
+  const openMobileSubPage = (page: MobileSubPage) => {
+    setRenderedSubPage(page)
+    setMobilePage(page)
+  }
+
+  useEffect(() => {
+    if (mobileMainRef.current) {
+      mobileMainRef.current.inert = inMobileSubPage
+    }
+  }, [inMobileSubPage])
+
+  // 二级子页首次以屏外初始态挂载时主动刷新布局，防止 WebView 跳过首次滑入过渡
+  useLayoutEffect(() => {
+    if (subPresence.mounted && !subPresence.visible && mobileSubRef.current) {
+      void mobileSubRef.current.getBoundingClientRect()
+    }
+  }, [subPresence.mounted, subPresence.visible])
+
   return (
     <>
       <Modal
@@ -116,7 +151,7 @@ const SettingsContent = () => {
               <button
                 type="button"
                 className={styles.mobileBackButton}
-                aria-label={t('close')}
+                aria-label={t(inMobileSubPage ? 'back' : 'close')}
                 onClick={() => {
                   if (inMobileSubPage) {
                     setMobilePage('main')
@@ -127,14 +162,38 @@ const SettingsContent = () => {
               >
                 <IconChevronRightOutline14 />
               </button>
-              <span>{t(mobileTitleKey)}</span>
+              <span className={styles.mobileTitleStack}>
+                <span
+                  aria-hidden={inMobileSubPage}
+                  className={clsx(
+                    styles.mobileTitleItem,
+                    subPresence.visible ? styles.mobileTitleExitLeft : styles.mobileTitleActive
+                  )}
+                >
+                  {t('settings')}
+                </span>
+                {subPresence.mounted && renderedSubPage ? (
+                  <span
+                    aria-hidden={!inMobileSubPage}
+                    className={clsx(
+                      styles.mobileTitleItem,
+                      subPresence.visible ? styles.mobileTitleActive : styles.mobileTitleEnterRight
+                    )}
+                  >
+                    {t(MOBILE_SUB_TITLE_KEY[renderedSubPage])}
+                  </span>
+                ) : null}
+              </span>
             </div>
           ) : (
             t('settings')
           )
         }
         closable={!isMobile}
-        className={styles.dialog}
+        visible={visible}
+        fullscreen={isMobile}
+        overlayClassName={clsx(styles.settingsOverlay, visible && styles.settingsOverlayVisible)}
+        className={clsx(styles.dialog, visible && styles.dialogVisible)}
         mainClassName={styles.dialogMain}
         onClose={() => {
           if (historyDelete.busy) {
@@ -148,58 +207,79 @@ const SettingsContent = () => {
         }}
       >
         {isMobile ? (
-          mobilePage === 'data' ? (
-            <div className={clsx(styles.content, styles.mobileDataContent)}>
-              <ImportHistory historyImport={historyImport} disabled={historyBusy} />
-              <ImportHistoryFromUrl urlImport={historyUrlImport} disabled={historyBusy} />
-              <ExportHistory disabled={historyBusy} />
-              <MobileActionCard
-                danger
-                label={t('deleteAllSessions')}
-                disabled={historyBusy}
-                onAction={historyDelete.open}
-              />
+          <div className={styles.mobilePageViewport}>
+            <div
+              ref={mobileMainRef}
+              className={clsx(
+                styles.mobileMainPage,
+                subPresence.visible && styles.mobileMainPagePushed
+              )}
+              aria-hidden={inMobileSubPage}
+            >
+              <div className={styles.content}>
+                <div className={styles.mobileGroupTitle}>
+                  {t('settingDialogAsideDataOptionLabel')}
+                </div>
+                <div className={styles.mobileCard}>
+                  <ApiKeySetting />
+                  <button
+                    type="button"
+                    className={styles.mobileNavRow}
+                    onClick={() => openMobileSubPage('data')}
+                  >
+                    <span className={styles.label}>{t('settingDialogAsideDataOptionLabel')}</span>
+                    <span className={styles.mobileNavRight}>
+                      <IconChevronRightOutline14 />
+                    </span>
+                  </button>
+                </div>
+                <div className={styles.mobileGroupTitle}>{t('settingGroupApp')}</div>
+                <div className={styles.mobileCard}>
+                  <MobileLocaleSetting />
+                  <MobileThemeSetting />
+                  <MobileLocationNavRow onOpen={() => openMobileSubPage('location')} />
+                </div>
+                <div className={styles.mobileGroupTitle}>{t('settingGroupChat')}</div>
+                <div className={styles.mobileCard}>
+                  <MobileSystemPromptNavRow onOpen={() => openMobileSubPage('systemPrompt')} />
+                  <MobileTtsVoiceSetting />
+                  <MobileAutoReadAloudSetting />
+                  <MobileRpModeNavRow onOpen={() => openMobileSubPage('rpMode')} />
+                  <VideoSettings />
+                  <QuickCameraShortcutSetting />
+                </div>
+              </div>
             </div>
-          ) : mobilePage === 'location' ? (
-            <MobileLocationPage />
-          ) : mobilePage === 'systemPrompt' ? (
-            <MobileSystemPromptPage />
-          ) : mobilePage === 'rpMode' ? (
-            <MobileRpModePage />
-          ) : (
-            <div className={styles.content}>
-              <div className={styles.mobileGroupTitle}>
-                {t('settingDialogAsideDataOptionLabel')}
+            {subPresence.mounted && renderedSubPage ? (
+              <div
+                ref={mobileSubRef}
+                className={clsx(
+                  styles.mobileSubPage,
+                  subPresence.visible && styles.mobileSubPageVisible
+                )}
+              >
+                {renderedSubPage === 'data' ? (
+                  <div className={clsx(styles.content, styles.mobileDataContent)}>
+                    <ImportHistory historyImport={historyImport} disabled={historyBusy} />
+                    <ImportHistoryFromUrl urlImport={historyUrlImport} disabled={historyBusy} />
+                    <ExportHistory disabled={historyBusy} />
+                    <MobileActionCard
+                      danger
+                      label={t('deleteAllSessions')}
+                      disabled={historyBusy}
+                      onAction={historyDelete.open}
+                    />
+                  </div>
+                ) : renderedSubPage === 'location' ? (
+                  <MobileLocationPage />
+                ) : renderedSubPage === 'systemPrompt' ? (
+                  <MobileSystemPromptPage />
+                ) : (
+                  <MobileRpModePage />
+                )}
               </div>
-              <div className={styles.mobileCard}>
-                <ApiKeySetting />
-                <button
-                  type="button"
-                  className={styles.mobileNavRow}
-                  onClick={() => setMobilePage('data')}
-                >
-                  <span className={styles.label}>{t('settingDialogAsideDataOptionLabel')}</span>
-                  <span className={styles.mobileNavRight}>
-                    <IconChevronRightOutline14 />
-                  </span>
-                </button>
-              </div>
-              <div className={styles.mobileGroupTitle}>{t('settingGroupApp')}</div>
-              <div className={styles.mobileCard}>
-                <MobileLocaleSetting />
-                <MobileThemeSetting />
-                <MobileLocationNavRow onOpen={() => setMobilePage('location')} />
-              </div>
-              <div className={styles.mobileGroupTitle}>{t('settingGroupChat')}</div>
-              <div className={styles.mobileCard}>
-                <MobileSystemPromptNavRow onOpen={() => setMobilePage('systemPrompt')} />
-                <MobileTtsVoiceSetting />
-                <MobileAutoReadAloudSetting />
-                <MobileRpModeNavRow onOpen={() => setMobilePage('rpMode')} />
-              </div>
-              {__BETA__ ? <BetaSettings isMobile /> : null}
-            </div>
-          )
+            ) : null}
+          </div>
         ) : (
           <>
             <div role="tablist" className={styles.navigation}>
@@ -228,7 +308,7 @@ const SettingsContent = () => {
                   <AiLocationSetting />
                   <SystemPromptSetting />
                   <RpModeSetting />
-                  {__BETA__ ? <BetaSettings /> : null}
+                  <VideoSettings />
                 </>
               ) : (
                 <>
@@ -584,44 +664,41 @@ const AutoReadAloudSetting = () => {
   )
 }
 
-const BetaSettings = ({ isMobile = false }: { isMobile?: boolean }) => {
+const VideoSettings = () => {
   const t = useTranslate()
   const allowVideoUpload = useSettings((state) => state.allowVideoUpload)
   const videoAudioEnabled = useSettings((state) => state.videoAudioEnabled)
   const label = t('settingsAllowVideoUpload')
   const audioLabel = t('settingsVideoAudio')
   return (
-    <section aria-label="beta">
-      <div className={isMobile ? styles.mobileGroupTitle : styles.betaGroupTitle}>beta</div>
-      <div className={isMobile ? styles.mobileCard : undefined}>
-        <div className={clsx(styles.cell, styles.switchHeader)}>
-          <div className={styles.labelRow}>
-            <span className={styles.label}>{label}</span>
-            <InfoModalButton
-              ariaLabel={t('videoQuickModeOnly')}
-              description={t('videoQuickModeOnly')}
-            />
-          </div>
-          <Switch checked={allowVideoUpload} ariaLabel={label} onChange={setAllowVideoUpload} />
-        </div>
-        {hasVideoAudioSupport() ? (
-          <SettingCell
-            label={audioLabel}
-            description={t('settingsVideoAudioDesc')}
-            infoAsModal
-            status={null}
-            action={
-              <Switch
-                checked={videoAudioEnabled}
-                disabled={!allowVideoUpload}
-                ariaLabel={audioLabel}
-                onChange={setVideoAudioEnabled}
-              />
-            }
+    <>
+      <div className={clsx(styles.cell, styles.switchHeader)}>
+        <div className={styles.labelRow}>
+          <span className={styles.label}>{label}</span>
+          <InfoModalButton
+            ariaLabel={t('videoQuickModeOnly')}
+            description={t('videoQuickModeOnly')}
           />
-        ) : null}
+        </div>
+        <Switch checked={allowVideoUpload} ariaLabel={label} onChange={setAllowVideoUpload} />
       </div>
-    </section>
+      {hasVideoAudioSupport() ? (
+        <SettingCell
+          label={audioLabel}
+          description={t('settingsVideoAudioDesc')}
+          infoAsModal
+          status={null}
+          action={
+            <Switch
+              checked={videoAudioEnabled}
+              disabled={!allowVideoUpload}
+              ariaLabel={audioLabel}
+              onChange={setVideoAudioEnabled}
+            />
+          }
+        />
+      ) : null}
+    </>
   )
 }
 
@@ -696,6 +773,7 @@ function MobileRadioSetting<T extends string>({
 }) {
   const t = useTranslate()
   const [modalOpen, setModalOpen] = useState(false)
+  const modalPresence = usePresence(modalOpen, 220)
   const [draft, setDraft] = useState<T>(value)
   const currentOption = options.find((item) => item.value === value) ?? options[0]
 
@@ -717,8 +795,13 @@ function MobileRadioSetting<T extends string>({
           <IconChevronRightOutline14 />
         </span>
       </button>
-      {modalOpen ? (
-        <Modal title={title} className={styles.themeModal} onClose={() => setModalOpen(false)}>
+      {modalPresence.mounted ? (
+        <Modal
+          title={title}
+          visible={modalPresence.visible}
+          className={clsx(styles.themeModal, modalPresence.visible && styles.themeModalVisible)}
+          onClose={() => setModalOpen(false)}
+        >
           <div role="radiogroup" aria-label={title} className={styles.themeRadioList}>
             {options.map((option) => {
               const checked = draft === option.value
@@ -985,7 +1068,7 @@ const ImportHistory = ({
 const useHistoryUrlImport = () => {
   const [open, setOpen] = useState(false)
   const [url, setUrl] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState<HistoryUrlImportProgress | null>(null)
   const importing = useRef(false)
   const abortRef = useRef<AbortController | null>(null)
 
@@ -1018,9 +1101,13 @@ const useHistoryUrlImport = () => {
     const controller = new AbortController()
     abortRef.current = controller
     importing.current = true
-    setBusy(true)
+    setProgress({ percent: 0 })
     try {
-      const count = await importHistoryFromUrl(url, controller.signal)
+      const count = await importHistoryFromUrl(url, controller.signal, (nextProgress) => {
+        if (!controller.signal.aborted) {
+          setProgress(nextProgress)
+        }
+      })
       setOpen(false)
       setUrl('')
       showToast(
@@ -1044,11 +1131,11 @@ const useHistoryUrlImport = () => {
         abortRef.current = null
       }
       importing.current = false
-      setBusy(false)
+      setProgress(null)
     }
   }
 
-  return { open, url, setUrl, busy, openModal, closeModal, submit }
+  return { open, url, setUrl, busy: progress !== null, progress, openModal, closeModal, submit }
 }
 
 /** 从 DeepSeek 链接导入历史会话入口（数据管理卡片 / 桌面设置行） */
@@ -1099,6 +1186,13 @@ const UrlImportDialog = ({ urlImport }: { urlImport: ReturnType<typeof useHistor
   const t = useTranslate()
   const isMobile = useIsMobile()
   const sheetPresence = usePresence(urlImport.open && isMobile, 280)
+  const { progress } = urlImport
+  const confirmLabel =
+    progress === null
+      ? t('confirm')
+      : 'percent' in progress
+        ? t('historyUrlImporting', { percent: progress.percent })
+        : t('historyUrlDownloaded', { size: formatSize(progress.downloadedBytes) })
 
   const inputNode = (
     <textarea
@@ -1141,7 +1235,7 @@ const UrlImportDialog = ({ urlImport }: { urlImport: ReturnType<typeof useHistor
           disabled={urlImport.busy}
           onClick={() => void urlImport.submit()}
         >
-          {t(urlImport.busy ? 'historyUrlImporting' : 'confirm')}
+          {confirmLabel}
         </button>
       </Modal>
     )
@@ -1167,7 +1261,7 @@ const UrlImportDialog = ({ urlImport }: { urlImport: ReturnType<typeof useHistor
             disabled={urlImport.busy}
             onClick={() => void urlImport.submit()}
           >
-            {t(urlImport.busy ? 'historyUrlImporting' : 'confirm')}
+            {confirmLabel}
           </Button>
         </>
       }

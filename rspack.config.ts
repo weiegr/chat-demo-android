@@ -88,7 +88,7 @@ export const createConfig = ({
     }),
     new rspack.DefinePlugin({
       __API_ORIGIN__: JSON.stringify(apiOrigin),
-      __BETA__: JSON.stringify(process.env.BETA === '1'),
+      __SINGLE_FILE__: singleFile,
     }),
     new rspack.CopyRspackPlugin({
       patterns: [{ from: path.resolve(root, 'LICENSE'), to: 'LICENSE', toType: 'file' }],

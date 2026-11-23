@@ -50,7 +50,7 @@
   --think-fade-mid: rgba(255, 255, 255, 0.65);
   --think-fade-end: rgba(255, 255, 255, 0);
   position: sticky;
-  top: 0;
+  top: var(--message-list-inset-top, 0px);
   z-index: 6;
   background-color: var(--dsw-alias-bg-base);
   box-shadow: 0 -2px 0 var(--dsw-alias-bg-base);
@@ -79,8 +79,21 @@
   }
 }
 
-.titleStuck::after {
-  opacity: 1;
+.titleStuck {
+  &::before {
+    position: absolute;
+    right: -4px;
+    bottom: 100%;
+    left: -4px;
+    height: var(--message-list-inset-top, 0px);
+    background-color: var(--dsw-alias-bg-base);
+    content: '';
+    pointer-events: none;
+  }
+
+  &::after {
+    opacity: 1;
+  }
 }
 
 .titleIcon {
