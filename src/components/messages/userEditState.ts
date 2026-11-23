@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { clearDraft, setDraftText } from '../../services/chat/drafts.js'
+import { clearDraft, getEditDraftKey, setDraftText } from '../../services/chat/drafts.js'
 import type { FileAttachment, UserMessage, VideoAttachment } from '../../services/chat/types.js'
 
 export type ActiveUserEdit = {
@@ -8,9 +8,6 @@ export type ActiveUserEdit = {
   files: FileAttachment[]
   video?: VideoAttachment
 }
-
-export const getEditDraftKey = (sessionId: string, messageId: string) =>
-  `edit:${sessionId}:${messageId}`
 
 export const useUserEdit = create<{ active: ActiveUserEdit | null }>(() => ({
   active: null,

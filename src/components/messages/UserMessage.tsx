@@ -1,7 +1,10 @@
 import clsx from 'clsx'
 import { memo } from 'react'
+import { useTranslate } from '../../i18n/index.js'
 import { retryUpload } from '../../services/chat/store.js'
 import type { UserMessage as UserMessageType } from '../../services/chat/types.js'
+import { IconButton } from '../base/IconButton.js'
+import { IconEditOutline16 } from '../base/icons.js'
 import { StoredVideoTile } from '../files/VideoTile.js'
 import {
   BranchSwitcher,
@@ -33,6 +36,7 @@ export const UserMessage = memo(function UserMessage({
   versions: MessageVersions
   onSelectVersion: SelectMessageVersion
 }) {
+  const t = useTranslate()
   const isEditing = useUserEdit(
     (state) =>
       !readOnly && state.active?.sessionId === sessionId && state.active.messageId === message.id
@@ -42,9 +46,11 @@ export const UserMessage = memo(function UserMessage({
   const files = video
     ? message.files.filter((file) => !video.frameIds.includes(file.id))
     : message.files
+  const attachmentOnly = !message.content && (files.length > 0 || video !== undefined)
 
   return (
     <div
+      data-message-id={message.id}
       data-editing={isEditing ? 'true' : undefined}
       className={clsx(styles.container, isFirst && styles.isFirst)}
     >
@@ -78,9 +84,17 @@ export const UserMessage = memo(function UserMessage({
           {message.content}
         </div>
       ) : null}
-      {!readOnly && versions.ids.length > 1 ? (
+      {!readOnly && (attachmentOnly || versions.ids.length > 1) ? (
         <div className={styles.bottom}>
           <BranchSwitcher versions={versions} disabled={busy} onSelect={onSelectVersion} />
+          {attachmentOnly ? (
+            <IconButton
+              icon={<IconEditOutline16 />}
+              tooltip={t('editMessage')}
+              disabled={!editable || isEditing}
+              onClick={() => startUserEdit(sessionId, message)}
+            />
+          ) : null}
         </div>
       ) : null}
     </div>

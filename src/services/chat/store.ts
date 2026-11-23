@@ -34,6 +34,7 @@ import {
   clearDraft,
   clearSentDraft,
   getDraft,
+  getEditDraftKey,
   prepareDraftMessage,
   type DraftVideoTranscript,
 } from './drafts.js'
@@ -887,6 +888,49 @@ export const sendLiveMessage = async (
   return streamReply(sessionId, reply, { history, question, live: true }, controller)
 }
 
+const prepareQuestionDraft = (
+  draftKey: string | null,
+  mode: ChatMode,
+  model: ChatModel,
+  videoTranscript?: DraftVideoTranscript,
+  existingFiles: FileAttachment[] = []
+) => {
+  const settings = useSettings.getState()
+  const prepared = prepareDraftMessage(
+    getDraft(draftKey),
+    useUploads.getState().tasks,
+    model === 'deepseek-v4-pro',
+    canUploadVideo(mode, settings),
+    existingFiles.length > 0
+  )
+  if (
+    !prepared ||
+    (videoTranscript &&
+      (prepared.video?.id !== videoTranscript.videoId || !canTranscribeVideo(mode, settings)))
+  ) {
+    return null
+  }
+  const { text, video } = prepared
+  const files = [...existingFiles]
+  const blobs: db.StoredFile[] = []
+  for (const { blob, ...file } of prepared.files) {
+    files.push(file)
+    blobs.push({ id: file.id, blob })
+  }
+  if (video) {
+    blobs.push({ id: video.id, blob: video.file })
+  }
+  const videoMetadata = video && {
+    id: video.id,
+    name: video.name,
+    size: video.size,
+    mimeType: video.mimeType,
+    frameIds: video.frameIds,
+    ...(videoTranscript?.text && { transcript: videoTranscript.text }),
+  }
+  return { text, files, video: videoMetadata, blobs }
+}
+
 /**
  * 提交指定会话的最新草稿；null 表示新建会话。
  * 同步接收成功才清空草稿，附件原件由会话接管；保存失败仍通过保存入口重试。
@@ -909,22 +953,11 @@ export const sendMessage = (
   const mode: ChatMode =
     sessionId === null ? settings.chatMode : (getSession(sessionId)?.mode ?? 'fast')
   const model = resolveModeModel(mode, settings.rpModel)
-  const prepared = prepareDraftMessage(
-    getDraft(targetSessionId),
-    useUploads.getState().tasks,
-    model === 'deepseek-v4-pro',
-    canUploadVideo(mode, settings)
-  )
+  const prepared = prepareQuestionDraft(targetSessionId, mode, model, videoTranscript)
   if (!prepared) {
     return false
   }
-  const { text, files, video } = prepared
-  if (
-    videoTranscript &&
-    (video?.id !== videoTranscript.videoId || !canTranscribeVideo(mode, settings))
-  ) {
-    return false
-  }
+  const { text, files, video, blobs } = prepared
   const now = Date.now()
   if (sessionId === null) {
     const session: Session = {
@@ -944,36 +977,17 @@ export const sendMessage = (
     return false
   }
   const history = getVisibleMessages(current)
-  const videoMetadata = video && {
-    id: video.id,
-    name: video.name,
-    size: video.size,
-    mimeType: video.mimeType,
-    frameIds: video.frameIds,
-    ...(videoTranscript?.text && { transcript: videoTranscript.text }),
-  }
   const question: UserMessage = {
     id: createId(),
     role: 'user',
     content: text,
-    files: files.map(({ id, serverId, name, size, isImage, mimeType }) => ({
-      id,
-      serverId,
-      name,
-      size,
-      isImage,
-      mimeType,
-    })),
-    ...(videoMetadata && { video: videoMetadata }),
+    files,
+    ...(video && { video }),
     createdAt: now,
   }
   const reply = createReply(mode, model)
-  if (files.length > 0) {
-    pendingFiles.set(sessionId, [
-      ...(pendingFiles.get(sessionId) ?? []),
-      ...files.map(({ id, blob }) => ({ id, blob })),
-      ...(video ? [{ id: video.id, blob: video.file }] : []),
-    ])
+  if (blobs.length > 0) {
+    pendingFiles.set(sessionId, [...(pendingFiles.get(sessionId) ?? []), ...blobs])
   }
   updateSession(sessionId, (session) => ({
     ...appendBranch(session, history.at(-1)?.id ?? null, [question, reply]),
@@ -1013,13 +1027,12 @@ export const regenerateReply = (sessionId: string, messageId?: string) => {
   void streamReply(sessionId, reply, { history, question })
 }
 
-/** 编辑提问：替换文本，附件按传入的列表保留（可在编辑时增删），新增原件并入待保存队列避免读写竞态。 */
+/** 编辑提问：将保留的附件和新草稿合入一个分支，原消息及其附件仍可切换查看。 */
 export const editMessage = (
   sessionId: string,
   messageId: string,
-  content: string,
-  files?: FileAttachment[],
-  newBlobs: db.StoredFile[] = []
+  existingFiles: FileAttachment[],
+  videoTranscript?: DraftVideoTranscript
 ): boolean => {
   if (get().importingHistory || deletingSessions.has(sessionId)) {
     return false
@@ -1031,38 +1044,44 @@ export const editMessage = (
   const path = getVisibleMessages(session)
   const index = path.findIndex((message) => message.id === messageId)
   const previous = path[index]
-  const text = content.trim()
   if (previous?.role !== 'user') {
     return false
   }
-  let nextFiles = files ?? previous.files
-  const video = previous.video
-  const keepVideo = video?.frameIds.every((id) => nextFiles.some((file) => file.id === id))
-  if (video && !keepVideo) {
-    nextFiles = nextFiles.filter((file) => !video.frameIds.includes(file.id))
-  }
-  if (!text && nextFiles.length === 0) {
+  const previousVideo = previous.video
+  const keepVideo = previousVideo?.frameIds.every((id) =>
+    existingFiles.some((file) => file.id === id)
+  )
+  const retainedFiles =
+    previousVideo && !keepVideo
+      ? existingFiles.filter((file) => !previousVideo.frameIds.includes(file.id))
+      : existingFiles
+  const mode = session.mode ?? 'fast'
+  const model = resolveModeModel(mode, useSettings.getState().rpModel)
+  const draftKey = getEditDraftKey(sessionId, messageId)
+  const prepared = prepareQuestionDraft(draftKey, mode, model, videoTranscript, retainedFiles)
+  if (!prepared || (keepVideo && prepared.video)) {
     return false
   }
+  const { text, files, blobs } = prepared
+  const video = keepVideo ? previousVideo : prepared.video
   const question: UserMessage = {
     id: createId(),
     role: 'user',
     content: text,
-    files: nextFiles,
-    ...(keepVideo && { video }),
+    files,
+    ...(video && { video }),
     createdAt: Date.now(),
   }
-  const mode = session.mode ?? 'fast'
-  const model = resolveModeModel(mode, useSettings.getState().rpModel)
   const reply = createReply(mode, model)
+  if (blobs.length > 0) {
+    pendingFiles.set(sessionId, [...(pendingFiles.get(sessionId) ?? []), ...blobs])
+  }
   updateSession(sessionId, (s) => ({
     ...appendBranch(s, path[index - 1]?.id ?? null, [question, reply]),
     updatedAt: Date.now(),
   }))
-  if (newBlobs.length > 0) {
-    pendingFiles.set(sessionId, [...(pendingFiles.get(sessionId) ?? []), ...newBlobs])
-  }
   persist(sessionId)
+  clearSentDraft(draftKey)
   void streamReply(sessionId, reply, { history: path.slice(0, index), question })
   return true
 }

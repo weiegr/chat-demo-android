@@ -28,7 +28,7 @@
   box-sizing: border-box;
   width: 261px;
   height: 100%;
-  padding: 6px 12px 0;
+  padding: 6px 12px var(--safe-bottom);
   border-right: 1px solid var(--dsw-alias-border-l1);
   background-color: var(--dsw-specific-sidebar-fill);
 }
@@ -37,24 +37,64 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  margin-bottom: 12px;
+  padding: 10px 0;
+}
+
+/* 搜索入口：占据原先应用名的位置，点开进入独立搜索页；圆角与搜索页输入框一致 */
+.searchEntry {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
   gap: 8px;
   box-sizing: border-box;
-  height: 48px;
-  margin-bottom: 16px;
-  padding: 15px 0 10px 4px;
+  height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  background-color: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color var(--ds-transition-duration) var(--ds-ease-in-out);
+
+  @media (hover: hover) {
+    &:hover {
+      background-color: var(--dsw-alias-interactive-bg-active);
+    }
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+}
+
+.searchEntryIcon {
+  display: flex;
   flex-shrink: 0;
 }
 
-.appName {
+.searchEntryLabel {
+  flex: 1;
   min-width: 0;
-  padding-left: 4px;
   overflow: hidden;
-  font-size: 20px;
-  line-height: 22px;
-  font-weight: 600;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--dsw-alias-brand-primary);
+}
+
+.searchEntryHint {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-caption);
 }
 
 .newChat {
@@ -134,17 +174,23 @@
   margin: 0 -2px;
   padding: 0 2px;
   overflow-y: auto;
+  overflow-anchor: none;
   scrollbar-color: var(--scroll-color) transparent;
 }
 
-.section {
+.listTrack {
   position: relative;
-  margin-top: 16px;
-  padding-top: 4px;
+}
 
-  &:first-child {
-    margin-top: 0;
-  }
+.section,
+.sessionRow {
+  position: absolute;
+  inset-inline: 0;
+}
+
+.section {
+  box-sizing: border-box;
+  padding-top: 4px;
 }
 
 .sectionHeader {
@@ -161,9 +207,22 @@
 }
 
 .bottom {
+  position: relative;
   display: flex;
   flex-shrink: 0;
   height: 64px;
+}
+
+/* 会话列表滚动到设置项上方时淡出，不用分割线硬切 */
+.bottom::before {
+  content: '';
+  position: absolute;
+  right: -12px;
+  bottom: 100%;
+  left: -12px;
+  height: 24px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--dsw-specific-sidebar-fill));
 }
 
 .settings {
@@ -251,57 +310,52 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
 }
 
+/* 抽屉留在下层，由对话界面右移露出；宽度与 App 里的推入距离共用同一个变量。
+   常驻可见（被对话界面完全盖住），露出时内容早已绘制完成，不会先白一帧。 */
 .drawer {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 0;
-  z-index: 800;
-  transform: translate3d(-100%, 0, 0);
-  visibility: hidden;
-  will-change: transform;
-  transition:
-    transform 0.26s cubic-bezier(0.22, 1, 0.36, 1),
-    visibility 0s linear 0.26s;
-}
-
-.drawerOpen {
-  transform: translate3d(0, 0, 0);
-  visibility: visible;
-  transition:
-    transform 0.26s cubic-bezier(0.22, 1, 0.36, 1),
-    visibility 0s linear 0s;
-}
-
-.drawerMask {
-  position: absolute;
-  inset: 0;
-  z-index: 799;
-  background-color: rgba(0, 0, 0, 0.16);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.26s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.drawerMaskOpen {
-  opacity: 1;
-  pointer-events: auto;
+  z-index: 1;
+  width: var(--mobile-sider-width, min(76vw, 320px));
+  background-color: var(--dsw-specific-sidebar-fill);
+  /* 独立层：右移的是对话界面，抽屉不参与重绘 */
+  contain: layout paint style;
 }
 
 .mobile {
-  width: 80vw;
-  max-width: 320px;
-  padding-top: calc(8px + var(--safe-top));
-  padding-bottom: var(--safe-bottom);
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  padding: calc(10px + var(--safe-top)) 12px var(--safe-bottom);
   border-right: none;
-  box-shadow: 8px 0 24px rgba(0, 0, 0, 0.08);
 
   .top {
     margin-bottom: 4px;
+    padding: 0 0 6px;
+  }
+
+  /* 与移动端搜索页顶栏胶囊逐像素对齐：高度、内边距、字号一致，展开时无跳动 */
+  .searchEntry {
+    gap: 10px;
+    height: 44px;
+    padding: 0 12px 0 14px;
+    font-size: 16px;
+    line-height: 22px;
   }
 
   .listWrap {
     margin-top: 4px;
+  }
+
+  .list {
+    padding-bottom: var(--ime-settled, 0px);
+  }
+
+  .listWrap,
+  .bottom {
+    transition: opacity 0.2s cubic-bezier(0.22, 1, 0.36, 1) 0.06s;
   }
 
   .sectionHeader {
@@ -313,7 +367,6 @@
   .bottom {
     height: auto;
     padding: 10px 0;
-    border-top: 1px solid var(--dsw-alias-border-l1);
   }
 
   .settings {
@@ -337,6 +390,25 @@
   }
 }
 
+/* 移动端进入全屏搜索态时，侧边栏列表与底部设置原地柔和淡出，不改宽度、不触发布局重排 */
+.searchOpen {
+  .listWrap,
+  .bottom {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.14s ease-out 0s;
+  }
+}
+
+/* 搜索胶囊展开与收拢全程期间隐藏静态入口，由搜索页的真实胶囊无缝接管，避免半透明底色叠加变暗 */
+.searchPresenting {
+  .searchEntry {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .shell {
     transition: none;
@@ -344,6 +416,11 @@
 
   .collapsed,
   .collapsedHidden {
+    transition: none;
+  }
+
+  .mobile .listWrap,
+  .mobile .bottom {
     transition: none;
   }
 }

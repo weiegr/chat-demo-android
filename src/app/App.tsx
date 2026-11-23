@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import clsx from 'clsx'
 import { useTranslate } from '../i18n/index.js'
-import { useSettings } from '../services/settings.js'
+import { initApiKey, useSettings } from '../services/settings.js'
 import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport.js'
 import {
   bindChatPersistence,
@@ -13,6 +14,8 @@ import {
 } from '../services/chat/store.js'
 import { SearchPanel } from '../components/search/SearchPanel.js'
 import { closeSearchPanel } from '../components/search/searchPanelState.js'
+import { ChatSearchView } from '../components/search/ChatSearchView.js'
+import { openChatSearch, useChatSearch } from '../components/search/chatSearchState.js'
 import { SessionView } from '../components/session/SessionView.js'
 import { LiveCallView } from '../components/live/LiveCallView.js'
 import type { LiveCall } from '../components/live/useLiveCall.js'
@@ -30,7 +33,12 @@ import { onUploadNotice } from '../services/attachments.js'
 import { Button } from '../components/base/Button.js'
 import { stopReadAloud } from '../services/speech/readAloud.js'
 import { CollapsedSider } from '../components/sider/CollapsedSider.js'
-import { closeMobileSider } from '../components/sider/mobileSiderState.js'
+import {
+  bindSiderMain,
+  clearSiderMainInline,
+  closeMobileSider,
+  useMobileSider,
+} from '../components/sider/mobileSiderState.js'
 import { MobileSider } from '../components/sider/Sider.js'
 import { Sidebar } from '../components/sider/Sidebar.js'
 import styles from './App.module.css'
@@ -59,6 +67,27 @@ export const App = () => {
     state.activeId === null ? false : Object.hasOwn(state.streaming, state.activeId)
   )
   const activeId = useChatStore((state) => state.activeId)
+  const mobileSiderOpen = useMobileSider((state) => state.open)
+  const chatSearchOpen = useChatSearch((state) => state.open)
+  const [siderSettling, setSiderSettling] = useState(false)
+  const siderCardOpen = isMobile && (mobileSiderOpen || chatSearchOpen)
+  const prevSiderCardOpenRef = useRef(false)
+
+  // 侧边栏/搜索收起后的 320ms 过渡期内保留圆角与合成层，合拢完毕后自动释放整屏离屏层
+  useEffect(() => {
+    const wasOpen = prevSiderCardOpenRef.current
+    prevSiderCardOpenRef.current = siderCardOpen
+    if (siderCardOpen) {
+      setSiderSettling(false)
+      return
+    }
+    if (!wasOpen) {
+      return
+    }
+    setSiderSettling(true)
+    const timer = window.setTimeout(() => setSiderSettling(false), 320)
+    return () => window.clearTimeout(timer)
+  }, [siderCardOpen])
 
   usePreventPageScroll(isMobile)
 
@@ -104,10 +133,35 @@ export const App = () => {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [isMobile])
 
+  // 电脑端 Ctrl+K（macOS 上 ⌘K）打开会话搜索，与侧边栏搜索框是同一个入口
+  useEffect(() => {
+    if (isMobile) {
+      return
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.repeat ||
+        event.isComposing ||
+        event.altKey ||
+        event.shiftKey ||
+        !(event.ctrlKey || event.metaKey) ||
+        event.key.toLowerCase() !== 'k' ||
+        document.querySelector('[role="dialog"][aria-modal="true"]')
+      ) {
+        return
+      }
+      event.preventDefault()
+      openChatSearch()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isMobile])
+
   useEffect(() => {
     void initChat()
-    // 首次打开先在设置里输入 API Key
-    ensureApiKey()
+    // 等待读取或迁移完成，只有需要输入 API Key 时才打开设置。
+    void initApiKey().then(ensureApiKey)
   }, [])
 
   // 不透明来源（content:// 等）下存储不可用，只在此次会话内有效，打开时说明一次
@@ -140,6 +194,20 @@ export const App = () => {
     [liveCall]
   )
 
+  const handleMainInputEngage = (target: EventTarget | null) => {
+    if (
+      !isMobile ||
+      !mobileSiderOpen ||
+      chatSearchOpen ||
+      !(target instanceof Element) ||
+      !target.closest('textarea, input:not([type="file"])')
+    ) {
+      return
+    }
+    clearSiderMainInline()
+    closeMobileSider()
+  }
+
   return (
     <>
       <div ref={frameRef} className={styles.frame}>
@@ -154,7 +222,17 @@ export const App = () => {
         ) : (
           <>
             {isMobile ? <MobileSider /> : <Sidebar collapsed={siderCollapsed} />}
-            <main className={styles.main}>
+            <main
+              ref={bindSiderMain}
+              data-sider-active={siderCardOpen || siderSettling ? 'true' : undefined}
+              className={clsx(
+                styles.main,
+                isMobile && mobileSiderOpen && styles.mainPushed,
+                isMobile && chatSearchOpen && styles.mainSearchPushed
+              )}
+              onFocusCapture={(event) => handleMainInputEngage(event.target)}
+              onClickCapture={(event) => handleMainInputEngage(event.target)}
+            >
               {saveError ? (
                 <div className={styles.saveError} role="alert">
                   <span>{t('sessionSaveFailed')}</span>
@@ -211,6 +289,7 @@ export const App = () => {
           </>
         )}
         <SearchPanel />
+        <ChatSearchView />
       </div>
       <SettingsDialog />
       <ImagePreview />

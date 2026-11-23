@@ -1,73 +1,83 @@
 import clsx from 'clsx'
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
-import { IconPanelLeftOutline16, IconSettingsOutline16, NewChatIcon } from '../base/icons.js'
+import {
+  IconPanelLeftOutline16,
+  IconSearchOutline16,
+  IconSettingsOutline16,
+  NewChatIcon,
+} from '../base/icons.js'
 import { setSiderCollapsed } from '../../services/settings.js'
-import { groupSessions } from '../../services/chat/sessionGroups.js'
-import { newChat, removeSession, useChatStore } from '../../services/chat/store.js'
+import { newChat, removeSession } from '../../services/chat/store.js'
 import type { SessionSummary } from '../../services/chat/types.js'
 import { Button } from '../base/Button.js'
 import { IconButton } from '../base/IconButton.js'
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
+import { openChatSearch, useChatSearch } from '../search/chatSearchState.js'
 import { openSettings } from '../settings/settingsDialogState.js'
 import {
+  clearSiderMainInline,
   closeMobileSider,
   dismissKeyboard,
+  getSiderMain,
   isKeyboardOpen,
   openMobileSider,
+  scheduleClearSiderMainInline,
   useMobileSider,
 } from './mobileSiderState.js'
-import { SessionItem } from './SessionItem.js'
+import { SessionList } from './SessionList.js'
 import styles from './Sider.module.css'
 
 /** 展开的侧边栏：名称与收起按钮、开启新对话、按时间分组的会话列表、底部设置；移动端放在抽屉里，收起按钮关闭抽屉 */
 export const Sider = memo(function Sider({ mobile = false }: { mobile?: boolean }) {
   const t = useTranslate()
-  const sessions = useChatStore((state) => state.sessions)
-  const activeId = useChatStore((state) => state.activeId)
-  const [now, setNow] = useState(Date.now)
-  const groups = useMemo(() => groupSessions(sessions, now, t), [sessions, now, t])
+  const chatSearchOpen = useChatSearch((state) => mobile && state.open)
+  const chatSearchPresenting = useChatSearch((state) => mobile && state.presenting)
+  const chatSearchClosingToSession = useChatSearch((state) => mobile && state.closingToSession)
   const [deleting, setDeleting] = useState<SessionSummary | null>(null)
   const [deletePending, setDeletePending] = useState(false)
-  /** 保持引用稳定，否则每个条目都会因为新闭包而重渲 */
   const requestDelete = useCallback((session: SessionSummary) => setDeleting(session), [])
 
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>
-    const refresh = () => {
-      clearTimeout(timer)
-      const time = Date.now()
-      setNow(time)
-      const midnight = new Date(time).setHours(24, 0, 0, 0)
-      timer = setTimeout(refresh, midnight - time)
-    }
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        refresh()
-      }
-    }
-    refresh()
-    document.addEventListener('visibilitychange', onVisibilityChange)
-    window.addEventListener('focus', refresh)
-    return () => {
-      clearTimeout(timer)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
-      window.removeEventListener('focus', refresh)
-    }
-  }, [])
-
   return (
-    <div className={clsx(styles.sider, mobile && styles.mobile)}>
+    <div
+      className={clsx(
+        styles.sider,
+        mobile && styles.mobile,
+        mobile && (chatSearchOpen || chatSearchClosingToSession) && styles.searchOpen,
+        mobile && chatSearchPresenting && styles.searchPresenting
+      )}
+    >
       <div className={styles.top}>
-        <div className={styles.appName}>{t('appName')}</div>
-        <IconButton
-          size="m"
-          icon={<IconPanelLeftOutline16 />}
-          tooltip={t('collapseSiderbarButton')}
-          tooltipPlacement="bottom"
-          onClick={() => (mobile ? closeMobileSider() : setSiderCollapsed(true))}
-        />
+        <button
+          type="button"
+          className={styles.searchEntry}
+          data-mobile-search-entry={mobile ? 'true' : undefined}
+          aria-label={t('searchChats')}
+          onClick={openChatSearch}
+        >
+          <span className={styles.searchEntryIcon} aria-hidden="true">
+            <IconSearchOutline16 />
+          </span>
+          <span className={styles.searchEntryLabel}>
+            {mobile ? t('searchChatsPlaceholder') : t('searchChats')}
+          </span>
+          {mobile ? null : (
+            <span className={styles.searchEntryHint} aria-hidden="true">
+              Ctrl+K
+            </span>
+          )}
+        </button>
+        {/* 移动端由对话界面顶栏的菜单按钮负责收起，抽屉里不再重复放一个 */}
+        {mobile ? null : (
+          <IconButton
+            size="m"
+            icon={<IconPanelLeftOutline16 />}
+            tooltip={t('collapseSiderbarButton')}
+            tooltipPlacement="bottom"
+            onClick={() => setSiderCollapsed(true)}
+          />
+        )}
       </div>
       {mobile ? null : (
         <button
@@ -87,23 +97,7 @@ export const Sider = memo(function Sider({ mobile = false }: { mobile?: boolean 
           </span>
         </button>
       )}
-      <div className={styles.listWrap}>
-        <div className={styles.list}>
-          {groups.map((group) => (
-            <div key={group.key} className={styles.section}>
-              <div className={styles.sectionHeader}>{group.label}</div>
-              {group.sessions.map((session) => (
-                <SessionItem
-                  key={session.id}
-                  session={session}
-                  active={session.id === activeId}
-                  onDelete={requestDelete}
-                />
-              ))}
-            </div>
-          ))}
-        </div>
-      </div>
+      <SessionList mobile={mobile} onDelete={requestDelete} />
       <div className={styles.bottom}>
         <button type="button" className={styles.settings} onClick={() => openSettings('general')}>
           <span className={styles.settingsIcon}>
@@ -172,11 +166,24 @@ const canScrollHorizontally = (target: EventTarget | null, dx: number) => {
   return false
 }
 
-/** 移动端抽屉：浮在页面上方，支持点击遮罩、按键及左右滑动手势开合。 */
+/**
+ * 移动端抽屉：不再浮在对话界面之上，而是把对话界面整体右移、抽屉留在下层，
+ * 对话界面左缘的阴影投向抽屉，形成「内容在上、侧栏在下」的层次。
+ * 支持按键与左右滑动手势开合。
+ */
 export const MobileSider = () => {
   const open = useMobileSider((state) => state.open)
+  const chatSearchOpen = useChatSearch((state) => state.open)
   const drawerRef = useRef<HTMLDivElement>(null)
-  const maskRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => () => clearSiderMainInline(), [])
+
+  // 抽屉常驻在对话界面下方，关闭或进入全屏搜索态时用 inert 移出焦点与读屏范围
+  useEffect(() => {
+    if (drawerRef.current) {
+      drawerRef.current.inert = !open || chatSearchOpen
+    }
+  }, [open, chatSearchOpen])
 
   useEffect(() => {
     if (!open) {
@@ -200,21 +207,6 @@ export const MobileSider = () => {
     let didDismissKeyboard = false
     let mode: 'idle' | 'pending' | 'dragging' | 'ignored' = 'idle'
     let lastDx = 0
-
-    const resetStyles = () => {
-      const drawer = drawerRef.current
-      const mask = maskRef.current
-      if (drawer) {
-        drawer.style.removeProperty('transition')
-        drawer.style.removeProperty('transform')
-        drawer.style.removeProperty('visibility')
-      }
-      if (mask) {
-        mask.style.removeProperty('transition')
-        mask.style.removeProperty('opacity')
-        mask.style.removeProperty('pointer-events')
-      }
-    }
 
     const onTouchStart = (event: TouchEvent) => {
       if (
@@ -278,21 +270,17 @@ export const MobileSider = () => {
 
       if (mode === 'dragging') {
         lastDx = dx
+        const width = Math.max(1, drawerWidth)
         const offset = wasOpen
-          ? Math.max(-drawerWidth, Math.min(0, dx))
-          : Math.min(0, -drawerWidth + Math.max(0, dx))
-        const progress = Math.max(0, Math.min(1, 1 + offset / drawerWidth))
-        const drawer = drawerRef.current
-        const mask = maskRef.current
-        if (drawer) {
-          drawer.style.transition = 'none'
-          drawer.style.visibility = 'visible'
-          drawer.style.transform = `translate3d(${offset}px, 0, 0)`
-        }
-        if (mask) {
-          mask.style.transition = 'none'
-          mask.style.opacity = String(progress)
-          mask.style.pointerEvents = 'auto'
+          ? Math.max(0, Math.min(width, width + dx))
+          : Math.max(0, Math.min(width, dx))
+        const main = getSiderMain()
+        // 抽屉在下层且始终绘制完成，本身不动；对话界面右移多少就露出多少
+        if (main) {
+          main.dataset.siderDragging = 'true'
+          main.style.transition = 'none'
+          main.style.transform = `translate3d(${offset}px, 0, 0)`
+          main.style.boxShadow = offset > 0 ? '-10px 0 30px rgba(0, 0, 0, 0.18)' : ''
         }
       }
     }
@@ -303,19 +291,21 @@ export const MobileSider = () => {
         return
       }
       mode = 'idle'
-      resetStyles()
       const elapsed = Math.max(1, Date.now() - startTime)
       const vx = lastDx / elapsed
-      if (!wasOpen) {
-        if (lastDx > drawerWidth * 0.25 || (vx > 0.35 && lastDx > 24)) {
-          openMobileSider()
-        } else {
-          closeMobileSider()
-        }
-      } else if (lastDx < -drawerWidth * 0.2 || (vx < -0.35 && lastDx < -24)) {
-        closeMobileSider()
-      } else {
+      const shouldOpen = !wasOpen
+        ? lastDx > drawerWidth * 0.25 || (vx > 0.35 && lastDx > 24)
+        : !(lastDx < -drawerWidth * 0.2 || (vx < -0.35 && lastDx < -24))
+      const main = getSiderMain()
+      if (main) {
+        main.style.removeProperty('transition')
+        main.style.transform = `translate3d(${shouldOpen ? drawerWidth : 0}px, 0, 0)`
+      }
+      scheduleClearSiderMainInline(320)
+      if (shouldOpen) {
         openMobileSider()
+      } else {
+        closeMobileSider()
       }
     }
 
@@ -332,16 +322,8 @@ export const MobileSider = () => {
   }, [])
 
   return (
-    <>
-      <div
-        ref={maskRef}
-        data-open={open ? 'true' : undefined}
-        className={clsx(styles.drawerMask, open && styles.drawerMaskOpen)}
-        onClick={closeMobileSider}
-      />
-      <div ref={drawerRef} className={clsx(styles.drawer, open && styles.drawerOpen)}>
-        <Sider mobile />
-      </div>
-    </>
+    <div ref={drawerRef} data-open={open ? 'true' : undefined} className={styles.drawer}>
+      <Sider mobile />
+    </div>
   )
 }

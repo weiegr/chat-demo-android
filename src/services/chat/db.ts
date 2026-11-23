@@ -20,7 +20,9 @@ const STORE_NAMES = [
  */
 export const isEphemeralStorage = (() => {
   try {
-    localStorage.getItem('chat-demo:storage-probe')
+    if (typeof window !== 'undefined') {
+      window.localStorage.getItem('chat-demo:storage-probe')
+    }
     return typeof indexedDB === 'undefined'
   } catch {
     return true
@@ -55,6 +57,50 @@ interface ChatDB extends DBSchema {
 }
 
 let dbPromise: Promise<IDBPDatabase<ChatDB>> | null = null
+let usingMemoryStorage = isEphemeralStorage
+
+type SessionChangeListener = (id: string | null) => void
+const sessionChangeListeners = new Set<SessionChangeListener>()
+
+const notifySessionListeners: SessionChangeListener = (id) => {
+  for (const listener of sessionChangeListeners) {
+    listener(id)
+  }
+}
+
+const sessionChanges = (() => {
+  if (
+    isEphemeralStorage ||
+    typeof window === 'undefined' ||
+    typeof BroadcastChannel === 'undefined'
+  ) {
+    return null
+  }
+  try {
+    const channel = new BroadcastChannel('chat-demo:session-changes')
+    channel.onmessage = ({ data }) => {
+      if (!usingMemoryStorage && (data === null || typeof data === 'string')) {
+        notifySessionListeners(data)
+      }
+    }
+    return channel
+  } catch {
+    return null
+  }
+})()
+
+/** 事务成功后通知搜索索引，null 表示历史已整体替换。 */
+const notifySessionChange: SessionChangeListener = (id) => {
+  notifySessionListeners(id)
+  if (!usingMemoryStorage) {
+    sessionChanges?.postMessage(id)
+  }
+}
+
+export const onSessionChange = (listener: SessionChangeListener) => {
+  sessionChangeListeners.add(listener)
+  return () => sessionChangeListeners.delete(listener)
+}
 
 const storedSummary = (session: Session): StoredSessionSummary => ({
   ...toSessionSummary(session),
@@ -110,6 +156,7 @@ const getDB = () =>
   (dbPromise ??= openDatabase().catch((error: unknown) => {
     if (isStorageDenied(error)) {
       // 探测通过但实际打开被拒（如无痕模式）：同样退回内存库，避免整页不可用。
+      usingMemoryStorage = true
       return createMemoryDB(STORE_NAMES) as unknown as IDBPDatabase<ChatDB>
     }
     // 打开失败后允许界面重试，避免一直复用已拒绝的 Promise。
@@ -122,6 +169,35 @@ export const loadSessionSummaries = async (): Promise<SessionSummary[]> =>
 
 export const loadSession = async (id: string): Promise<Session | undefined> =>
   (await getDB()).get('sessions', id)
+
+export const hasPersistentStorage = async (): Promise<boolean> => {
+  await getDB()
+  return !usingMemoryStorage
+}
+
+/** 按主键分批读正文，避免将整个历史一次反序列化，也让写入能在批次之间提交。 */
+export async function* readSessionBatches(): AsyncGenerator<Session[]> {
+  const database = await getDB()
+  const batchSize = 128
+  if (usingMemoryStorage) {
+    const sessions = await database.getAll('sessions')
+    for (let offset = 0; offset < sessions.length; offset += batchSize) {
+      yield sessions.slice(offset, offset + batchSize)
+    }
+    return
+  }
+  let range: IDBKeyRange | undefined
+  while (true) {
+    const batch = await database.getAll('sessions', range, batchSize)
+    if (batch.length > 0) {
+      yield batch
+    }
+    if (batch.length < batchSize) {
+      return
+    }
+    range = IDBKeyRange.lowerBound(batch[batch.length - 1].id, true)
+  }
+}
 
 export const saveSession = async (session: Session, files: StoredFile[] = []): Promise<void> => {
   const summary = storedSummary(session)
@@ -141,6 +217,7 @@ export const saveSession = async (session: Session, files: StoredFile[] = []): P
     })(),
     tx.done,
   ])
+  notifySessionChange(session.id)
 }
 
 /** 未打开的会话也可重命名，只读取该会话，原子更新详情和列表。 */
@@ -163,6 +240,7 @@ export const renameSession = async (id: string, title: string): Promise<void> =>
     })(),
     tx.done,
   ])
+  notifySessionChange(id)
 }
 
 /** 删除会话，仅清理已无会话引用的本地原件；远端文件不删。 */
@@ -187,6 +265,7 @@ export const deleteSession = async (sessionId: string): Promise<void> => {
     })(),
     tx.done,
   ])
+  notifySessionChange(sessionId)
 }
 
 const putFiles = async (store: 'files' | 'filesStaging', files: StoredFile[]) => {
@@ -291,6 +370,7 @@ export const commitStaging = async (): Promise<SessionSummary[]> => {
     }
   }
   await Promise.all([move('sessionsStaging', 'sessions'), move('filesStaging', 'files'), tx.done])
+  notifySessionChange(null)
   // 直接返回本次提交的列表，调用方无需在替换成功后再发起可能失败的读取。
   return summaries
 }
