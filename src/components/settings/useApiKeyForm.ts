@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ApiError, verifyApiKey } from '../../services/api/client.js'
 import { classifyApiError } from '../../services/api/errors.js'
 import { setApiKey } from '../../services/settings.js'
@@ -8,15 +8,21 @@ import { useTranslate } from '../../i18n/index.js'
 export const useApiKeyForm = (onSaved?: () => void) => {
   const t = useTranslate()
   const [value, setValue] = useState('')
-  const [verifying, setVerifying] = useState(false)
-  const [failure, setFailure] = useState<{ cause: unknown } | null>(null)
-  const cause = failure?.cause
-  const error =
-    failure === null
-      ? null
-      : classifyApiError(cause) === 'unauthorized'
+  const [pending, setPending] = useState<'save' | 'clear' | null>(null)
+  const busy = useRef(false)
+  const [failure, setFailure] = useState<
+    { kind: 'storage' } | { kind: 'verify'; cause: unknown } | null
+  >(null)
+  let error = null
+  if (failure?.kind === 'storage') {
+    error = t('apiKeyStorageWriteFailed')
+  } else if (failure?.kind === 'verify') {
+    const { cause } = failure
+    const kind = classifyApiError(cause)
+    error =
+      kind === 'unauthorized'
         ? t('apiKeyInvalid')
-        : classifyApiError(cause) === 'network'
+        : kind === 'network'
           ? t('commonNetworkErrorToast')
           : t('apiKeyVerificationFailed', {
               message:
@@ -26,25 +32,49 @@ export const useApiKeyForm = (onSaved?: () => void) => {
                     ? cause.message
                     : String(cause),
             })
+  }
 
-  const submit = async () => {
-    const apiKey = value.trim()
-    if (!apiKey || verifying) {
-      return
+  const reset = () => {
+    setValue('')
+    setFailure(null)
+  }
+
+  const save = async (apiKey: string | null) => {
+    if (busy.current) {
+      return false
     }
-    setVerifying(true)
+    busy.current = true
+    setPending(apiKey === null ? 'clear' : 'save')
     setFailure(null)
     try {
-      await verifyApiKey(apiKey)
-      setApiKey(apiKey)
-      setValue('')
-      onSaved?.()
-    } catch (e) {
-      setFailure({ cause: e })
+      if (apiKey !== null) {
+        try {
+          await verifyApiKey(apiKey)
+        } catch (cause) {
+          setFailure({ kind: 'verify', cause })
+          return false
+        }
+      }
+      try {
+        await setApiKey(apiKey)
+      } catch {
+        setFailure({ kind: 'storage' })
+        return false
+      }
+      reset()
+      return true
     } finally {
-      setVerifying(false)
+      busy.current = false
+      setPending(null)
     }
   }
 
-  return { value, setValue, verifying, error, submit }
+  const submit = async () => {
+    const apiKey = value.trim()
+    if (apiKey && (await save(apiKey))) {
+      onSaved?.()
+    }
+  }
+
+  return { value, setValue, reset, pending, error, submit, clear: () => save(null) }
 }

@@ -2,7 +2,7 @@ import clsx from 'clsx'
 import { useState } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
-import { setApiKey, useSettings } from '../../services/settings.js'
+import { useSettings } from '../../services/settings.js'
 import { Button } from '../base/Button.js'
 import { IconButton } from '../base/IconButton.js'
 import { IconChevronRightOutline14, IconEditOutline16 } from '../base/icons.js'
@@ -18,6 +18,7 @@ export const ApiKeySetting = () => {
   const t = useTranslate()
   const isMobile = useIsMobile()
   const apiKey = useSettings((state) => state.apiKey)
+  const storageMode = useSettings((state) => state.apiKeyStorageMode)
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const form = useApiKeyForm(() => {
@@ -26,22 +27,33 @@ export const ApiKeySetting = () => {
   })
   const sheetPresence = usePresence(open && isMobile, 280)
   const showInput = !apiKey || editing
+  const loading = storageMode === 'loading'
+  const loadFailed = storageMode === 'error'
+  const status = loading
+    ? t('apiKeyStorageLoading')
+    : loadFailed
+      ? t('apiKeyStorageReadFailed')
+      : apiKey
+        ? t(storageMode === 'temporary' ? 'apiKeyStatusTemporary' : 'apiKeyStatusSet')
+        : t('apiKeyStatusUnset')
 
   const openModal = () => {
     setEditing(false)
-    form.setValue('')
+    form.reset()
     setOpen(true)
   }
 
   const closeModal = () => {
-    if (form.verifying) {
+    if (form.pending) {
       return
     }
+    form.reset()
     setOpen(false)
     setEditing(false)
   }
 
-  const submitDisabled = showInput ? !form.value.trim() || form.verifying : false
+  const submitDisabled = loading || form.pending !== null || (showInput && !form.value.trim())
+  const confirmLabel = form.pending === 'save' ? t('apiKeyVerifying') : t('confirm')
   const handleConfirm = () => {
     if (showInput) {
       void form.submit()
@@ -52,7 +64,9 @@ export const ApiKeySetting = () => {
 
   const content = (
     <div className={styles.apiKeyModalBody}>
-      {showInput ? (
+      {loading ? (
+        <div role="status">{t('apiKeyStorageLoading')}</div>
+      ) : showInput ? (
         <div className={styles.apiKeyInput}>
           <input
             type="password"
@@ -82,17 +96,22 @@ export const ApiKeySetting = () => {
           />
         </div>
       )}
-      {showInput && form.error ? <div className={styles.error}>{form.error}</div> : null}
-      {apiKey ? (
+      {form.error || loadFailed ? (
+        <div className={styles.error} role="alert">
+          {form.error ?? t('apiKeyStorageReadFailed')}
+        </div>
+      ) : null}
+      {storageMode === 'temporary' ? <div>{t('apiKeyStorageTemporary')}</div> : null}
+      {apiKey || loadFailed ? (
         <div className={styles.promptEditorFooterMeta}>
           <button
             type="button"
             className={styles.promptResetButton}
-            disabled={form.verifying}
-            onClick={() => {
-              setApiKey(null)
-              form.setValue('')
-              setEditing(true)
+            disabled={form.pending !== null}
+            onClick={async () => {
+              if (await form.clear()) {
+                setEditing(true)
+              }
             }}
           >
             {t('apiKeyClear')}
@@ -111,9 +130,7 @@ export const ApiKeySetting = () => {
           description={t('apiKeyDescription')}
           right={
             <span className={styles.mobileNavRight}>
-              <span className={styles.mobileNavValue}>
-                {apiKey ? t('apiKeyStatusSet') : t('apiKeyStatusUnset')}
-              </span>
+              <span className={styles.mobileNavValue}>{status}</span>
               <IconChevronRightOutline14 />
             </span>
           }
@@ -126,9 +143,7 @@ export const ApiKeySetting = () => {
               <span className={styles.label}>{t('apiKeyLabel')}</span>
               <InfoModalButton ariaLabel={t('apiKeyLabel')} description={t('apiKeyDescription')} />
             </div>
-            <div className={styles.description}>
-              {apiKey ? t('apiKeyStatusSet') : t('apiKeyStatusUnset')}
-            </div>
+            <div className={styles.description}>{status}</div>
           </div>
           <Button variant="outlined" size="m" className={styles.cellButton} onClick={openModal}>
             {t('settingsEditAction')}
@@ -154,7 +169,7 @@ export const ApiKeySetting = () => {
               onMouseDown={(event) => event.preventDefault()}
               onClick={handleConfirm}
             >
-              {form.verifying ? t('apiKeyVerifying') : t('confirm')}
+              {confirmLabel}
             </button>
           </Modal>
         ) : null
@@ -175,7 +190,7 @@ export const ApiKeySetting = () => {
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={handleConfirm}
               >
-                {form.verifying ? t('apiKeyVerifying') : t('confirm')}
+                {confirmLabel}
               </Button>
             </>
           }

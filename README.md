@@ -69,7 +69,8 @@ pnpm build:single
 
 ## Data Storage & Backup
 
-- **Where data lives**: Your API key and preferences are stored in `localStorage`, while conversations, message branches, and original attachments are stored in IndexedDB inside the app's private WebView sandbox (isolated by package name). Sending messages, uploading files, or using speech features submits the relevant data to the configured API service.
+- On Android, the app encrypts your API key with Android Keystore and stores the ciphertext in a private directory excluded from system backups. The web app encrypts it with Web Crypto and stores the result in IndexedDB. Where encrypted storage is unavailable, the API key lasts for the current page session.
+- The app stores preferences in `localStorage` and conversations, message branches, and original attachments in IndexedDB. Android backup and device transfer exclude WebView `localStorage` because its files may retain data from older versions. Sending messages, uploading files, or using speech features submits the relevant data to the configured API service.
 - **Uninstall & Upgrade Notes**:
   - **Uninstalling the app** deletes the app's private sandbox directory, removing all local chats and your saved API key.
   - **Overwriting / upgrading** in place with the same package name and signing keystore preserves existing conversations and settings.

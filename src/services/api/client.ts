@@ -93,6 +93,7 @@ const anthropicHeaders = (apiKey: string, beta: boolean): Record<string, string>
 export const verifyApiKey = async (apiKey: string, signal?: AbortSignal): Promise<void> => {
   await request(`${API_ORIGIN}/models`, {
     method: 'GET',
+    cache: 'no-store',
     headers: { Authorization: `Bearer ${apiKey}` },
     signal,
   })

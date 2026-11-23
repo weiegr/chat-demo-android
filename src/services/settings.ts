@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { TtsVoice } from './api/speech.js'
 import type { ChatModel } from './api/types.js'
+import { loadStoredApiKey, saveStoredApiKey } from './apiKeyStorage.js'
 import { normalizeLocation, type UserLocation } from './location.js'
 
 export type Locale = 'zh-CN' | 'en-US'
@@ -10,6 +11,7 @@ export type ThemePreference = 'light' | 'dark' | 'system'
 
 /** 对话模式：快速（Flash 全功能）/ 专家（Pro 复杂问题 + OCR）/ RP（长上下文纯净模式） */
 export type ChatMode = 'fast' | 'expert' | 'rp'
+export type QuickCameraShortcut = 'on' | 'when-occupied' | 'off'
 
 /** 快速模式系统提示词默认值；可在设置中修改或清空（清空后请求不带基础 system 内容） */
 export const DEFAULT_FAST_SYSTEM_PROMPT = '该助手为DeepSeek Flash，由深度求索公司创造。'
@@ -72,9 +74,10 @@ export const resolveModeModel = (mode: ChatMode, rpModel: ChatModel): ChatModel 
   return 'deepseek-flash'
 }
 
-/** 本机设置，存 localStorage：API Key、语言、主题、位置与 AI 定位权限、朗读音色、各模式系统与工具提示词、对话模式与 RP 模型、深度思考与智能搜索开关、侧边栏收起状态 */
+/** API Key 从加密存储载入，其他本机设置保存在 localStorage。 */
 type Settings = {
   apiKey: string | null
+  apiKeyStorageMode: 'loading' | 'ready' | 'temporary' | 'error'
   locale: Locale
   themePreference: ThemePreference
   location: UserLocation | null
@@ -82,6 +85,7 @@ type Settings = {
   allowAiLocation: boolean
   allowVideoUpload: boolean
   videoAudioEnabled: boolean
+  quickCameraShortcut: QuickCameraShortcut
   ttsVoice: TtsVoice
   /** 回答完成后是否自动朗读回复内容 */
   autoReadAloud: boolean
@@ -146,13 +150,13 @@ export const getModePrompts = (
 }
 
 const KEYS = {
-  apiKey: 'chat-demo:api-key',
   locale: 'chat-demo:locale',
   location: 'chat-demo:location',
   locationEnabled: 'chat-demo:location-enabled',
   allowAiLocation: 'chat-demo:allow-ai-location',
   allowVideoUpload: 'chat-demo:allow-video-upload',
   videoAudioEnabled: 'chat-demo:transcribe-video-audio',
+  quickCameraShortcut: 'chat-demo:quick-camera-shortcut',
   themePreference: 'chat-demo:theme-preference',
   ttsVoice: 'chat-demo:tts-voice',
   autoReadAloud: 'chat-demo:auto-read-aloud',
@@ -244,6 +248,11 @@ const initialChatMode = (): ChatMode => {
 const initialRpModel = (): ChatModel =>
   read(KEYS.rpModel) === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-flash'
 
+const initialQuickCameraShortcut = (): QuickCameraShortcut => {
+  const saved = read(KEYS.quickCameraShortcut)
+  return saved === 'when-occupied' || saved === 'off' ? saved : 'on'
+}
+
 const initialVideoPrompt = () => {
   const saved = read(KEYS.fastVideoPrompt)
   return saved === null || LEGACY_FAST_VIDEO_PROMPTS.includes(saved)
@@ -262,13 +271,15 @@ const initialLocationEnabled = (): boolean => {
 }
 
 export const useSettings = create<Settings>(() => ({
-  apiKey: read(KEYS.apiKey),
+  apiKey: null,
+  apiKeyStorageMode: 'loading',
   locale: initialLocale(),
   location: initialLocationValue,
   locationEnabled: initialLocationEnabled(),
   allowAiLocation: read(KEYS.allowAiLocation) === 'true',
   allowVideoUpload: read(KEYS.allowVideoUpload) === 'true',
   videoAudioEnabled: read(KEYS.videoAudioEnabled) === 'true',
+  quickCameraShortcut: initialQuickCameraShortcut(),
   themePreference: initialThemePreference(),
   ttsVoice: initialTtsVoice(),
   autoReadAloud: read(KEYS.autoReadAloud) === 'true',
@@ -313,6 +324,11 @@ export const setAllowAiLocation = (allowAiLocation: boolean) => {
 export const setAllowVideoUpload = (allowVideoUpload: boolean) => {
   write(KEYS.allowVideoUpload, String(allowVideoUpload))
   useSettings.setState({ allowVideoUpload })
+}
+
+export const setQuickCameraShortcut = (quickCameraShortcut: QuickCameraShortcut) => {
+  write(KEYS.quickCameraShortcut, quickCameraShortcut)
+  useSettings.setState({ quickCameraShortcut })
 }
 
 export const canUploadVideo = (
@@ -395,9 +411,23 @@ export const setRpModel = (rpModel: ChatModel) => {
   useSettings.setState({ rpModel })
 }
 
+let apiKeyInitialization: Promise<void> | undefined
+let apiKeyWrite = Promise.resolve()
+
+export const initApiKey = () =>
+  (apiKeyInitialization ??= loadStoredApiKey().then(
+    (stored) => useSettings.setState(stored),
+    () => useSettings.setState({ apiKeyStorageMode: 'error' })
+  ))
+
 export const setApiKey = (apiKey: string | null) => {
-  write(KEYS.apiKey, apiKey)
-  useSettings.setState({ apiKey })
+  const write = apiKeyWrite.then(async () => {
+    await initApiKey()
+    const apiKeyStorageMode = await saveStoredApiKey(apiKey)
+    useSettings.setState({ apiKey, apiKeyStorageMode })
+  })
+  apiKeyWrite = write.catch(() => {})
+  return write
 }
 
 export const setThinking = (thinking: boolean) => {
