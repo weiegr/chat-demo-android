@@ -9,6 +9,9 @@ declare module '*.css' {}
 declare const __API_ORIGIN__: string
 declare const __SINGLE_FILE__: boolean
 
+/** 构建期 Beta 开关，`BETA=1` 时为 true */
+declare const __BETA__: boolean
+
 /** Prism 语言包通过副作用注册到全局 Prism */
 declare module 'prismjs/components/*' {}
 
