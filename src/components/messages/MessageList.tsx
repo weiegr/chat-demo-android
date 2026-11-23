@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { getImeMotionState, hasNativeImeMotion, subscribeImeMotion } from '../../app/imeMotion.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { IconChevronDownOutline14 } from '../base/icons.js'
 import {
@@ -93,10 +94,14 @@ export const MessageList = ({
   readOnly?: boolean
 }) => {
   const isMobile = useIsMobile()
+  const containerRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
+  const footerSlotRef = useRef<HTMLDivElement>(null)
+  const scrollButtonRef = useRef<HTMLButtonElement>(null)
   const stickyRef = useRef(true)
   const scrollTopRef = useRef(0)
+  const imeTransitioningRef = useRef(false)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const restoreScrollRef = useRef<{ messageId: string; top: number } | null>(null)
   const messages = useMemo(() => getVisibleMessages(session), [session])
@@ -127,7 +132,11 @@ export const MessageList = ({
     if (!content || !scroll) {
       return
     }
-    const observer = new ResizeObserver(scrollToBottom)
+    const observer = new ResizeObserver(() => {
+      if (!imeTransitioningRef.current) {
+        scrollToBottom()
+      }
+    })
     observer.observe(content)
     observer.observe(scroll)
     return () => observer.disconnect()
@@ -214,11 +223,262 @@ export const MessageList = ({
     return () => el.removeEventListener('scroll', onScroll)
   }, [isMobile, scrollToBottom])
 
+  // Android 原生键盘动效：动画期间以纯 GPU transform 同步托起输入区与底部消息，静止后无缝移交真实底距以保留原生滚动
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    const scroll = scrollRef.current
+    const content = contentRef.current
+    if (!isMobile || !hasNativeImeMotion() || !container || !scroll || !content) {
+      return
+    }
+
+    const SMOOTH_SETTLE_TRANSITION = 'transform 180ms cubic-bezier(0.22, 1, 0.36, 1)'
+    const reducedMotion = () =>
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+    let mode: 'idle' | 'opening' | 'closing' = 'idle'
+    let openSticky = true
+    let openGapBelow = 0
+    let closeStartShift = 0
+    let closeDeltaScroll = 0
+    let currentContentLift = 0
+    let smoothTimer: number | null = null
+
+    const getPaddingBottom = () => Number.parseFloat(container.style.paddingBottom) || 0
+
+    const clearSmoothTransition = () => {
+      if (smoothTimer !== null) {
+        window.clearTimeout(smoothTimer)
+        smoothTimer = null
+      }
+      footerSlotRef.current?.style.removeProperty('transition')
+      content.style.removeProperty('transition')
+      scrollButtonRef.current?.style.removeProperty('transition')
+    }
+
+    const clearTransforms = () => {
+      clearSmoothTransition()
+      currentContentLift = 0
+      const footerSlot = footerSlotRef.current
+      if (footerSlot) {
+        footerSlot.style.removeProperty('transform')
+        footerSlot.style.removeProperty('will-change')
+      }
+      content.style.removeProperty('transform')
+      content.style.removeProperty('will-change')
+      const btn = scrollButtonRef.current
+      if (btn) {
+        btn.style.removeProperty('transform')
+      }
+    }
+
+    const applyOpeningTransforms = (shift: number) => {
+      const footerSlot = footerSlotRef.current
+      const btn = scrollButtonRef.current
+      if (shift > 0.05) {
+        const footerTx = `translate3d(0, ${(-shift).toFixed(2)}px, 0)`
+        if (footerSlot) {
+          footerSlot.style.transform = footerTx
+        }
+        if (btn) {
+          btn.style.transform = footerTx
+        }
+        if (openSticky) {
+          const lift = Math.max(0, shift - openGapBelow)
+          currentContentLift = lift
+          content.style.transform = lift > 0.05 ? `translate3d(0, ${(-lift).toFixed(2)}px, 0)` : ''
+        }
+      } else {
+        currentContentLift = 0
+        if (footerSlot) {
+          footerSlot.style.removeProperty('transform')
+        }
+        if (btn) {
+          btn.style.removeProperty('transform')
+        }
+        content.style.removeProperty('transform')
+      }
+    }
+
+    const applyClosingTransforms = (shift: number) => {
+      const footerSlot = footerSlotRef.current
+      const btn = scrollButtonRef.current
+      if (shift > 0.05) {
+        const footerTx = `translate3d(0, ${(-shift).toFixed(2)}px, 0)`
+        if (footerSlot) {
+          footerSlot.style.transform = footerTx
+        }
+        if (btn) {
+          btn.style.transform = footerTx
+        }
+        if (closeDeltaScroll > 0.5 && closeStartShift > 0.5) {
+          const lift = closeDeltaScroll * Math.min(1, shift / closeStartShift)
+          currentContentLift = lift
+          content.style.transform = lift > 0.05 ? `translate3d(0, ${(-lift).toFixed(2)}px, 0)` : ''
+        }
+      } else {
+        currentContentLift = 0
+        if (footerSlot) {
+          footerSlot.style.removeProperty('transform')
+        }
+        if (btn) {
+          btn.style.removeProperty('transform')
+        }
+        content.style.removeProperty('transform')
+      }
+    }
+
+    const beginOpening = () => {
+      clearSmoothTransition()
+      imeTransitioningRef.current = true
+      mode = 'opening'
+      openSticky = stickyRef.current
+      openGapBelow = Math.max(0, scroll.clientHeight - (scroll.scrollHeight - scroll.scrollTop))
+      if (footerSlotRef.current) {
+        footerSlotRef.current.style.willChange = 'transform'
+      }
+      if (openSticky) {
+        content.style.willChange = 'transform'
+      }
+    }
+
+    const beginClosing = (fallbackShift: number) => {
+      clearSmoothTransition()
+      imeTransitioningRef.current = true
+      const settledPx = getPaddingBottom()
+      if (settledPx > 0.5) {
+        const prevScrollTop = scroll.scrollTop
+        container.style.removeProperty('padding-bottom')
+        closeDeltaScroll = Math.max(0, prevScrollTop - scroll.scrollTop)
+        closeStartShift = settledPx
+        mode = 'closing'
+        if (footerSlotRef.current) {
+          footerSlotRef.current.style.willChange = 'transform'
+        }
+        if (closeDeltaScroll > 0.5) {
+          content.style.willChange = 'transform'
+        }
+        applyClosingTransforms(settledPx)
+      } else {
+        // 中途打断弹出转收起：尚未移交 padding-bottom，沿用当前内容已抬升的位移平滑降回 0，避免消息区冻在半空再闪现
+        mode = 'closing'
+        closeStartShift = Math.max(fallbackShift, 1)
+        closeDeltaScroll = currentContentLift
+        if (footerSlotRef.current) {
+          footerSlotRef.current.style.willChange = 'transform'
+        }
+        if (closeDeltaScroll > 0.5) {
+          content.style.willChange = 'transform'
+        }
+      }
+    }
+
+    const settle = (shift: number, smoothSettle = false) => {
+      const keepSticky = mode === 'opening' ? openSticky : stickyRef.current
+      if (smoothSettle && shift <= 0.5 && !reducedMotion()) {
+        const existingPadding = getPaddingBottom()
+        if (existingPadding > 0.5) {
+          beginClosing(existingPadding)
+          // 强制确认起点帧，确保紧随其后的 GPU transition 从原位平滑落底而非瞬间闪现
+          void footerSlotRef.current?.offsetHeight
+        }
+        mode = 'idle'
+        closeStartShift = 0
+        closeDeltaScroll = 0
+        const footerSlot = footerSlotRef.current
+        const btn = scrollButtonRef.current
+        if (footerSlot) {
+          footerSlot.style.willChange = 'transform'
+          footerSlot.style.transition = SMOOTH_SETTLE_TRANSITION
+          footerSlot.style.transform = 'translate3d(0, 0, 0)'
+        }
+        if (btn) {
+          btn.style.transition = SMOOTH_SETTLE_TRANSITION
+          btn.style.transform = 'translate3d(0, 0, 0)'
+        }
+        if (currentContentLift > 0.5) {
+          content.style.willChange = 'transform'
+          content.style.transition = SMOOTH_SETTLE_TRANSITION
+          content.style.transform = 'translate3d(0, 0, 0)'
+        }
+        smoothTimer = window.setTimeout(() => {
+          smoothTimer = null
+          imeTransitioningRef.current = false
+          clearTransforms()
+        }, 200)
+        return
+      }
+      imeTransitioningRef.current = false
+      mode = 'idle'
+      closeStartShift = 0
+      closeDeltaScroll = 0
+      if (shift > 0.5) {
+        container.style.paddingBottom = `${shift.toFixed(2)}px`
+        clearTransforms()
+        if (keepSticky) {
+          scroll.scrollTop = scroll.scrollHeight
+          scrollTopRef.current = scroll.scrollTop
+        }
+      } else {
+        container.style.removeProperty('padding-bottom')
+        clearTransforms()
+      }
+    }
+
+    const initial = getImeMotionState()
+    if (!initial.animating && initial.settled > 0.5) {
+      settle(initial.settled)
+    }
+
+    const unsubscribe = subscribeImeMotion((phase, ime) => {
+      if (phase === 'prepare') {
+        clearSmoothTransition()
+        if (getPaddingBottom() <= 0.5) {
+          beginOpening()
+        }
+        return
+      }
+      if (phase === 'start') {
+        if (ime.opening) {
+          if (getPaddingBottom() > 0.5) {
+            container.style.removeProperty('padding-bottom')
+          }
+          beginOpening()
+          applyOpeningTransforms(ime.shift)
+        } else {
+          beginClosing(ime.shift || ime.settled)
+        }
+        return
+      }
+      if (phase === 'progress') {
+        clearSmoothTransition()
+        if (mode === 'closing') {
+          applyClosingTransforms(ime.shift)
+        } else {
+          if (mode === 'idle') {
+            beginOpening()
+          }
+          applyOpeningTransforms(ime.shift)
+        }
+        return
+      }
+      settle(ime.shift, ime.smoothSettle)
+    })
+
+    return () => {
+      unsubscribe()
+      imeTransitioningRef.current = false
+      container.style.removeProperty('padding-bottom')
+      clearTransforms()
+    }
+  }, [isMobile])
+
   const lastIndex = messages.length - 1
   const uploadRetryId = readOnly ? null : getUploadRetryId(messages, streaming)
   return (
     <ScrollToBottomContext.Provider value={scrollToBottom}>
-      <div ref={isMobile ? undefined : scrollRef} className={styles.container}>
+      <div ref={isMobile ? containerRef : scrollRef} className={styles.container}>
         <div className={styles.scrollArea}>
           <div ref={isMobile ? scrollRef : undefined} className={styles.scroll}>
             <div
@@ -273,6 +533,7 @@ export const MessageList = ({
           </div>
           {isMobile && showScrollButton && !editingUserMessage ? (
             <button
+              ref={scrollButtonRef}
               type="button"
               className={styles.scrollBottomButton}
               aria-label="Scroll to bottom"
@@ -285,7 +546,11 @@ export const MessageList = ({
             </button>
           ) : null}
         </div>
-        {footer}
+        {footer ? (
+          <div ref={footerSlotRef} className={styles.footerSlot}>
+            {footer}
+          </div>
+        ) : null}
       </div>
     </ScrollToBottomContext.Provider>
   )

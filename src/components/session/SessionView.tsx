@@ -1,4 +1,5 @@
 import clsx from 'clsx'
+import { useRef } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
 import type { Session } from '../../services/chat/types.js'
@@ -25,13 +26,19 @@ export const SessionView = ({
   const t = useTranslate()
   const isMobile = useIsMobile()
   const editing = useUserEdit((state) => state.active?.sessionId === session.id)
+  const cameraShortcutRef = useRef<(() => void) | null>(null)
   const title = session.title || t('untitledChat')
   const mode = session.mode ?? 'fast'
   const modeMeta = getChatModeMeta(mode)
   return (
     <div className={styles.view}>
       {isMobile ? (
-        <MobileHeader title={title} mode={mode} />
+        <MobileHeader
+          title={title}
+          mode={mode}
+          editing={editing}
+          onTakePhoto={() => cameraShortcutRef.current?.()}
+        />
       ) : (
         <div className={styles.header}>
           <div className={clsx(styles.titleGroup, siderCollapsed && styles.withCollapsedSider)}>
@@ -56,7 +63,11 @@ export const SessionView = ({
         streaming={streaming}
         footer={
           <div className={clsx(styles.inputContainer, editing && styles.inputContainerEditing)}>
-            <ChatInput sessionId={session.id} onStartCall={onStartCall} />
+            <ChatInput
+              sessionId={session.id}
+              onStartCall={onStartCall}
+              cameraShortcutRef={cameraShortcutRef}
+            />
           </div>
         }
       />

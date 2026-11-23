@@ -1,7 +1,9 @@
 declare const styles: {
   readonly container: string
   readonly welcome: string
+  readonly inputSlot: string
   readonly hero: string
+  readonly heroAnimating: string
   readonly greeting: string
   readonly greetingText: string
   readonly modeSwitch: string
@@ -15,6 +17,7 @@ declare const styles: {
   readonly modeOptionOverlay: string
   readonly modeOptionInner: string
   readonly modeIcon: string
+  readonly modeIconPop: string
   readonly modeLabel: string
   readonly stacked: string
   readonly modeHintViewport: string
@@ -23,6 +26,5 @@ declare const styles: {
   readonly modeHintStart: string
   readonly modeHintCenter: string
   readonly modeHintEnd: string
-  readonly textHidden: string
 }
 export = styles

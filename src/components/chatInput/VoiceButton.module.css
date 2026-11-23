@@ -30,7 +30,11 @@
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
   outline: none;
-  transition: background-color var(--ds-transition-duration) var(--ds-ease-in-out);
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background-color var(--ds-transition-duration) var(--ds-ease-in-out),
+    opacity 0.15s ease,
+    transform 0.15s ease;
 
   &:active:not(.recording):not(.disabled) {
     background-color: var(--dsw-alias-interactive-bg-hover);
@@ -47,6 +51,15 @@
   }
 }
 
+/* 移动端圆形声波按钮：按压反馈与左侧 plusButton 保持一致，不叠加额外灰圆底 */
+.mobileButton {
+  &:active:not(.recording):not(.disabled) {
+    background-color: transparent;
+    opacity: 0.72;
+    transform: scale(0.93);
+  }
+}
+
 .disabled {
   color: var(--dsw-alias-label-caption);
   cursor: not-allowed;
@@ -59,6 +72,24 @@
   justify-content: center;
   width: 26px;
   height: 26px;
+}
+
+/* 移动端录音态放大到与 24px 外圆视觉等宽，光圈向外自然呼吸 */
+.activeMobile {
+  width: 30px;
+  height: 30px;
+
+  .core {
+    inset: 3px;
+    opacity: 0.92;
+  }
+
+  .glyph {
+    svg {
+      width: 21px;
+      height: 21px;
+    }
+  }
 }
 
 .halo {
@@ -93,6 +124,28 @@
   display: flex;
   color: var(--dsw-static-neutral-bluish-00);
   animation: fadeIn 0.1s ease-out 0.26s both;
+}
+
+.waveDot {
+  animation: wavePulse 1.35s ease-in-out 0.28s infinite;
+}
+
+.waveInner {
+  animation: wavePulse 1.35s ease-in-out 0.44s infinite;
+}
+
+.waveOuter {
+  animation: wavePulse 1.35s ease-in-out 0.6s infinite;
+}
+
+@keyframes wavePulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  45% {
+    opacity: 0.4;
+  }
 }
 
 @keyframes haloEnter {
@@ -141,9 +194,16 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .button {
+    transition: none;
+  }
+
   .halo,
   .core,
-  .glyph {
+  .glyph,
+  .waveDot,
+  .waveInner,
+  .waveOuter {
     animation: none;
   }
 
@@ -164,6 +224,12 @@
   border: 1.5px solid var(--dsw-alias-border-l2);
   border-top-color: var(--dsw-alias-label-tertiary);
   animation: spin 0.8s linear infinite;
+}
+
+.loadingMobile {
+  width: 18px;
+  height: 18px;
+  border-width: 1.75px;
 }
 
 @keyframes spin {

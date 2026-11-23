@@ -7,7 +7,7 @@
   justify-content: center;
   box-sizing: border-box;
   /* 顶部留出关闭按钮的位置，图片不会被按钮压住 */
-  padding: 72px 24px 24px;
+  padding: 72px 24px calc(24px + var(--safe-bottom));
   background-color: rgba(0, 0, 0, 0.72);
   backdrop-filter: blur(2px);
   animation: overlayIn var(--ds-transition-duration) var(--ds-ease-in-out);
@@ -94,7 +94,7 @@
 
 @media (max-width: 767px) {
   .overlay {
-    padding: 64px 12px 12px;
+    padding: 64px 12px calc(12px + var(--safe-bottom));
     /* 与弹窗遮罩同理：移动端整屏毛玻璃在淡入动画里逐帧重算，直接去掉只留暗色底 */
     backdrop-filter: none;
   }

@@ -85,7 +85,7 @@ type Entry = {
   offset: number
 }
 
-const readDirectory = async (file: File): Promise<{ entries: Entry[]; offset: number }> => {
+const readDirectory = async (file: File, onRead?: (bytesRead: number) => void) => {
   if (file.size < 22) {
     invalid()
   }
@@ -170,11 +170,12 @@ const readDirectory = async (file: File): Promise<{ entries: Entry[]; offset: nu
       offset: entryOffset,
     })
     cursor = next
+    onRead?.(cursor)
   }
   if (cursor !== size) {
     invalid()
   }
-  return { entries: entries.sort((a, b) => a.offset - b.offset), offset }
+  return { entries: entries.sort((a, b) => a.offset - b.offset), offset, size }
 }
 
 const readEntryOffset = async (file: File, entry: Entry, boundary: number) => {
@@ -237,9 +238,13 @@ export type ArchiveEntry = {
 /**
  * 按条目在文件中的物理顺序逐条、逐块解压，跳过目录条目。
  * 调用方必须消费完当前条目的数据，再请求下一个条目。
+ * 进度先计入中央目录，再按本地文件头和压缩数据在归档中的位置推进。
  */
-export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
-  const directory = await readDirectory(file)
+export async function* readArchive(
+  file: File,
+  onRead?: (bytesRead: number) => void
+): AsyncGenerator<ArchiveEntry> {
+  const directory = await readDirectory(file, onRead)
   for (const [index, entry] of directory.entries.entries()) {
     const boundary = directory.entries[index + 1]?.offset ?? directory.offset
     const start = await readEntryOffset(file, entry, boundary)
@@ -270,17 +275,18 @@ export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
           start + offset,
           Math.min(READ_CHUNK_BYTES, entry.compressedSize - offset)
         )
-        if (!inflate) {
+        if (inflate) {
+          for (let cursor = 0; cursor < chunk.length; cursor += INFLATE_CHUNK_BYTES) {
+            const end = Math.min(cursor + INFLATE_CHUNK_BYTES, chunk.length)
+            inflate.push(chunk.subarray(cursor, end), offset + end === entry.compressedSize)
+            // yield 暂停解压，等待调用方完成异步写入；不缓存整个条目。
+            yield* pending.splice(0)
+          }
+        } else {
           append(chunk)
           yield* pending.splice(0)
-          continue
         }
-        for (let cursor = 0; cursor < chunk.length; cursor += INFLATE_CHUNK_BYTES) {
-          const end = Math.min(cursor + INFLATE_CHUNK_BYTES, chunk.length)
-          inflate.push(chunk.subarray(cursor, end), offset + end === entry.compressedSize)
-          // yield 暂停解压，等待调用方完成异步写入；不缓存整个条目。
-          yield* pending.splice(0)
-        }
+        onRead?.(directory.size + start + offset + chunk.length)
       }
       if (inflate && entry.compressedSize === 0) {
         inflate.push(new Uint8Array(), true)
@@ -295,6 +301,7 @@ export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
     if (!completed) {
       invalid()
     }
+    onRead?.(directory.size + boundary)
   }
 }
 

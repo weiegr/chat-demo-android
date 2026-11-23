@@ -1,5 +1,14 @@
 import clsx from 'clsx'
-import { memo, useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type Ref,
+} from 'react'
 import {
   IconCameraOutline20,
   IconCheckOutline16,
@@ -19,24 +28,23 @@ import {
   resolveModeModel,
   useSettings,
 } from '../../services/settings.js'
+import { computeImeShift, subscribeImeMotion } from '../../app/imeMotion.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { editMessage, sendMessage, stopReply, useChatStore } from '../../services/chat/store.js'
 import {
   addDraftFiles,
   addDraftFilesWithIds,
-  clearSentDraft,
   EMPTY_DRAFT,
   ensureDraftUploads,
   getDraft,
+  getEditDraftKey,
   prepareDraftMessage,
   removeDraftAttachment,
   retryDraftAttachment,
   setDraftText,
-  shouldSkipDraftUpload,
   useDrafts,
   type DraftVideoTranscript,
 } from '../../services/chat/drafts.js'
-import { canInlineTextAttachment } from '../../services/chat/inlineFiles.js'
 import { stopReadAloud } from '../../services/speech/readAloud.js'
 import { IconButton } from '../base/IconButton.js'
 import { Menu } from '../base/Menu.js'
@@ -44,10 +52,9 @@ import { ensureApiKey } from '../settings/settingsDialogState.js'
 import { dismissKeyboard } from '../sider/mobileSiderState.js'
 import { DragMask, useFileDrop } from './DragMask.js'
 import { showToast } from '../base/toastState.js'
-import { ACCEPT, resolveMimeType, useUploads } from '../../services/attachments.js'
+import { ACCEPT, useUploads } from '../../services/attachments.js'
 import {
   cancelUserEdit,
-  getEditDraftKey,
   removeUserEditExistingFile,
   useUserEdit,
   type ActiveUserEdit,
@@ -89,9 +96,14 @@ const RECENT_PHOTOS_LIMIT = 10
 type ChatInputProps = {
   sessionId: string | null
   onStartCall?: (sessionId: string | null) => void
+  cameraShortcutRef?: Ref<() => void>
 }
 
-export const ChatInput = memo(function ChatInput({ sessionId, onStartCall }: ChatInputProps) {
+export const ChatInput = memo(function ChatInput({
+  sessionId,
+  onStartCall,
+  cameraShortcutRef,
+}: ChatInputProps) {
   const activeEdit = useUserEdit((state) =>
     sessionId !== null && state.active?.sessionId === sessionId ? state.active : null
   )
@@ -101,12 +113,21 @@ export const ChatInput = memo(function ChatInput({ sessionId, onStartCall }: Cha
     : sessionId === null
       ? 'new'
       : `session:${sessionId}`
-  return <Input key={key} sessionId={sessionId} activeEdit={activeEdit} onStartCall={onStartCall} />
+  return (
+    <Input
+      key={key}
+      sessionId={sessionId}
+      activeEdit={activeEdit}
+      onStartCall={onStartCall}
+      cameraShortcutRef={cameraShortcutRef}
+    />
+  )
 })
 
 const Input = ({
   sessionId,
   onStartCall,
+  cameraShortcutRef,
   activeEdit,
 }: ChatInputProps & { activeEdit: ActiveUserEdit | null }) => {
   const t = useTranslate()
@@ -127,7 +148,6 @@ const Input = ({
   const videoAllowed = useSettings((settings) => canUploadVideo(activeMode, settings))
   const videoAudioEnabled = useSettings((settings) => canTranscribeVideo(activeMode, settings))
   const video = useVideoInput(draftKey, sessionId)
-  const videoEntry = videoAllowed && activeEdit === null
   const videoBlocked = !videoAllowed && Boolean(draft.video)
   const audioFailed = videoAudioEnabled && draft.video && video.audioFailureId === draft.video.id
 
@@ -137,27 +157,16 @@ const Input = ({
     }
   }, [useOcrModel, attachments.length, draftKey])
 
-  const draftReady = useUploads((state) => {
-    if (!activeEdit) {
-      return prepareDraftMessage(draft, state.tasks, useOcrModel, videoAllowed) !== null
-    }
-    const allUploaded = draft.attachments.every((item) => {
-      if (
-        shouldSkipDraftUpload(
-          { name: item.file.name, size: item.file.size, isImage: item.isImage },
-          useOcrModel
-        )
-      ) {
-        return true
-      }
-      const task = state.tasks[item.id]
-      return task?.status === 'done' && Boolean(task.serverId)
-    })
-    return (
-      allUploaded &&
-      (draft.text.trim() !== '' || activeEdit.files.length > 0 || draft.attachments.length > 0)
-    )
-  })
+  const draftReady = useUploads(
+    (state) =>
+      prepareDraftMessage(
+        draft,
+        state.tasks,
+        useOcrModel,
+        videoAllowed,
+        Boolean(activeEdit?.files.length)
+      ) !== null
+  )
   const streaming = useChatStore(
     (state) => sessionId !== null && Object.hasOwn(state.streaming, sessionId)
   )
@@ -221,15 +230,20 @@ const Input = ({
       hasNativeHost ? window.innerHeight : (window.visualViewport?.height ?? window.innerHeight)
     const startHeight = getCurrentHeight()
     const knownImeCss = androidHost?.getKeyboardHeightCss?.() ?? 0
+    const knownShiftCss = computeImeShift(knownImeCss)
     const expectedRaise =
-      knownImeCss > panelHeight
-        ? knownImeCss
+      knownShiftCss > panelHeight
+        ? knownShiftCss
         : Math.max(panelHeight + 48, Math.round(startHeight * 0.36))
-    const initialRatio = Math.min(0.95, panelHeight / expectedRaise)
+    let ratio = Math.min(0.95, panelHeight / expectedRaise)
 
-    panel.style.setProperty('--attach-start-h', `${panelHeight}px`)
-    panel.style.setProperty('--attach-start-vh', `${startHeight}px`)
-    panel.style.setProperty('--attach-ime-ratio', initialRatio.toFixed(4))
+    if (hasNativeHost) {
+      panel.style.height = `${panelHeight.toFixed(2)}px`
+    } else {
+      panel.style.setProperty('--attach-start-h', `${panelHeight}px`)
+      panel.style.setProperty('--attach-start-vh', `${startHeight}px`)
+      panel.style.setProperty('--attach-ime-ratio', ratio.toFixed(4))
+    }
     setAttachDismissMode('to-ime')
     setAttachMenuOpen(false)
 
@@ -238,6 +252,7 @@ const Input = ({
     let noImeTimer = 0
     let settleTimer = 0
     let collapseTimer = 0
+    let unsubscribeIme: (() => void) | null = null
 
     const finish = () => {
       if (finished) {
@@ -264,8 +279,8 @@ const Input = ({
     const cleanupListeners = () => {
       window.clearTimeout(noImeTimer)
       window.clearTimeout(settleTimer)
-      window.removeEventListener('android-ime-start', onNativeImeStart)
-      window.removeEventListener('android-ime-shown', onNativeImeShown)
+      unsubscribeIme?.()
+      unsubscribeIme = null
       window.visualViewport?.removeEventListener('resize', onViewportChange)
       window.removeEventListener('resize', onViewportChange)
     }
@@ -296,29 +311,6 @@ const Input = ({
       collapseTimer = window.setTimeout(finish, durationMs + 40)
     }
 
-    const onNativeImeStart = (event: Event) => {
-      window.clearTimeout(noImeTimer)
-      const detail = (event as CustomEvent<{ durationMs?: number; targetRaiseCss?: number }>).detail
-      const targetRaiseCss = detail?.targetRaiseCss ?? 0
-      // 动画尚未开始首帧时用系统上报的精确目标键盘高度校准比例，使最后一帧恰好归零
-      if (
-        !fallingBack &&
-        targetRaiseCss > panelHeight &&
-        Math.abs(getCurrentHeight() - startHeight) <= 2
-      ) {
-        const exactRatio = Math.min(0.98, panelHeight / targetRaiseCss)
-        panel.style.setProperty('--attach-ime-ratio', exactRatio.toFixed(4))
-      }
-      const durationMs =
-        typeof detail?.durationMs === 'number' && detail.durationMs > 0 ? detail.durationMs : 260
-      window.clearTimeout(settleTimer)
-      settleTimer = window.setTimeout(() => collapseRemaining(100), durationMs + 160)
-    }
-
-    const onNativeImeShown = () => {
-      collapseRemaining(100)
-    }
-
     const onViewportChange = () => {
       const raised = startHeight - getCurrentHeight()
       if (raised > 4) {
@@ -328,15 +320,50 @@ const Input = ({
       }
     }
 
-    window.addEventListener('android-ime-start', onNativeImeStart, { once: true })
-    window.addEventListener('android-ime-shown', onNativeImeShown, { once: true })
-    window.visualViewport?.addEventListener('resize', onViewportChange)
-    window.addEventListener('resize', onViewportChange)
+    if (hasNativeHost) {
+      let seenNativeShift = false
+      unsubscribeIme = subscribeImeMotion((phase, ime) => {
+        if (finished || fallingBack) {
+          return
+        }
+        if (phase === 'start' && ime.opening) {
+          window.clearTimeout(noImeTimer)
+          const targetShift = computeImeShift(ime.targetRaise)
+          if (!seenNativeShift && targetShift > panelHeight) {
+            ratio = Math.min(0.98, panelHeight / targetShift)
+          }
+          window.clearTimeout(settleTimer)
+          settleTimer = window.setTimeout(() => collapseRemaining(100), ime.durationMs + 160)
+          return
+        }
+        if (phase === 'progress') {
+          if (ime.shift > 1) {
+            seenNativeShift = true
+            window.clearTimeout(noImeTimer)
+          }
+          const nextH = Math.max(0, panelHeight - ime.shift * ratio)
+          panel.style.height = `${nextH.toFixed(2)}px`
+          return
+        }
+        if (phase === 'end') {
+          const nextH = Math.max(0, panelHeight - ime.shift * ratio)
+          panel.style.height = `${nextH.toFixed(2)}px`
+          if (nextH <= 2) {
+            finish()
+          } else {
+            collapseRemaining(100)
+          }
+        }
+      })
+    } else {
+      window.visualViewport?.addEventListener('resize', onViewportChange)
+      window.addEventListener('resize', onViewportChange)
+    }
 
     // 若长时间无软键盘弹起（如外接硬件键盘或桌面模拟器），温和收拢占位高度
     noImeTimer = window.setTimeout(
       () => {
-        if (startHeight - getCurrentHeight() <= 4) {
+        if (!finished && !fallingBack) {
           collapseRemaining(160)
         }
       },
@@ -421,12 +448,22 @@ const Input = ({
     if (useChatStore.getState().importingHistory || !ensureApiKey()) {
       return
     }
+    if (mode === 'camera') {
+      dismissKeyboard()
+    }
     if (mode !== 'video' || !video.preparePicker()) {
       getAndroidHost()?.setNextPickerMode?.(mode)
     }
     input.click()
     closeAttachMenu()
   }
+  const openCamera = () => openPicker('camera', cameraInputRef.current)
+  useImperativeHandle(cameraShortcutRef, () => () => {
+    if (activeMode === 'fast') {
+      openCamera()
+    }
+  })
+
   const toggleAttachMenu = () => {
     cancelAttachToIme()
     const next = !attachMenuOpen
@@ -545,12 +582,24 @@ const Input = ({
     draftReady
 
   const submitDraft = (transcript?: DraftVideoTranscript) => {
-    if (!ensureApiKey() || !sendMessage(sessionId, transcript)) {
+    const edit = useUserEdit.getState().active
+    const currentEdit = edit?.sessionId === sessionId ? edit : null
+    if (currentEdit !== activeEdit || !ensureApiKey()) {
+      return false
+    }
+    if (currentEdit) {
+      if (
+        !editMessage(currentEdit.sessionId, currentEdit.messageId, currentEdit.files, transcript)
+      ) {
+        return false
+      }
+      cancelUserEdit()
+    } else if (!sendMessage(sessionId, transcript)) {
       return false
     }
     stopReadAloud()
     closeAttachMenu()
-    if (isMobile) {
+    if (isMobile || currentEdit) {
       textareaRef.current?.blur()
     } else {
       textareaRef.current?.focus()
@@ -566,56 +615,13 @@ const Input = ({
     ) {
       return
     }
-    const currentEdit = useUserEdit.getState().active
-    if (currentEdit && sessionId !== null && currentEdit.sessionId === sessionId) {
-      const currentDraft = getDraft(draftKey)
-      const tasks = useUploads.getState().tasks
-      const addedFiles = []
-      const blobsToSave = []
-      for (const attachment of currentDraft.attachments) {
-        const meta = {
-          name: attachment.file.name,
-          size: attachment.file.size,
-          isImage: attachment.isImage,
-        }
-        const inlineText = canInlineTextAttachment(meta)
-        const skipUpload = shouldSkipDraftUpload(meta, useOcrModel)
-        const task = tasks[attachment.id]
-        if (!skipUpload && (task?.status !== 'done' || !task.serverId)) {
-          return
-        }
-        addedFiles.push({
-          id: attachment.id,
-          serverId: inlineText ? null : task?.status === 'done' ? task.serverId : null,
-          name: attachment.file.name,
-          size: attachment.file.size,
-          isImage: attachment.isImage,
-          mimeType: resolveMimeType(attachment.file),
-        })
-        blobsToSave.push({ id: attachment.id, blob: attachment.file })
-      }
-      const nextFiles = [...currentEdit.files, ...addedFiles]
-      const nextText = currentDraft.text.trim()
-      if ((!nextText && nextFiles.length === 0) || !ensureApiKey()) {
-        return
-      }
-      if (!editMessage(sessionId, currentEdit.messageId, nextText, nextFiles, blobsToSave)) {
-        return
-      }
-      clearSentDraft(draftKey)
-      cancelUserEdit()
-      stopReadAloud()
-      closeAttachMenu()
-      textareaRef.current?.blur()
-      return
-    }
-
     if (
       !prepareDraftMessage(
-        getDraft(sessionId),
+        getDraft(draftKey),
         useUploads.getState().tasks,
         useOcrModel,
-        videoAllowed
+        videoAllowed,
+        Boolean(activeEdit?.files.length)
       )
     ) {
       return
@@ -633,7 +639,7 @@ const Input = ({
     label: t('attachFile'),
     onClick: () => openPicker('file', fileInputRef.current),
   }
-  const videoAction = videoEntry
+  const videoAction = videoAllowed
     ? {
         key: 'video',
         icon: <IconVideoOutline20 />,
@@ -654,13 +660,14 @@ const Input = ({
           },
         }
       : null
+  const cameraAction = {
+    key: 'camera',
+    icon: <IconCameraOutline20 />,
+    label: t('attachCamera'),
+    onClick: openCamera,
+  }
   const attachActions = [
-    videoAction ?? {
-      key: 'camera',
-      icon: <IconCameraOutline20 />,
-      label: t('attachCamera'),
-      onClick: () => openPicker('camera', cameraInputRef.current),
-    },
+    activeEdit ? cameraAction : (videoAction ?? cameraAction),
     {
       key: 'gallery',
       icon: <IconImageOutline20 />,
@@ -668,6 +675,7 @@ const Input = ({
       onClick: () => openPicker('gallery', albumInputRef.current),
     },
     fileAction,
+    ...(activeEdit && videoAction ? [videoAction] : []),
     ...(callAction ? [callAction] : []),
   ]
 
@@ -823,7 +831,7 @@ const Input = ({
               hidden
               onChange={handleFilesSelected}
             />
-            {videoEntry ? (
+            {videoAllowed ? (
               <input
                 ref={videoInputRef}
                 type="file"
@@ -876,6 +884,7 @@ const Input = ({
             ) : processingAudio ? null : (
               <VoiceButton
                 status={voice.status}
+                mobile={isMobile}
                 disabled={!voice.available}
                 seconds={voice.seconds}
                 onClick={() => {
@@ -960,7 +969,12 @@ const Input = ({
                   </div>
                 ) : null
               ) : null}
-              <div className={clsx(styles.attachGrid, callAction && styles.attachGridWithCall)}>
+              <div
+                className={clsx(
+                  styles.attachGrid,
+                  attachActions.length === 4 && styles.attachGridFourColumns
+                )}
+              >
                 {attachActions.map((item) => (
                   <button
                     key={item.key}

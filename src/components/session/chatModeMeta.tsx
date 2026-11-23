@@ -1,7 +1,12 @@
 import type { ReactNode } from 'react'
 import type { TranslationKey } from '../../i18n/index.js'
 import type { ChatMode } from '../../services/settings.js'
-import { IconBoltOutline16, IconDiamondFill16, IconDocumentOutline16 } from '../base/icons.js'
+import {
+  IconBoltOutline16,
+  IconDiamondFill16,
+  IconDiamondOutline16,
+  IconDocumentOutline16,
+} from '../base/icons.js'
 
 export interface ChatModeMeta {
   value: ChatMode
@@ -9,6 +14,7 @@ export interface ChatModeMeta {
   titleKey: TranslationKey
   hintKey: TranslationKey
   icon: ReactNode
+  outlineIcon: ReactNode
 }
 
 export const CHAT_MODE_OPTIONS: readonly ChatModeMeta[] = [
@@ -18,6 +24,7 @@ export const CHAT_MODE_OPTIONS: readonly ChatModeMeta[] = [
     titleKey: 'welcomeModeTitleFast',
     hintKey: 'chatModeFastHint',
     icon: <IconBoltOutline16 />,
+    outlineIcon: <IconBoltOutline16 />,
   },
   {
     value: 'expert',
@@ -25,6 +32,7 @@ export const CHAT_MODE_OPTIONS: readonly ChatModeMeta[] = [
     titleKey: 'welcomeModeTitleExpert',
     hintKey: 'chatModeExpertHint',
     icon: <IconDiamondFill16 />,
+    outlineIcon: <IconDiamondOutline16 />,
   },
   {
     value: 'rp',
@@ -32,6 +40,7 @@ export const CHAT_MODE_OPTIONS: readonly ChatModeMeta[] = [
     titleKey: 'welcomeModeTitleRp',
     hintKey: 'chatModeRpHint',
     icon: <IconDocumentOutline16 />,
+    outlineIcon: <IconDocumentOutline16 />,
   },
 ]
 

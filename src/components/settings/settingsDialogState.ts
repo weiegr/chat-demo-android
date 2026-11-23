@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { useSettings } from '../../services/settings.js'
+import { dismissKeyboard } from '../sider/mobileSiderState.js'
 
 /** 设置弹窗的分组：通用设置 / 数据管理 */
 export type SettingsSection = 'general' | 'data'
@@ -13,13 +14,19 @@ export const useSettingsDialog = create(() => ({
 export const openSettings = (section: SettingsSection) =>
   useSettingsDialog.setState({ open: true, section })
 
-export const closeSettings = () => useSettingsDialog.setState({ open: false })
+export const closeSettings = () => {
+  dismissKeyboard()
+  useSettingsDialog.setState({ open: false })
+}
 
 /** 没有 API Key 时打开设置并选中 API Key 所在的「数据管理」，返回是否已有 Key */
 export const ensureApiKey = () => {
-  if (useSettings.getState().apiKey) {
+  const { apiKey, apiKeyStorageMode } = useSettings.getState()
+  if (apiKey) {
     return true
   }
-  openSettings('data')
+  if (apiKeyStorageMode !== 'loading') {
+    openSettings('data')
+  }
   return false
 }

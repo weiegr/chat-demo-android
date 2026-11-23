@@ -3,6 +3,7 @@ declare const styles: {
   readonly scrollArea: string
   readonly scrollBottomButton: string
   readonly scroll: string
+  readonly footerSlot: string
   readonly column: string
   readonly editMask: string
 }

@@ -1,23 +1,25 @@
 import clsx from 'clsx'
 import { useTranslate } from '../../i18n/index.js'
-import { IconMicFill16, IconMicOutline16 } from '../base/icons.js'
+import { IconMicFill16, IconMicOutline16, IconVoiceCircleOutline24 } from '../base/icons.js'
 import { Tooltip } from '../base/Tooltip.js'
 import type { VoiceInputStatus } from './useVoiceInput.js'
 import styles from './VoiceButton.module.css'
 
 /**
  * 语音输入按钮。
- * 录音中为两层圆：外层半透明光圈 + 内层实心品牌色；
- * 外层先展开、内层随后放大，之后外层按固定节奏呼吸，与音量无关。
- * 按钮左侧显示「录音中 Ns」，窄屏不展示读秒。
+ * 移动端采用与附件加号成对的 24px 圆形声波图标；录音中为外层呼吸光圈 + 内层品牌蓝圆，
+ * 移动端内层为白色三段声波逐层脉冲，桌面端为实心麦克风。
  */
 export const VoiceButton = ({
   status,
+  mobile = false,
   disabled = false,
   seconds,
   onClick,
 }: {
   status: VoiceInputStatus
+  /** 移动端采用圆形声波样式，与左侧 24px 圆形加号按钮视觉成对 */
+  mobile?: boolean
   /** 非安全上下文中按钮置灰，tooltip 提示录音需要 HTTPS */
   disabled?: boolean
   /** 本次录音已录秒数，录音中显示在按钮左侧 */
@@ -43,6 +45,7 @@ export const VoiceButton = ({
           type="button"
           className={clsx(
             styles.button,
+            mobile && styles.mobileButton,
             recording && styles.recording,
             disabled && styles.disabled
           )}
@@ -56,18 +59,27 @@ export const VoiceButton = ({
           }}
         >
           {recording ? (
-            <span className={styles.active}>
+            <span className={clsx(styles.active, mobile && styles.activeMobile)}>
               <span className={styles.halo} />
               <span className={styles.core} />
               <span className={styles.outline}>
-                <IconMicOutline16 />
+                {mobile ? <IconVoiceCircleOutline24 /> : <IconMicOutline16 />}
               </span>
               <span className={styles.glyph}>
-                <IconMicFill16 />
+                {mobile ? (
+                  <IconVoiceCircleOutline24
+                    showRing={false}
+                    waveClasses={[styles.waveDot, styles.waveInner, styles.waveOuter]}
+                  />
+                ) : (
+                  <IconMicFill16 />
+                )}
               </span>
             </span>
           ) : status === 'transcribing' ? (
-            <span className={styles.loading} />
+            <span className={clsx(styles.loading, mobile && styles.loadingMobile)} />
+          ) : mobile ? (
+            <IconVoiceCircleOutline24 />
           ) : (
             <IconMicOutline16 />
           )}

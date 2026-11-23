@@ -26,6 +26,14 @@ declare const styles: {
   readonly functionRow: string
   readonly toggles: string
   readonly collapsedToggles: string
+  readonly searchToggleSlot: string
+  readonly searchToggleSlotHidden: string
+  readonly searchToggleClip: string
+  readonly searchLabelSwap: string
+  readonly searchLabelText: string
+  readonly searchLabelActive: string
+  readonly searchLabelExitUp: string
+  readonly searchLabelExitDown: string
   readonly toggleLabel: string
   readonly toggle: string
   readonly selected: string
@@ -49,6 +57,7 @@ declare const styles: {
   readonly recentPhotoCheck: string
   readonly recentPhotoCheckActive: string
   readonly attachGrid: string
+  readonly attachGridFourColumns: string
   readonly attachCard: string
   readonly attachCardIcon: string
   readonly attachCardLabel: string

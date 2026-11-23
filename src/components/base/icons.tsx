@@ -739,6 +739,34 @@ export const IconPlusCircleOutline24 = ({ open = false }: { open?: boolean }) =>
   </svg>
 )
 
+/** 移动端输入框右下角圆形声波语音图标：与 IconPlusCircleOutline24 同圆径、同线宽成对呈现 */
+export const IconVoiceCircleOutline24 = ({
+  showRing = true,
+  waveClasses,
+}: {
+  showRing?: boolean
+  waveClasses?: [string, string, string]
+}) => (
+  <svg width={24} height={24} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    {showRing ? <circle cx={12} cy={12} r={9.4} stroke="currentColor" strokeWidth={1.45} /> : null}
+    <circle className={waveClasses?.[0]} cx={8.05} cy={12} r={1.15} fill="currentColor" />
+    <path
+      className={waveClasses?.[1]}
+      d="M10.75 9.4A3.75 3.75 0 0 1 10.75 14.6"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="butt"
+    />
+    <path
+      className={waveClasses?.[2]}
+      d="M14.16 7.4A7.65 7.65 0 0 1 14.16 16.6"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="butt"
+    />
+  </svg>
+)
+
 export const IconLocationOutline16 = () => (
   <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path
@@ -789,6 +817,19 @@ export const IconDiamondFill16 = () => (
   </svg>
 )
 
+/** 专家模式（线性）：用于搜索结果圆形标识，与闪电、文档图标保持统一线宽 */
+export const IconDiamondOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M4.65 2.4H11.35C11.78 2.4 12.18 2.61 12.42 2.97L14.32 5.82C14.54 6.15 14.52 6.59 14.27 6.9L8.56 13.72C8.27 14.07 7.73 14.07 7.44 13.72L1.73 6.9C1.48 6.59 1.46 6.15 1.68 5.82L3.58 2.97C3.82 2.61 4.22 2.4 4.65 2.4Z"
+      stroke="currentColor"
+      strokeWidth={1.35}
+      strokeLinejoin="round"
+    />
+    <path d="M1.85 6.35H14.15" stroke="currentColor" strokeWidth={1.35} strokeLinecap="round" />
+  </svg>
+)
+
 /** RP 模式：风格统一的线性文档图标 */
 export const IconDocumentOutline16 = () => (
   <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -811,6 +852,57 @@ export const IconDocumentOutline16 = () => (
       stroke="currentColor"
       strokeWidth={1.35}
       strokeLinecap="round"
+    />
+  </svg>
+)
+
+/** 返回：搜索页左上角，20px 框内的左向箭头 */
+export const IconBackOutline20 = () => (
+  <svg width={20} height={20} viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M11.9 4.4L6.3 10L11.9 15.6"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
+/** 搜索结果里的文档附件：各类文档共用一个图标，与 RP 模式的文档图标区分开 */
+export const IconFileOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M4.55 1.9H8.6L12.3 5.6V12.55C12.3 13.4 11.62 14.1 10.76 14.1H4.55C3.7 14.1 3 13.4 3 12.55V3.45C3 2.6 3.7 1.9 4.55 1.9Z"
+      stroke="currentColor"
+      strokeWidth={1.3}
+      strokeLinejoin="round"
+    />
+    <path
+      d="M8.35 2.05V5.5H11.95"
+      stroke="currentColor"
+      strokeWidth={1.3}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
+/** 搜索结果里的视频附件：单独一个播放图标 */
+export const IconVideoOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect
+      x={1.7}
+      y={3.4}
+      width={9.1}
+      height={9.2}
+      rx={2.2}
+      stroke="currentColor"
+      strokeWidth={1.3}
+    />
+    <path
+      d="M11.35 6.6L13.7 5.2C14 5.02 14.35 5.22 14.35 5.58V10.4C14.35 10.76 14 10.96 13.7 10.78L11.35 9.38V6.6Z"
+      fill="currentColor"
     />
   </svg>
 )

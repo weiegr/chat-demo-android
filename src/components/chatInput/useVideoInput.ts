@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import {
   addDraftVideoFrames,
   getDraft,
+  getEditDraftKey,
   useDrafts,
   type DraftVideoTranscript,
 } from '../../services/chat/drafts.js'
@@ -20,12 +21,16 @@ import {
   VideoTooLongError,
 } from '../../services/video/frames.js'
 import { showToast } from '../base/toastState.js'
+import { useUserEdit, type ActiveUserEdit } from '../messages/userEditState.js'
 import { ensureApiKey } from '../settings/settingsDialogState.js'
 
 const getModeForVideo = (sessionId: string | null) =>
   sessionId === null
     ? useSettings.getState().chatMode
     : (useChatStore.getState().sessionCache[sessionId]?.mode ?? 'fast')
+
+const getEditForDraft = (draftKey: string | null, edit: ActiveUserEdit | null) =>
+  edit && getEditDraftKey(edit.sessionId, edit.messageId) === draftKey ? edit : null
 
 type Work =
   | { kind: 'frames'; controller: AbortController }
@@ -83,10 +88,24 @@ export const useVideoInput = (draftKey: string | null, sessionId: string | null)
         }
       }
     })
+    const unsubscribeEdit = useUserEdit.subscribe(({ active }, previous) => {
+      const work = current.current
+      if (!work || active === previous.active || !getEditForDraft(draftKey, previous.active)) {
+        return
+      }
+      const stillEditing = getEditForDraft(draftKey, active) !== null
+      if (!stillEditing || work.kind === 'audio') {
+        cancel()
+        if (stillEditing) {
+          showToast({ key: 'videoDraftChanged' })
+        }
+      }
+    })
     return () => {
       unsubscribeSettings()
       unsubscribeChat()
       unsubscribeDrafts()
+      unsubscribeEdit()
       current.current?.controller.abort()
       current.current = null
       releaseVideoAudioSelection(pendingSelection.current)
@@ -98,7 +117,8 @@ export const useVideoInput = (draftKey: string | null, sessionId: string | null)
     if (!canUploadVideo(getModeForVideo(sessionId)) || useChatStore.getState().importingHistory) {
       return false
     }
-    if (current.current || getDraft(draftKey).video) {
+    const edit = getEditForDraft(draftKey, useUserEdit.getState().active)
+    if (current.current || getDraft(draftKey).video || edit?.video) {
       showToast({ key: 'videoLimitOne' })
       return false
     }

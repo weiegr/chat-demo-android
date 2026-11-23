@@ -1,5 +1,6 @@
 import clsx from 'clsx'
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { getImeMotionState, hasNativeImeMotion, subscribeImeMotion } from '../../app/imeMotion.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import { useChatStore } from '../../services/chat/store.js'
@@ -43,6 +44,8 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
   const [transcriptOpen, setTranscriptOpen] = useState(false)
   const panelId = useId()
   const rootRef = useRef<HTMLElement>(null)
+  const stageRef = useRef<HTMLDivElement>(null)
+  const formRef = useRef<HTMLFormElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const orbRef = useRef<HTMLSpanElement>(null)
   const { mic, analyser, hearing, phase, toggleMic, submit, interrupt, close } = useLiveCall(call)
@@ -58,6 +61,90 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
   useEffect(() => {
     rootRef.current?.focus({ preventScroll: true })
   }, [])
+
+  // Android 原生键盘动效：通话页底部输入框与主舞台纯 GPU 上移，不触发 WebView Resize
+  useLayoutEffect(() => {
+    const form = formRef.current
+    const stage = stageRef.current
+    if (!isMobile || !hasNativeImeMotion() || !form || !stage) {
+      return
+    }
+    const SMOOTH_SETTLE_TRANSITION = 'transform 180ms cubic-bezier(0.22, 1, 0.36, 1)'
+    const reducedMotion = () =>
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    let smoothTimer: number | null = null
+
+    const clearSmooth = () => {
+      if (smoothTimer !== null) {
+        window.clearTimeout(smoothTimer)
+        smoothTimer = null
+      }
+      form.style.removeProperty('transition')
+      stage.style.removeProperty('transition')
+    }
+
+    const apply = (shift: number, animating: boolean, smoothSettle = false) => {
+      clearSmooth()
+      if (smoothSettle && !reducedMotion()) {
+        form.style.willChange = 'transform'
+        stage.style.willChange = 'transform'
+        form.style.transition = SMOOTH_SETTLE_TRANSITION
+        stage.style.transition = SMOOTH_SETTLE_TRANSITION
+        form.style.transform =
+          shift > 0.05 ? `translate3d(0, ${(-shift).toFixed(2)}px, 0)` : 'translate3d(0, 0, 0)'
+        stage.style.transform =
+          shift > 0.05
+            ? `translate3d(0, ${(-shift * 0.4).toFixed(2)}px, 0)`
+            : 'translate3d(0, 0, 0)'
+        smoothTimer = window.setTimeout(() => {
+          smoothTimer = null
+          form.style.removeProperty('transition')
+          stage.style.removeProperty('transition')
+          if (shift <= 0.05) {
+            form.style.removeProperty('transform')
+            stage.style.removeProperty('transform')
+            form.style.removeProperty('will-change')
+            stage.style.removeProperty('will-change')
+          }
+        }, 200)
+        return
+      }
+      if (animating) {
+        form.style.willChange = 'transform'
+        stage.style.willChange = 'transform'
+      } else if (shift <= 0.05) {
+        form.style.removeProperty('will-change')
+        stage.style.removeProperty('will-change')
+      }
+      if (shift > 0.05) {
+        form.style.transform = `translate3d(0, ${(-shift).toFixed(2)}px, 0)`
+        stage.style.transform = `translate3d(0, ${(-shift * 0.4).toFixed(2)}px, 0)`
+      } else {
+        form.style.removeProperty('transform')
+        stage.style.removeProperty('transform')
+      }
+    }
+    const initial = getImeMotionState()
+    apply(initial.shift, initial.animating)
+    const unsubscribe = subscribeImeMotion((phase, ime) => {
+      if (phase === 'prepare') {
+        clearSmooth()
+        form.style.willChange = 'transform'
+        stage.style.willChange = 'transform'
+        return
+      }
+      apply(ime.shift, ime.animating, phase === 'end' && ime.smoothSettle)
+    })
+    return () => {
+      unsubscribe()
+      clearSmooth()
+      form.style.removeProperty('transform')
+      form.style.removeProperty('will-change')
+      stage.style.removeProperty('transform')
+      stage.style.removeProperty('will-change')
+    }
+  }, [isMobile])
 
   useEffect(() => {
     const onEscape = (event: KeyboardEvent) => {
@@ -150,7 +237,7 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
         />
       </header>
 
-      <div className={styles.stage}>
+      <div ref={stageRef} className={styles.stage}>
         <div className={styles.orbGroup}>
           <button
             type="button"
@@ -206,6 +293,7 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
       </div>
 
       <form
+        ref={formRef}
         className={sessionStyles.inputContainer}
         onSubmit={(event) => {
           event.preventDefault()

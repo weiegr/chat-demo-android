@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { IconEditOutline16, IconEllipsisOutline16, IconTrashOutline16 } from '../base/icons.js'
 import { renameSession, selectSession } from '../../services/chat/store.js'
@@ -16,11 +16,12 @@ export const SessionItem = memo(function SessionItem({
   session,
   active,
   onDelete,
+  onEditing,
 }: {
   session: SessionSummary
   active: boolean
-  /** 稳定的回调：条目上千条时，内联闭包会让 memo 失效、每次重渲整张列表 */
   onDelete: (session: SessionSummary) => void
+  onEditing: (id: string) => () => void
 }) {
   const t = useTranslate()
   const [editing, setEditing] = useState(false)
@@ -46,6 +47,11 @@ export const SessionItem = memo(function SessionItem({
       window.clearTimeout(longPressResetTimerRef.current)
     },
     []
+  )
+
+  useLayoutEffect(
+    () => (editing ? onEditing(session.id) : undefined),
+    [editing, onEditing, session.id]
   )
 
   if (editing) {

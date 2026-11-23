@@ -54,9 +54,8 @@ export const useMobileViewport = (enabled: boolean) => {
     }
     const viewport = window.visualViewport
     const hasNativeHost = Boolean((window as Window & { AndroidHost?: unknown }).AndroidHost)
-    // Android 原生层通过外层 FrameLayout 真实缩减 WebView 物理高度并托底导航栏安全区，
-    // 100dvh 与原生动画逐帧同步，跳过 JS 改写 --app-viewport-height 以避免键盘收起时因
-    // innerHeight 与 visualViewport 错帧更新引发页面回弹。
+    // Android 原生层保持 WebView 全屏物理尺寸，通过 WindowInsetsAnimation 经 imeMotion
+    // 驱动局部纯 GPU transform，跳过 JS 改写 --app-viewport-height 以避免与原生错帧回弹。
     if (hasNativeHost) {
       return
     }

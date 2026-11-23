@@ -43,11 +43,23 @@
   display: contents;
 }
 
+.footerSlot {
+  display: contents;
+}
+
 @media not all and (min-width: 768px) {
   .container {
     overflow: hidden;
     overflow: clip;
     scrollbar-gutter: auto;
+  }
+
+  .footerSlot {
+    position: relative;
+    z-index: 25;
+    display: block;
+    flex-shrink: 0;
+    width: 100%;
   }
 
   .scrollArea {

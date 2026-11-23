@@ -1,9 +1,31 @@
+.settingsOverlay {
+  /* 桌面端沿用 Modal 遮罩淡入淡出；移动端拆为 ::before 独立遮罩以防污染全屏卡片实心度 */
+}
+
+.settingsOverlayVisible {
+  /* 移动端驱动 ::before 遮罩层透明度 */
+}
+
 .dialog {
   --modal-header-gap: 7px;
   width: 760px;
   height: 500px;
   max-height: calc(100vh - 32px);
   padding: 19px 24px 22px;
+  opacity: 0;
+  transform: translate3d(0, 12px, 0) scale(0.96);
+  will-change: transform, opacity;
+  transition:
+    opacity 0.18s ease-out,
+    transform 0.2s var(--ds-ease-in-out);
+}
+
+.dialogVisible {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+  transition:
+    opacity 0.22s var(--ds-ease-in-out),
+    transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .dialogMain {
@@ -385,7 +407,36 @@
 }
 
 @media not all and (min-width: 768px) {
+  /* 双类提权稳稳压过 Modal.overlayHidden 的 opacity: 0，保留 pointer-events: none，
+     避免父级 opacity 污染整张滑入/滑出的实心设置卡片 */
+  .settingsOverlay.settingsOverlay {
+    background-color: transparent;
+    opacity: 1;
+    transition: none;
+
+    &::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      background-color: rgba(0, 0, 0, 0.24);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+
+      [data-ds-dark-theme] & {
+        background-color: rgba(0, 0, 0, 0.48);
+      }
+    }
+
+    &.settingsOverlayVisible::before {
+      opacity: 1;
+    }
+  }
+
   .dialog {
+    position: relative;
+    z-index: 1;
     align-self: stretch;
     width: 100%;
     max-width: none;
@@ -394,10 +445,21 @@
     padding: calc(12px + var(--safe-top)) 16px 0;
     border-radius: 0;
     background-color: var(--dsw-specific-sidebar-fill);
-    box-shadow: none;
+    opacity: 1;
+    box-shadow: -8px 0 28px rgba(0, 0, 0, 0.14);
+    transform: translate3d(100%, 0, 0);
+    will-change: transform;
+    transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
 
     [data-ds-dark-theme] & {
       background-color: var(--dsw-alias-bg-base);
+      box-shadow: -8px 0 28px rgba(0, 0, 0, 0.42);
+    }
+
+    &.dialogVisible {
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+      transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
     }
 
     > div:first-child {
@@ -420,6 +482,43 @@
     width: 100%;
   }
 
+  .mobileTitleStack {
+    display: grid;
+    place-items: center;
+    min-width: 0;
+    max-width: calc(100% - 88px);
+  }
+
+  .mobileTitleItem {
+    grid-area: 1 / 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition:
+      opacity 0.12s ease-out 0s,
+      transform 0.24s cubic-bezier(0.22, 1, 0.36, 1) 0s;
+  }
+
+  .mobileTitleActive {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    transition:
+      opacity 0.2s cubic-bezier(0.22, 1, 0.36, 1) 0.05s,
+      transform 0.26s cubic-bezier(0.22, 1, 0.36, 1) 0.03s;
+  }
+
+  .mobileTitleExitLeft {
+    opacity: 0;
+    transform: translate3d(-14px, 0, 0);
+    pointer-events: none;
+  }
+
+  .mobileTitleEnterRight {
+    opacity: 0;
+    transform: translate3d(18px, 0, 0);
+    pointer-events: none;
+  }
+
   .mobileBackButton {
     position: absolute;
     left: 0;
@@ -434,9 +533,14 @@
     background-color: var(--dsw-alias-bg-base);
     color: var(--dsw-alias-label-primary);
     cursor: pointer;
+    transition: transform 0.14s ease;
 
     [data-ds-dark-theme] & {
       background-color: var(--dsw-alias-bg-layer-2);
+    }
+
+    &:active {
+      transform: scale(0.92);
     }
 
     svg {
@@ -448,11 +552,66 @@
 
   .dialogMain {
     flex-direction: column;
+    min-height: 0;
+  }
+
+  /* 一级主设置页与二级子页的原生水平推入/视差栈容器 */
+  .mobilePageViewport {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    margin: 0 -16px;
+    overflow: hidden;
+  }
+
+  .mobileMainPage,
+  .mobileSubPage {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    will-change: transform;
+
+    > .content {
+      margin: 0;
+    }
+  }
+
+  .mobileMainPage {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    transition:
+      transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 0.24s ease-out;
+  }
+
+  .mobileMainPagePushed {
+    opacity: 0.68;
+    transform: translate3d(-22%, 0, 0);
+    pointer-events: none;
+  }
+
+  .mobileSubPage {
+    z-index: 2;
+    background-color: var(--dsw-specific-sidebar-fill);
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
+    transform: translate3d(100%, 0, 0);
+    transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+
+    [data-ds-dark-theme] & {
+      background-color: var(--dsw-alias-bg-base);
+      box-shadow: -8px 0 24px rgba(0, 0, 0, 0.42);
+    }
+  }
+
+  .mobileSubPageVisible {
+    transform: translate3d(0, 0, 0);
+    transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .content {
     margin: 0 -16px;
-    padding: 8px 16px calc(24px + var(--safe-bottom));
+    padding: 8px 16px calc(24px + var(--safe-bottom) + var(--ime-settled, 0px));
   }
 
   .mobileDataContent,
@@ -750,6 +909,12 @@
   width: 312px;
   padding: 20px 0 0;
   overflow: hidden;
+  opacity: 0;
+  transform: scale(0.94);
+  will-change: transform, opacity;
+  transition:
+    opacity 0.18s ease-out,
+    transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
 
   > div:first-child {
     justify-content: center;
@@ -757,6 +922,11 @@
     margin-bottom: 0;
     border-bottom: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
   }
+}
+
+.themeModalVisible {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .themeRadioList {
@@ -900,7 +1070,7 @@
 }
 
 .urlSheet {
-  max-height: calc(100dvh - 24px - var(--safe-top));
+  max-height: calc(100dvh - 24px - var(--safe-top) - var(--ime-settled, 0px));
 }
 
 .urlSheetMain {
@@ -1294,6 +1464,16 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .settingsOverlay::before,
+  .dialog,
+  .dialogVisible,
+  .mobileTitleItem,
+  .mobileTitleActive,
+  .mobileBackButton,
+  .mobileMainPage,
+  .mobileSubPage,
+  .mobileSubPageVisible,
+  .themeModal,
   .ttsSheet,
   .locationSheet,
   .urlSheet,
