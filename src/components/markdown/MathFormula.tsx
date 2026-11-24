@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { ensureKatex, type Katex } from '../../services/markdown/katex.js'
+import { normalizeKatexCompat } from '../../services/markdown/katexCompat.js'
 
 /** renderToString 外层包裹的标签，组件自己渲染外层，这里切掉 */
 const KATEX_WRAPPER = {
@@ -32,15 +33,26 @@ const useMathHtml = (input: string, isInline: boolean): MathHtmlResult => {
     if (!katex) {
       return { html: input, renderMode: 'fallback' }
     }
-    try {
+    const render = (source: string) => {
       const [prefix, suffix] = KATEX_WRAPPER[isInline ? 'inline' : 'display']
       const html = katex
-        .renderToString(input, { throwOnError: true, strict: false, displayMode: !isInline })
+        .renderToString(source, { throwOnError: true, strict: false, displayMode: !isInline })
         .slice(prefix.length, -suffix.length)
       const result = { html, renderMode: 'katex' } as const
       previousResultRef.current = result
       return result
+    }
+    try {
+      return render(input)
     } catch {
+      const normalized = normalizeKatexCompat(input)
+      if (normalized !== input) {
+        try {
+          return render(normalized)
+        } catch {
+          // 仍无法解析（如流式输出尚未闭合）时保持原有回退逻辑
+        }
+      }
       return previousResultRef.current ?? { html: input, renderMode: 'fallback' }
     }
   }, [input, isInline, katex])

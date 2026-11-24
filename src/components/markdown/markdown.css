@@ -244,6 +244,8 @@
 .ds-markdown-inline-math {
   display: inline-block;
   vertical-align: middle;
+  overflow-y: hidden;
+  padding-block: 2px;
 }
 
 .ds-markdown > * .ds-markdown-math {
