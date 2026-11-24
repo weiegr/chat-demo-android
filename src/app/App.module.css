@@ -62,6 +62,7 @@
     position: fixed;
     top: var(--app-viewport-top, 0px);
     bottom: auto;
+    height: var(--app-viewport-height, 100%);
     height: var(--app-viewport-height, 100dvh);
     /* 与下层抽屉保持同一底色：搜索展开把 .main 滑出屏幕外时，76vw 右侧与抽屉浑然一体无接缝 */
     background-color: var(--dsw-specific-sidebar-fill);
@@ -78,6 +79,7 @@
   .main[data-sider-dragging='true'],
   .mainPushed,
   .mainSearchPushed {
+    overflow: hidden;
     overflow: clip;
     border-radius: 18px 0 0 18px;
     will-change: transform;

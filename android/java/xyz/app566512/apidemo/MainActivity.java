@@ -43,6 +43,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.webkit.GeolocationPermissions;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -103,6 +104,8 @@ public class MainActivity extends Activity {
     private static final int REQ_GALLERY_PERMISSION = 1003;
     private static final int REQ_LOCATION_PERMISSION = 1004;
     private static final int REQ_GEOLOCATION_PROMPT = 1005;
+    private static long lastRenderCrashAt = 0L;
+    private static int renderCrashCount = 0;
 
     private final ExecutorService mediaExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -266,6 +269,34 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 injectThemeAndDownloadHooks();
+            }
+
+            @Override
+            public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                Log.e("ApiDemoWebView", "WebView render process gone, didCrash="
+                        + (detail != null && detail.didCrash()));
+                if (view == webView) {
+                    if (rootContainer != null) {
+                        rootContainer.removeView(view);
+                    }
+                    view.destroy();
+                    webView = null;
+                }
+                if (isFinishing() || isDestroyed()) {
+                    return true;
+                }
+                long now = System.currentTimeMillis();
+                if (now - lastRenderCrashAt > 5000L) {
+                    renderCrashCount = 0;
+                }
+                lastRenderCrashAt = now;
+                renderCrashCount++;
+                if (renderCrashCount <= 2) {
+                    recreate();
+                } else {
+                    Toast.makeText(MainActivity.this, "页面渲染异常，请重启应用", Toast.LENGTH_LONG).show();
+                }
+                return true;
             }
         });
 

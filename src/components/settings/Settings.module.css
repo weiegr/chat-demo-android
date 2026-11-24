@@ -1070,6 +1070,7 @@
 }
 
 .urlSheet {
+  max-height: calc(100vh - 24px - var(--safe-top) - var(--ime-settled, 0px));
   max-height: calc(100dvh - 24px - var(--safe-top) - var(--ime-settled, 0px));
 }
 
@@ -1115,6 +1116,7 @@
 
 .promptTextarea {
   min-height: 148px;
+  max-height: 46vh;
   max-height: 46dvh;
   resize: vertical;
   overflow-y: auto;
@@ -1439,6 +1441,7 @@
 }
 
 .deleteConfirm {
+  max-height: calc(100vh - 32px);
   max-height: calc(100dvh - 32px);
   overflow-y: auto;
 }

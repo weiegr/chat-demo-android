@@ -85,9 +85,9 @@
 }
 
 .stage {
-  --orb-size: min(220px, 64vw, 52cqh);
+  --orb-size: min(220px, 64vw, 42vh);
   --notebook-size: 34px;
-  --notebook-gap: min(12px, 3.5cqh);
+  --notebook-gap: min(12px, 3vh);
   --orb-center: max(
     calc(var(--orb-size) / 2),
     min(56%, calc(100% - var(--orb-size) / 2 - var(--notebook-gap) - var(--notebook-size)))
@@ -97,6 +97,7 @@
   --ocean-track: rgb(57 123 173 / 23%);
   position: relative;
   min-height: 0;
+  overflow: hidden;
   overflow: clip;
   container-type: size;
 
@@ -107,8 +108,19 @@
 }
 
 .historyOpen .stage {
-  --orb-size: min(118px, 34vw, 31cqh);
+  --orb-size: min(118px, 34vw, 24vh);
   --orb-center: min(78px, 23%);
+}
+
+@supports (height: 1cqh) {
+  .stage {
+    --orb-size: min(220px, 64vw, 52cqh);
+    --notebook-gap: min(12px, 3.5cqh);
+  }
+
+  .historyOpen .stage {
+    --orb-size: min(118px, 34vw, 31cqh);
+  }
 }
 
 .orbGroup {
@@ -258,6 +270,7 @@
 }
 
 .composer {
+  max-height: min(336px, 48vh);
   max-height: min(336px, 48dvh);
 }
 
