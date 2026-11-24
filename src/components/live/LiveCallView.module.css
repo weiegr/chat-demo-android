@@ -261,6 +261,31 @@
   max-height: min(336px, 48dvh);
 }
 
+.call[data-beta-live-ime] {
+  & .header {
+    position: relative;
+    z-index: 2;
+    background-color: var(--dsw-alias-bg-base);
+  }
+
+  & .stage {
+    --orb-size: min(220px, 64vw, max(40px, calc(100cqh - 72px)), 52cqh);
+  }
+
+  &.historyOpen .stage {
+    --orb-size: min(118px, 34vw, 31cqh);
+    --orb-center: max(calc(var(--orb-size) / 2 + 8px), min(78px, 23%));
+  }
+
+  &.historyOpen .history {
+    top: var(
+      --live-history-top,
+      calc(var(--orb-center) + var(--orb-size) / 2 + var(--notebook-gap) + var(--notebook-size))
+    );
+    bottom: var(--live-ime-inset, 0px);
+  }
+}
+
 @media (max-height: 450px) {
   .header {
     padding-block: calc(2px + var(--safe-top)) 2px;

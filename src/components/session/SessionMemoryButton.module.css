@@ -1,0 +1,17 @@
+/* 双类提权压过 IconButton 的悬浮/按压灰底圆圈，点击与悬停均不显示灰色圆圈且图标保持静止 */
+.memoryButton.memoryButton {
+  background-color: transparent;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity var(--ds-transition-duration) var(--ds-ease-in-out);
+
+  &:active:not(:disabled) {
+    background-color: transparent;
+  }
+
+  @media (hover: hover) {
+    &:hover:not(:disabled) {
+      background-color: transparent;
+      opacity: 0.72;
+    }
+  }
+}

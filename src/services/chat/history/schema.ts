@@ -1,3 +1,5 @@
+import { getAudioMimeType, MAX_AUDIO_SECONDS } from '../../audio/format.js'
+import { readRpSummary } from '../rpContext.js'
 import { BackupError, fail } from './errors.js'
 import {
   EXPORT_FORMAT_VERSION,
@@ -85,11 +87,66 @@ const searchResult: Read<SearchResult> = (value) => {
   }
 }
 
+const audioFile = (value: unknown, name: string): NonNullable<FileEntry['api_demo_audio']> => {
+  const item = record(value)
+  const mimeType = getAudioMimeType({ name, type: string(item.mimeType) })
+  const spectrogramId = string(item.spectrogramId)
+  const features = record(item.analysis)
+  const durationMs = count(features.durationMs)
+  const activeMs = count(features.activeMs)
+  const rmsDbfs = number(features.rmsDbfs)
+  const peakDbfs = number(features.peakDbfs)
+  const clippedPercent = number(features.clippedPercent)
+  if (
+    !mimeType ||
+    !spectrogramId ||
+    durationMs === 0 ||
+    durationMs > MAX_AUDIO_SECONDS * 1000 ||
+    activeMs > durationMs ||
+    rmsDbfs < -96 ||
+    rmsDbfs > peakDbfs ||
+    peakDbfs > 0 ||
+    clippedPercent < 0 ||
+    clippedPercent > 100 ||
+    !Array.isArray(features.segments) ||
+    features.segments.length > 16
+  ) {
+    return fail('backupInvalidFiles')
+  }
+  let previousEnd = 0
+  const segments = features.segments.map((value: unknown) => {
+    const segment = record(value)
+    const startMs = count(segment.startMs)
+    const endMs = count(segment.endMs)
+    const text = string(segment.text)
+    if (startMs < previousEnd || endMs <= startMs || endMs > durationMs || text.length > 2_000) {
+      fail('backupInvalidFiles')
+    }
+    previousEnd = endMs
+    return { startMs, endMs, text }
+  })
+  return {
+    spectrogramId,
+    mimeType,
+    analysis: {
+      durationMs,
+      activeMs,
+      rmsDbfs,
+      peakDbfs,
+      clippedPercent,
+      segments,
+      charactersPerMinute: count(features.charactersPerMinute),
+      wordsPerMinute: count(features.wordsPerMinute),
+    },
+  }
+}
+
 const fileEntry: Read<FileEntry> = (value) => {
   const item = record(value)
+  const name = string(item.file_name)
   return {
     id: string(item.id),
-    file_name: string(item.file_name),
+    file_name: name,
     file_size: count(item.file_size),
     token_usage: nullable(count)(item.token_usage),
     inserted_at: time(item.inserted_at),
@@ -98,6 +155,9 @@ const fileEntry: Read<FileEntry> = (value) => {
     width: nullable(count)(item.width),
     height: nullable(count)(item.height),
     ...(typeof item.ocr_text === 'string' ? { ocr_text: item.ocr_text } : {}),
+    ...(item.api_demo_audio !== undefined && {
+      api_demo_audio: audioFile(item.api_demo_audio, name),
+    }),
   }
 }
 
@@ -202,6 +262,8 @@ const fragment: Read<Fragment | null> = (value) => {
 const message: Read<ChatMessage> = (value) => {
   const item = record(value)
   const role = oneOf('USER', 'ASSISTANT')(item.role)
+  const rpSummary =
+    __BETA__ && role === 'ASSISTANT' ? readRpSummary(item.api_demo_rp_summary) : undefined
   const video = role === 'USER' && item.video !== undefined ? record(item.video) : null
   return {
     id: count(item.id),
@@ -221,6 +283,7 @@ const message: Read<ChatMessage> = (value) => {
     accumulated_token_usage: count(item.accumulated_token_usage),
     inserted_at: time(item.inserted_at),
     fragments: list(fragment)(item.fragments).filter((item): item is Fragment => item !== null),
+    ...(rpSummary && { api_demo_rp_summary: rpSummary }),
     ...(video && {
       video: {
         id: string(video.id),
@@ -266,6 +329,7 @@ export const readSessionIndex: Read<SessionIndexEntry[]> = list((value) => {
 
 export const readSessionFile: Read<SessionFile> = (value) => {
   const item = record(value)
+  const memory = item.api_demo_memory === undefined ? undefined : record(item.api_demo_memory)
   return {
     id: sessionId(item.id),
     title: nullable(string)(item.title),
@@ -273,6 +337,16 @@ export const readSessionFile: Read<SessionFile> = (value) => {
     ...(item.mode === 'fast' || item.mode === 'expert' || item.mode === 'rp'
       ? { mode: item.mode }
       : {}),
+    ...(item.origin === 'chat' || item.origin === 'live' ? { origin: item.origin } : {}),
+    ...(memory && {
+      api_demo_memory: {
+        enabled: boolean(memory.enabled),
+        active: boolean(memory.active),
+        ...(memory.processed_user_message_ids !== undefined && {
+          processed_user_message_ids: list(count)(memory.processed_user_message_ids),
+        }),
+      },
+    }),
     current_message_id: count(item.current_message_id),
     inserted_at: time(item.inserted_at),
     updated_at: time(item.updated_at),

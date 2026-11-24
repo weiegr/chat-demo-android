@@ -13,6 +13,7 @@ import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
 import { setChatMode, useSettings, type ChatMode } from '../../services/settings.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
+import { useMobileSider } from '../sider/mobileSiderState.js'
 import { CHAT_MODE_OPTIONS } from './chatModeMeta.js'
 import { MobileHeader } from './MobileHeader.js'
 import styles from './Welcome.module.css'
@@ -929,7 +930,10 @@ export const Welcome = ({ onStartCall }: { onStartCall?: (sessionId: string | nu
       maxHeroLiftRef.current = Math.max(0, hero.offsetTop - 8)
     }
 
+    let lifted = false
+
     const applyShift = (shift: number, animating: boolean, smoothSettle = false) => {
+      lifted = shift > 0.05
       clearSmoothTransition()
       if (smoothSettle && !prefersReducedMotion()) {
         hero.style.willChange = 'transform'
@@ -976,12 +980,18 @@ export const Welcome = ({ onStartCall }: { onStartCall?: (sessionId: string | nu
 
     cacheMaxHeroLift()
     const initial = getImeMotionState()
-    applyShift(initial.shift, initial.animating)
+    if (!useMobileSider.getState().open) {
+      applyShift(initial.shift, initial.animating)
+    }
 
     const unsubscribe = subscribeImeMotion((phase, ime) => {
       if (prewarmTimerRef.current !== null) {
         window.clearTimeout(prewarmTimerRef.current)
         prewarmTimerRef.current = null
+      }
+      // 移动端侧边栏打开期间（如侧栏重命名会话）弹起键盘时，保持右侧露出的欢迎页静止
+      if (useMobileSider.getState().open && !lifted) {
+        return
       }
       if (phase === 'prepare') {
         clearSmoothTransition()
@@ -1069,7 +1079,9 @@ export const Welcome = ({ onStartCall }: { onStartCall?: (sessionId: string | nu
 
   return (
     <div className={styles.container}>
-      {isMobile ? <MobileHeader onTakePhoto={() => cameraShortcutRef.current?.()} /> : null}
+      {isMobile ? (
+        <MobileHeader memorySession={null} onTakePhoto={() => cameraShortcutRef.current?.()} />
+      ) : null}
       <div className={styles.welcome}>
         <div ref={heroRef} className={styles.hero}>
           <div className={styles.greeting}>

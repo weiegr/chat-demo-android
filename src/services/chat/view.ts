@@ -6,7 +6,12 @@ import type {
   WebSearchResult,
   WebSearchToolResultBlock,
 } from '../api/types.js'
-import type { AssistantMessage, ClientToolResultBlock, ThinkingPart } from './types.js'
+import type {
+  AssistantMessage,
+  ClientToolResultBlock,
+  MemoryToolStepBlock,
+  ThinkingPart,
+} from './types.js'
 
 /**
  * 由回复的内容块推导界面需要的结构：思考与工具步骤的时间线、带引用角标的正文、可引用的来源列表。
@@ -80,6 +85,7 @@ export type Step =
   | FindStep
   | ReadLinkStep
   | LocationStep
+  | MemoryToolStepBlock
   | ThinkingStep
   | PreambleStep
 
@@ -300,6 +306,17 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
       })
       return
     }
+    if (block.type === 'memory_tool_step') {
+      flushPreamble()
+      const status =
+        block.status === 'wip' && !streaming
+          ? reply.status === 'stopped'
+            ? 'stopped'
+            : 'failed'
+          : block.status
+      steps.push(status === block.status ? block : { ...block, status })
+      return
+    }
     if (block.type !== 'server_tool_use') {
       return
     }
@@ -452,6 +469,11 @@ export const getAreaTitle = (
   }
   if (last?.type === 'location' && last.status === 'wip') {
     return translate('toolLocationFetchingTitle')
+  }
+  if (last?.type === 'memory_tool_step' && last.status === 'wip') {
+    return translate(
+      last.action === 'search' ? 'toolHistorySearchPending' : 'toolHistoryReadPending'
+    )
   }
   return translate('messageThinking')
 }

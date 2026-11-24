@@ -143,7 +143,11 @@ export const Modal = ({
     >
       <div
         ref={contentRef}
-        className={clsx(styles.content, className)}
+        className={clsx(
+          styles.content,
+          controlled && (visible ? styles.contentVisible : styles.contentHidden),
+          className
+        )}
         role={active ? 'dialog' : undefined}
         aria-modal={active ? 'true' : undefined}
         aria-labelledby={titleId}

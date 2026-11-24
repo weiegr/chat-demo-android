@@ -1,6 +1,7 @@
 import { formatDate } from '../../utils/format.js'
 import * as db from './db.js'
 import { BackupError } from './history/errors.js'
+import { listSessionMemoryStates } from './memoryStorage.js'
 import { commitDraftReplies, replaceHistory, useChatStore } from './store.js'
 import type { Session } from './types.js'
 
@@ -37,8 +38,9 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
       }
     }
     const { exportArchive } = await import('./history/exportArchive.js')
+    const memoryStates = __BETA__ ? await listSessionMemoryStates() : undefined
     const now = new Date()
-    const blob = await exportArchive(readSessions())
+    const blob = await exportArchive(readSessions(), memoryStates)
     return { name: backupFileName(now), blob }
   })
 

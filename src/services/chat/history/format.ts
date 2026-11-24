@@ -1,4 +1,5 @@
 import type { ChatMode } from '../../settings.js'
+import type { AudioAttachmentData } from '../../audio/metadata.js'
 import type { VideoAttachment } from '../types.js'
 
 /**
@@ -34,6 +35,9 @@ export type SessionFile = {
   pinned: boolean
   /** 可选的会话对话模式（fast / expert / rp）；官方归档缺省时按快速模式处理 */
   mode?: ChatMode
+  origin?: 'chat' | 'live'
+  /** API demo 可选的会话记忆状态，已整理的提问引用本归档重新编号后的消息。 */
+  api_demo_memory?: { enabled: boolean; active: boolean; processed_user_message_ids?: number[] }
   /** 用户当前停留的消息，线性化消息树的唯一依据 */
   current_message_id: number
   inserted_at: Iso8601Utc
@@ -67,6 +71,8 @@ export type ChatMessage = {
   inserted_at: Iso8601Utc
   /** 按发生顺序排列 */
   fragments: Fragment[]
+  /** 剧情摘要涵盖当前助手消息所在的祖先路径。 */
+  api_demo_rp_summary?: string
   video?: VideoAttachment & { export_path: string | null }
 }
 
@@ -177,6 +183,8 @@ export type FileEntry = {
   height: number | null
   /** 可选的 OCR 识别纯文本缓存（空串表示已识别但无文字）；官方归档缺省 */
   ocr_text?: string
+  /** Beta 音频分析及其频谱图片关联，官方归档缺省。 */
+  api_demo_audio?: AudioAttachmentData & { mimeType: string }
 }
 
 /** 非图片文件只有元数据，本体不在产物里 */

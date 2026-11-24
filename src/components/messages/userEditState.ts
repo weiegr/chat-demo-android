@@ -38,7 +38,8 @@ export const removeUserEditExistingFile = (fileId: string) => {
       return state
     }
     const video = active.video?.id === fileId ? active.video : undefined
-    const ids = video?.frameIds ?? [fileId]
+    const audio = active.files.find((file) => file.id === fileId)?.audio
+    const ids = video?.frameIds ?? (audio ? [fileId, audio.spectrogramId] : [fileId])
     return {
       active: {
         ...active,

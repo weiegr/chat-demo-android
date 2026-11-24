@@ -9,6 +9,7 @@ import { MessageList } from '../messages/MessageList.js'
 import { useUserEdit } from '../messages/userEditState.js'
 import { getChatModeMeta } from './chatModeMeta.js'
 import { MobileHeader } from './MobileHeader.js'
+import { SessionMemoryButton } from './SessionMemoryButton.js'
 import styles from './SessionView.module.css'
 
 /** 会话页：标题栏（移动端为顶栏）+ 消息列表，输入框吸底 */
@@ -37,11 +38,15 @@ export const SessionView = ({
           title={title}
           mode={mode}
           editing={editing}
+          memorySession={session}
           onTakePhoto={() => cameraShortcutRef.current?.()}
         />
       ) : (
         <div className={styles.header}>
-          <div className={clsx(styles.titleGroup, siderCollapsed && styles.withCollapsedSider)}>
+          <div
+            className={clsx(styles.titleGroup, siderCollapsed && styles.withCollapsedSider)}
+            data-rp-context={__BETA__ && mode === 'rp' ? 'true' : undefined}
+          >
             <div className={styles.title}>{title}</div>
             <button
               type="button"
@@ -56,6 +61,7 @@ export const SessionView = ({
               <span className={styles.modeLabel}>{t(modeMeta.labelKey)}</span>
             </button>
           </div>
+          <SessionMemoryButton session={session} desktop />
         </div>
       )}
       <MessageList

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { formatDate } from '../../utils/format.js'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
 import { isOcrSupportedAttachment, recognizeFileText } from '../api/ocr.js'
@@ -16,6 +17,8 @@ import {
   isRetryableApiError,
 } from '../api/errors.js'
 import { cancelUpload, describeUploadError, uploadAttachment, useUploads } from '../attachments.js'
+import { canAttachAudio } from '../audio/format.js'
+import { getAudioSpectrogramIds } from '../audio/metadata.js'
 import { GeolocationError, getCurrentPosition } from '../geolocation.js'
 import {
   canTranscribeVideo,
@@ -40,6 +43,32 @@ import {
 } from './drafts.js'
 import { isTextAttachment, loadInlineTexts } from './inlineFiles.js'
 import { createLatestReminder } from './latestReminder.js'
+import {
+  captureMemoryRequest,
+  initGlobalMemory,
+  noteMemoryActivity,
+  prependGlobalMemory,
+} from './globalMemory.js'
+import {
+  isMemoryReply,
+  isMemorySession,
+  type MemoryProfile,
+  type MemorySource,
+  type MemoryTurn,
+} from './memoryModel.js'
+import { hasMemorySources, loadMemoryProfile, loadSessionMemory } from './memoryStorage.js'
+import {
+  createMemoryToolTurn,
+  executeMemoryTool,
+  hideMemoryToolResults,
+  isMemoryTool,
+  memoryToolCombination,
+  memoryTools,
+  presentMemoryTools,
+  recallWithFallback,
+  requiresMemoryToolFallback,
+  validateMemoryToolHits,
+} from './memoryTools.js'
 import { autoStartReadAloud } from '../speech/readAloud.js'
 import {
   applyEvent,
@@ -49,12 +78,15 @@ import {
   settleReply,
   toRequestMessages,
 } from './reply.js'
+import { getRpContextOverflow, prepareRpTurn, type RpTurn } from './rpCompaction.js'
+import { actualRpInput, buildRpPrompt, getRpHistoryForFiles } from './rpContext.js'
 import {
   toSessionSummary,
   type AssistantMessage,
   type ClientToolResultBlock,
   type ClientToolUseBlock,
   type FileAttachment,
+  type MemoryToolStepBlock,
   type Message,
   type Session,
   type SessionSummary,
@@ -97,19 +129,21 @@ const buildLocationTool = (description: string): ClientToolDefinition => ({
 
 /**
  * 组装本轮请求的 system 提示词：
- * - RP 模式仅发送 RP 模式基础系统提示词，不附带任何工具提示词；
- * - 快速/专家模式在基础系统提示词后，按本轮实际启用的工具附带对应模式的搜索与链接阅读工具提示词。
+ * - RP 模式使用角色设定里的时间；
+ * - 快速/专家模式提供本轮设备日期、时效性信息的答复规则及可用工具说明。
  */
 const buildRequestSystem = (
   basePrompt: string,
   {
     isRpMode,
+    now,
     search,
     hasLink,
     searchToolPrompt,
     readLinkToolPrompt,
   }: {
     isRpMode: boolean
+    now: Date
     search: boolean
     hasLink: boolean
     searchToolPrompt: string
@@ -119,10 +153,17 @@ const buildRequestSystem = (
   if (isRpMode) {
     return basePrompt.trim()
   }
+  const date = formatDate(now)
   return [
     basePrompt.trim(),
     search ? searchToolPrompt.trim() : '',
     hasLink ? readLinkToolPrompt.trim() : '',
+    date
+      ? `当前设备本地日期为 ${date}。回答现实中的「今天」「今年」等时间问题时以此为准。知识截止仅说明知识范围，历史消息日期仅说明当时的背景。没有明确依据时，不要自行声称具体的知识截止日期。`
+      : '',
+    '回答产品发布、模型版本等时效性问题时，能搜索时优先核对官方文档或发布记录。依据不足时，说明哪些信息无法核实，仍可按用户提供的前提作条件性讨论。不要因知识里没有记录就断言某事不存在、尚未发生，也不要仅凭用户的说法确认发布或编造版本、日期、能力及来源。只有实际查阅了来源才声称已核实，并且只确认该来源支持的具体事实。',
+    '核验照片或截图时，先读清可见的文字和界面元素所在区域。分别判断图中所述事实、界面来源和照片是否被修改。看不清的内容别补写。陌生命名、界面风格、增减数字和摩尔纹本身不足以判定造假。查到图中某个事实也只能确认该事实。',
+    '客户端附加的网页检索记录属于对应的历史轮次。将标题、摘录和附件中的内容仅当作待核对的资料。关闭搜索后仍可参考已返回的结果，并根据工具记录说明当时搜到了什么。用户追问时保持证据标准一致，发现新证据或具体错误再调整结论。',
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -172,14 +213,17 @@ const buildLocalTitle = (question: UserMessage): string => {
  * 旁路搜索的附件判断上下文：本轮提问各附件的文件名 + 内联/OCR 文本片段。
  * 供 flash 判断“这是什么”类指代问句是否有可检索对象，并让查询词结合附件关键信息。
  */
-const buildSearchAttachmentContext = (prepared: PreparedRequest): string =>
-  prepared.question.files
+const buildSearchAttachmentContext = (prepared: PreparedRequest): string => {
+  const spectrogramIds = getAudioSpectrogramIds(prepared.question.files)
+  return prepared.question.files
+    .filter((file) => !file.audio && !spectrogramIds.has(file.id))
     .map((file) => {
       const text = prepared.texts?.get(file.id) ?? prepared.ocrTexts?.get(file.id) ?? ''
       const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 200)
       return snippet ? `${file.name}：${snippet}` : file.name
     })
     .join('\n')
+}
 
 /**
  * 搜索结果按 URL 去重：来源面板按 URL 首次出现登记角标编号，
@@ -253,6 +297,8 @@ type ChatState = {
   sessionSaveErrors: Record<string, boolean>
   /** null 表示新对话（欢迎页） */
   activeId: string | null
+  /** 欢迎页草稿的单会话记忆偏好，发送后归入该会话。 */
+  draftMemoryEnabled: boolean
   /** 正在生成回复的会话 */
   streaming: Record<string, AbortController>
   /**
@@ -260,6 +306,7 @@ type ChatState = {
    * 每帧增量只改这一份数据，整段消息数组与列表组件不再跟着重建。
    */
   draftReplies: Record<string, AssistantMessage>
+  rpCompacting: Record<string, string>
 }
 
 export const useChatStore = create<ChatState>(() => ({
@@ -271,11 +318,15 @@ export const useChatStore = create<ChatState>(() => ({
   sessionLoadErrors: {},
   sessionSaveErrors: {},
   activeId: null,
+  draftMemoryEnabled: true,
   streaming: {},
   draftReplies: {},
+  rpCompacting: {},
 }))
 
 const { getState: get, setState: set } = useChatStore
+
+export const setDraftMemoryEnabled = (enabled: boolean) => set({ draftMemoryEnabled: enabled })
 
 const sortSessions = (sessions: SessionSummary[]) =>
   [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
@@ -297,6 +348,12 @@ const sessionAccess = new Map<string, number>()
 const unsavedSessions = new Set<string>()
 /** 保存失败时保留原件，重试成功后才释放。 */
 const pendingFiles = new Map<string, db.StoredFile[]>()
+const pendingMemoryTurns = new Map<string, MemoryTurn>()
+const pendingMemoryExclusions = new Set<string>()
+/** 通话会话复制了来源会话的上下文时，记忆检索排除该来源会话以免重复召回。 */
+const liveSourceSessions = new Map<string, string>()
+
+export type LiveToolActivity = 'search' | 'read_link' | 'location' | 'memory'
 
 export const loadSessionAttachment = async (sessionId: string, id: string) =>
   pendingFiles.get(sessionId)?.find((file) => file.id === id)?.blob ?? (await db.loadFile(id))
@@ -418,14 +475,22 @@ const persist = (sessionId: string) => {
     }
     const epoch = historyEpoch
     const files = pendingFiles.get(sessionId)
+    const memoryTurn = pendingMemoryTurns.get(sessionId)
+    const memoryExcluded = pendingMemoryExclusions.has(sessionId)
     void db
-      .saveSession(session, files)
+      .saveSession(session, files, memoryTurn, memoryExcluded)
       .then(() => {
         if (epoch !== historyEpoch || !getSession(sessionId)) {
           return
         }
         if (pendingFiles.get(sessionId) === files) {
           pendingFiles.delete(sessionId)
+        }
+        if (pendingMemoryTurns.get(sessionId) === memoryTurn) {
+          pendingMemoryTurns.delete(sessionId)
+        }
+        if (memoryExcluded) {
+          pendingMemoryExclusions.delete(sessionId)
         }
         if (getSession(sessionId) === session) {
           unsavedSessions.delete(sessionId)
@@ -531,7 +596,10 @@ export const initChat = (): Promise<void> => {
   set({ initError: false })
   initTask = (async () => {
     try {
-      const summaries = await db.loadSessionSummaries()
+      const [summaries] = await Promise.all([
+        db.loadSessionSummaries(),
+        __BETA__ ? initGlobalMemory() : undefined,
+      ])
       if (epoch === historyEpoch) {
         set({ ready: true, sessions: sortSessions(summaries) })
       }
@@ -648,6 +716,11 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
     sessionAccess.clear()
     unsavedSessions.clear()
     pendingFiles.clear()
+    pendingMemoryTurns.clear()
+    pendingMemoryExclusions.clear()
+    if (__BETA__) {
+      liveSourceSessions.clear()
+    }
     clearAllDrafts()
     set({
       ready: true,
@@ -657,7 +730,9 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
       sessionLoadErrors: {},
       sessionSaveErrors: {},
       activeId: null,
+      draftMemoryEnabled: true,
       draftReplies: {},
+      rpCompacting: {},
     })
     return summaries.length
   } finally {
@@ -741,6 +816,11 @@ const removeSessionData = async (id: string): Promise<boolean> => {
     sessionAccess.delete(id)
     unsavedSessions.delete(id)
     pendingFiles.delete(id)
+    pendingMemoryTurns.delete(id)
+    pendingMemoryExclusions.delete(id)
+    if (__BETA__) {
+      liveSourceSessions.delete(id)
+    }
     clearDraft(id)
     set((state) => ({
       sessions: state.sessions.filter((session) => session.id !== id),
@@ -834,21 +914,33 @@ export const createLiveSession = (sourceId: string | null): Session | null => {
     }
   }
   const now = Date.now()
-  return {
+  const session: Session = {
     id: createId(),
     title: 'DeepSeek Live',
     mode: 'fast',
+    ...(__BETA__ ? { origin: 'live' } : {}),
     createdAt: now,
     updatedAt: now,
     messages,
   }
+  if (__BETA__ && sourceId) {
+    liveSourceSessions.set(session.id, sourceId)
+    if (liveSourceSessions.size > 32) {
+      const oldest = liveSourceSessions.keys().next().value
+      if (oldest !== undefined) {
+        liveSourceSessions.delete(oldest)
+      }
+    }
+  }
+  return session
 }
 
 /** 通话首轮建立自己的会话，挂断前由通话页接管展示与朗读。 */
 export const sendLiveMessage = async (
   initialSession: Session,
   content: string,
-  controller: AbortController
+  controller: AbortController,
+  onLiveTool?: (activity: LiveToolActivity | null) => void
 ): Promise<AssistantMessage | null> => {
   const sessionId = initialSession.id
   if (getStreamController(sessionId)) {
@@ -885,7 +977,7 @@ export const sendLiveMessage = async (
     insertSession({ ...next, title: session.title + ' · ' + buildLocalTitle(question) }, true)
   }
   persist(sessionId)
-  return streamReply(sessionId, reply, { history, question, live: true }, controller)
+  return streamReply(sessionId, reply, { history, question, live: true, onLiveTool }, controller)
 }
 
 const prepareQuestionDraft = (
@@ -896,15 +988,15 @@ const prepareQuestionDraft = (
   existingFiles: FileAttachment[] = []
 ) => {
   const settings = useSettings.getState()
-  const prepared = prepareDraftMessage(
-    getDraft(draftKey),
-    useUploads.getState().tasks,
-    model === 'deepseek-v4-pro',
-    canUploadVideo(mode, settings),
-    existingFiles.length > 0
-  )
+  const prepared = prepareDraftMessage(getDraft(draftKey), useUploads.getState().tasks, {
+    useOcrModel: model === 'deepseek-v4-pro',
+    videoAllowed: canUploadVideo(mode, settings),
+    audioAllowed: canAttachAudio(mode),
+    existingFiles,
+  })
   if (
     !prepared ||
+    prepared.audioPending ||
     (videoTranscript &&
       (prepared.video?.id !== videoTranscript.videoId || !canTranscribeVideo(mode, settings)))
   ) {
@@ -959,6 +1051,8 @@ export const sendMessage = (
   }
   const { text, files, video, blobs } = prepared
   const now = Date.now()
+  const memoryExcluded =
+    __BETA__ && sessionId === null && mode === 'fast' && !get().draftMemoryEnabled
   if (sessionId === null) {
     const session: Session = {
       id: createId(),
@@ -968,8 +1062,13 @@ export const sendMessage = (
       updatedAt: now,
       messages: [],
       rootMessageId: null,
+      ...(__BETA__ ? { origin: 'chat' } : {}),
     }
     sessionId = session.id
+    if (memoryExcluded) {
+      pendingMemoryExclusions.add(sessionId)
+    }
+    set({ draftMemoryEnabled: true })
     insertSession(session, true)
   }
   const current = getSession(sessionId)
@@ -995,7 +1094,7 @@ export const sendMessage = (
   }))
   persist(sessionId)
   clearSentDraft(targetSessionId)
-  void streamReply(sessionId, reply, { history, question })
+  void streamReply(sessionId, reply, { history, question, recordMemory: !memoryExcluded })
   return true
 }
 
@@ -1082,7 +1181,11 @@ export const editMessage = (
   }))
   persist(sessionId)
   clearSentDraft(draftKey)
-  void streamReply(sessionId, reply, { history: path.slice(0, index), question })
+  void streamReply(sessionId, reply, {
+    history: path.slice(0, index),
+    question,
+    recordMemory: true,
+  })
   return true
 }
 
@@ -1127,6 +1230,7 @@ export const continueReply = (sessionId: string, messageId: string) => {
     thinking: previous.thinking ?? thinking,
     search: mode === 'rp' ? false : (previous.search ?? search),
     status: 'pending',
+    rpContext: undefined,
     stopReason: undefined,
     stopDetails: undefined,
     error: undefined,
@@ -1168,6 +1272,8 @@ type Request = {
   question: UserMessage
   prefix?: AssistantMessage
   live?: boolean
+  recordMemory?: boolean
+  onLiveTool?: (activity: LiveToolActivity | null) => void
 }
 type PreparedRequest = Request & {
   texts?: Map<string, string>
@@ -1265,7 +1371,9 @@ const prepareFiles = async (
   sessionId: string,
   request: Request,
   model: ChatModel,
-  signal: AbortSignal
+  signal: AbortSignal,
+  includeAudio: boolean,
+  useRpContext: boolean
 ): Promise<PreparedRequest> => {
   const epoch = historyEpoch
   // 服务端判定 file_id 失效时会清掉会话里的 serverId，先用最新消息替换请求快照，
@@ -1275,9 +1383,15 @@ const prepareFiles = async (
     (pendingFiles.get(sessionId) ?? []).map((file) => [file.id, file.blob])
   )
   /** 纯文本附件的正文在本地读出后直接并入提问，不再上传为 document */
-  const texts = await loadInlineTexts([...request.history, request.question], pendingBlobs)
+  const fileHistory = useRpContext ? getRpHistoryForFiles(request.history) : request.history
+  const texts = await loadInlineTexts([...fileHistory, request.question], pendingBlobs)
   const apiKey = useSettings.getState().apiKey ?? ''
   const useOcr = model === 'deepseek-v4-pro'
+  const uploadableFiles = ({ files }: UserMessage) => {
+    const ignore = includeAudio ? undefined : getAudioSpectrogramIds(files)
+    return files.filter((file) => !file.audio && !ignore?.has(file.id))
+  }
+  const questionFiles = uploadableFiles(request.question)
   const serverIds = new Map<string, string>()
   const ocrTexts = new Map<string, string>()
   // 停止生成立即生效；上传本身不取消（输入框与其他消息可能共用同一任务），完成后照常写回 serverId
@@ -1287,20 +1401,20 @@ const prepareFiles = async (
 
   if (useOcr) {
     // 收集本轮提问与历史中已缓存的 OCR 文本
-    for (const message of [...request.history, request.question]) {
+    for (const message of [...fileHistory, request.question]) {
       if (message.role !== 'user') {
         continue
       }
-      for (const file of message.files) {
+      for (const file of uploadableFiles(message)) {
         if (file.ocrText !== undefined) {
           ocrTexts.set(file.id, file.ocrText)
         }
       }
     }
-    const ocrTargets = request.question.files.filter(
+    const ocrTargets = questionFiles.filter(
       (file) => isOcrSupportedAttachment(file) && !ocrTexts.has(file.id)
     )
-    const uploadTargets = request.question.files.filter(
+    const uploadTargets = questionFiles.filter(
       (file) => !texts.has(file.id) && !isTextAttachment(file) && !isOcrSupportedAttachment(file)
     )
     const questionTasks = Promise.allSettled([
@@ -1334,8 +1448,8 @@ const prepareFiles = async (
     // 历史轮次中缺失 OCR 文本的图片/文档从新到旧逐个补齐，单条失败静默跳过不阻塞本轮
     const pendingHistoryOcr = new Map<string, FileAttachment>()
     const pendingHistoryUpload = new Map<string, FileAttachment>()
-    for (const [user] of [...getContextRounds(request.history)].reverse()) {
-      for (const file of user.files) {
+    for (const [user] of [...getContextRounds(fileHistory)].reverse()) {
+      for (const file of uploadableFiles(user)) {
         if (texts.has(file.id) || isTextAttachment(file)) {
           continue
         }
@@ -1383,7 +1497,7 @@ const prepareFiles = async (
     }
   } else {
     const uploads = Promise.allSettled(
-      request.question.files
+      questionFiles
         .filter((file) => !texts.has(file.id) && !isTextAttachment(file))
         .map(async (file) => {
           const serverId = await ensureServerId(apiKey, file, pendingBlobs)
@@ -1404,8 +1518,8 @@ const prepareFiles = async (
     }
 
     const pending = new Map<string, FileAttachment>()
-    for (const [user] of [...getContextRounds(request.history)].reverse()) {
-      for (const file of user.files) {
+    for (const [user] of [...getContextRounds(fileHistory)].reverse()) {
+      for (const file of uploadableFiles(user)) {
         if (
           !file.serverId &&
           !serverIds.has(file.id) &&
@@ -1617,6 +1731,23 @@ const streamReply = async (
   const sessionMode = getSession(sessionId)?.mode ?? 'fast'
   const isRpMode = sessionMode === 'rp'
   const model = initial.model ?? resolveModeModel(sessionMode, settingsSnapshot.rpModel)
+  const rpTurn: RpTurn | undefined = __BETA__ && isRpMode ? { summaryAttempted: false } : undefined
+  const requestEpoch = historyEpoch
+  const turnStartedAt = new Date()
+  const includeAudio = canAttachAudio(sessionMode) && model === 'deepseek-flash' && !request.live
+  const session = getSession(sessionId)
+  const canReadMemory = __BETA__ && sessionMode === 'fast' && model === 'deepseek-flash'
+  const memoryEligible =
+    canReadMemory && !request.live && session !== undefined && isMemorySession(session)
+  let memoryProfile: MemoryProfile | undefined
+  let memorySource: MemorySource | undefined
+  let memoryToolTurn: ReturnType<typeof createMemoryToolTurn> | undefined
+  let memoryRequest: CreateMessageRequest | undefined
+  let fallbackContext: string | undefined
+  let fallbackAttempted = false
+  if (memoryEligible) {
+    noteMemoryActivity(sessionId, true)
+  }
   // v4-pro 无原生识图，且服务端不支持 server-side 工具、title 与 latest_reminder 等扩展能力
   const isV4Pro = model === 'deepseek-v4-pro'
   const useOcrForVisual = isV4Pro
@@ -1628,11 +1759,103 @@ const streamReply = async (
   const flush = () => {
     cancelAnimationFrame(frame)
     frame = 0
-    updateReply(sessionId, reply)
+    updateReply(sessionId, __BETA__ ? presentMemoryTools(reply) : reply)
+  }
+  let liveToolActive = false
+  const notifyLiveTool = (activity: LiveToolActivity | null) => {
+    if (!__BETA__ || !request.onLiveTool) {
+      return
+    }
+    liveToolActive = activity !== null
+    request.onLiveTool(activity)
+  }
+  const publishMemoryToolStep = (step: MemoryToolStepBlock) => {
+    if (step.status === 'wip') {
+      notifyLiveTool('memory')
+    }
+    const blocks = [...reply.blocks]
+    const index = blocks.findIndex(
+      (block) => block.type === 'memory_tool_step' && block.id === step.id
+    )
+    if (index < 0) {
+      blocks.push(step)
+    } else {
+      blocks[index] = step
+    }
+    reply = { ...reply, blocks }
+    flush()
+  }
+  const saveRpSummary = (replyId: string, summary: string) => {
+    const active = getSession(sessionId)
+    if (
+      controller.signal.aborted ||
+      requestEpoch !== historyEpoch ||
+      get().importingHistory ||
+      deletingSessions.has(sessionId) ||
+      getStreamController(sessionId) !== controller ||
+      active?.mode !== 'rp'
+    ) {
+      return false
+    }
+    const branch = getVisibleMessages(active)
+    const boundary = branch.findIndex(
+      (message) => message.id === replyId && message.role === 'assistant'
+    )
+    const questionIndex = branch.findIndex((message) => message.id === request.question.id)
+    if (boundary < 0 || boundary >= questionIndex) {
+      return false
+    }
+    updateSession(sessionId, (session) => ({
+      ...session,
+      messages: session.messages.map((message) =>
+        message.id === replyId && message.role === 'assistant'
+          ? { ...message, rpSummary: summary }
+          : message
+      ),
+    }))
+    persist(sessionId)
+    return true
   }
   streamFlushes.set(sessionId, flush)
 
   try {
+    if (canReadMemory) {
+      memoryProfile = await loadMemoryProfile().catch(() => undefined)
+      const memoryExcludeId = liveSourceSessions.get(sessionId) ?? sessionId
+      if (
+        memoryProfile?.enabled &&
+        !request.prefix &&
+        (await hasMemorySources(memoryProfile, memoryExcludeId).catch(() => false))
+      ) {
+        memoryToolTurn = createMemoryToolTurn(memoryExcludeId, memoryProfile.epoch)
+      }
+    }
+    if (memoryEligible) {
+      const savedConsent = request.question.memoryConsent
+      if (
+        memoryProfile?.enabled &&
+        (request.recordMemory || savedConsent?.epoch === memoryProfile.epoch)
+      ) {
+        const source = await loadSessionMemory(sessionId).catch(() => undefined)
+        if (
+          source?.enabled &&
+          (request.recordMemory || savedConsent?.sourceRevision === source.revision)
+        ) {
+          memorySource = source
+          if (request.recordMemory) {
+            const memoryConsent = { epoch: memoryProfile.epoch, sourceRevision: source.revision }
+            updateSession(sessionId, (session) => ({
+              ...session,
+              messages: session.messages.map((message) =>
+                message.role === 'user' && message.id === request.question.id
+                  ? { ...message, memoryConsent }
+                  : message
+              ),
+            }))
+          }
+        }
+      }
+    }
     let toolRound = 0
     /** 旁路搜索注入文本；附件重传重试时沿用首轮结果，不重复搜索 */
     let searchContext: string | undefined
@@ -1641,10 +1864,19 @@ const streamReply = async (
       /** 附件补齐或 OCR 前出错属于预处理失败，主对话请求还没有发出 */
       let preparing = toolRound === 0
       let receivedContent = false
+      let offeredMemory = false
+      let combination: string | undefined
       try {
         if (toolRound === 0) {
           if (!request.live) {
-            prepared = await prepareFiles(sessionId, request, model, controller.signal)
+            prepared = await prepareFiles(
+              sessionId,
+              request,
+              model,
+              controller.signal,
+              includeAudio,
+              Boolean(rpTurn)
+            )
           }
           preparing = false
           // 附件就绪后获取本轮信息；续写沿用原回答快照，重新生成的快照独立保存。
@@ -1652,10 +1884,13 @@ const streamReply = async (
             ? prepared.prefix.latestReminder
             : isV4Pro
               ? undefined
-              : createLatestReminder({
-                  locale: settingsSnapshot.locale,
-                  location: settingsSnapshot.locationEnabled ? settingsSnapshot.location : null,
-                })
+              : createLatestReminder(
+                  {
+                    locale: settingsSnapshot.locale,
+                    location: settingsSnapshot.locationEnabled ? settingsSnapshot.location : null,
+                  },
+                  turnStartedAt
+                )
           reply = { ...reply, latestReminder }
           // 只进草稿槽，收尾时随整段回复一起落盘；这里再写一次是整段会话的重复克隆。
           updateReply(sessionId, reply)
@@ -1748,27 +1983,68 @@ const streamReply = async (
             }
           }
         }
-        const { messages, hasVideoContext } = toRequestMessages(
-          prepared.history,
-          prepared.question,
-          prepared.prefix,
-          initial.thinking ?? false,
-          reply.latestReminder,
-          toolRound > 0 ? reply : undefined,
-          {
+        const currentMemory = memoryProfile?.enabled
+          ? await loadMemoryProfile().catch(() => undefined)
+          : undefined
+        const activeMemory =
+          currentMemory?.enabled && currentMemory.epoch === memoryProfile?.epoch
+            ? currentMemory
+            : undefined
+        const evidenceIsCurrent = Boolean(
+          activeMemory &&
+          (!memoryToolTurn || (await validateMemoryToolHits(memoryToolTurn).catch(() => false)))
+        )
+        const makeMessages = (includeHistory = evidenceIsCurrent) =>
+          toRequestMessages(
+            prepared.history,
+            prepared.question,
+            prepared.prefix,
+            initial.thinking ?? false,
+            reply.latestReminder,
+            toolRound > 0
+              ? memoryToolTurn && !includeHistory
+                ? hideMemoryToolResults(reply)
+                : reply
+              : undefined,
+            {
+              texts: prepared.texts,
+              ocrTexts: prepared.ocrTexts,
+              omitServerTools: isRpMode,
+              omitLatestReminder: isV4Pro,
+              useOcrForVisual,
+              includeVideo: sessionMode === 'fast' && !request.live,
+              includeAudio,
+              searchContext: searchContext ?? (includeHistory ? fallbackContext : undefined),
+            }
+          )
+        const rpPrompt =
+          rpTurn &&
+          buildRpPrompt({
+            history: prepared.history,
+            question: prepared.question,
+            prefix: prepared.prefix,
+            latestReminder: reply.latestReminder,
+            model,
+            thinking: initial.thinking ?? false,
             texts: prepared.texts,
             ocrTexts: prepared.ocrTexts,
-            omitServerTools: isRpMode,
-            omitLatestReminder: isV4Pro,
-            useOcrForVisual,
-            includeVideo: sessionMode === 'fast' && !request.live,
-            searchContext,
-          }
-        )
+          })
+        const { messages, hasVideoContext } = rpPrompt
+          ? { messages: rpPrompt.messages, hasVideoContext: false }
+          : makeMessages()
         const currentSettings = useSettings.getState()
         const { apiKey } = currentSettings
         const modePrompts = getModePrompts(sessionMode, currentSettings, hasVideoContext)
-        const livePrompt = request.live ? currentSettings.fastLivePrompt.trim() : ''
+        const livePrompt = request.live
+          ? [
+              currentSettings.fastLivePrompt.trim(),
+              __BETA__ && memoryToolTurn
+                ? '需要核实过往对话细节时，按可用工具和授权使用历史记录查询。'
+                : '',
+            ]
+              .filter(Boolean)
+              .join('\n')
+          : ''
         const systemPrompt = [modePrompts.systemPrompt.trim(), livePrompt]
           .filter(Boolean)
           .join('\n\n')
@@ -1790,28 +2066,108 @@ const streamReply = async (
         // RP 模式省略服务端 title（避免触发单条 32K 限制），v4-pro 不支持服务端 title，
         // 两者首轮结束后均写本地兜底标题
         const askTitle = titleRequests.has(controller) && serverToolsAllowed
-        const events = streamMessage(
-          apiKey ?? '',
-          {
-            model,
-            system: buildRequestSystem(systemPrompt, {
-              isRpMode,
-              search: searchEnabled,
-              hasLink,
-              searchToolPrompt: modePrompts.searchToolPrompt,
-              readLinkToolPrompt: modePrompts.readLinkToolPrompt,
-            }),
-            messages,
-            thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
-            ...(safety ? { safety_check: safety } : {}),
-            ...(tools.length > 0 ? { tools } : {}),
-            ...(askTitle ? { title: { enabled: true } } : {}),
-          },
-          controller.signal
-        )
+        const baseSystem = buildRequestSystem(systemPrompt, {
+          isRpMode,
+          now: turnStartedAt,
+          search: searchEnabled,
+          hasLink,
+          searchToolPrompt: modePrompts.searchToolPrompt,
+          readLinkToolPrompt: modePrompts.readLinkToolPrompt,
+        })
+        let body: CreateMessageRequest = {
+          model,
+          system: prependGlobalMemory(baseSystem, activeMemory),
+          messages,
+          thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
+          ...(safety ? { safety_check: safety } : {}),
+          ...(tools.length > 0 ? { tools } : {}),
+          ...(askTitle ? { title: { enabled: true } } : {}),
+        }
+        if (rpTurn && rpPrompt) {
+          const ready = await prepareRpTurn({
+            apiKey: apiKey ?? '',
+            body,
+            prompt: rpPrompt,
+            turn: rpTurn,
+            prefillLength: prepared.prefix ? getReplyText(prepared.prefix).length : 0,
+            signal: controller.signal,
+            showCompaction: (active) =>
+              set((state) => ({
+                rpCompacting: active
+                  ? { ...state.rpCompacting, [sessionId]: reply.id }
+                  : Object.fromEntries(
+                      Object.entries(state.rpCompacting).filter(([id]) => id !== sessionId)
+                    ),
+              })),
+            saveSummary: saveRpSummary,
+          })
+          body = ready.body
+          reply = { ...reply, rpContext: ready.sample }
+          flush()
+        }
+        if (
+          memoryToolTurn &&
+          evidenceIsCurrent &&
+          toolRound < MAX_TOOL_ROUNDS &&
+          (memoryToolTurn.searches < 2 || memoryToolTurn.reads < 2)
+        ) {
+          combination = memoryToolCombination(body)
+          if (requiresMemoryToolFallback(combination)) {
+            if (!fallbackAttempted && toolRound === 0 && apiKey) {
+              fallbackAttempted = true
+              const recalled = await recallWithFallback(
+                memoryToolTurn,
+                prepared.question.content,
+                prepared.history
+                  .slice(-2)
+                  .map((message) =>
+                    message.role === 'user' ? message.content : getReplyText(message)
+                  )
+                  .join('\n'),
+                apiKey,
+                controller.signal,
+                publishMemoryToolStep
+              ).catch((error: unknown) => {
+                if (controller.signal.aborted) {
+                  throw error
+                }
+                return undefined
+              })
+              if (recalled && (await validateMemoryToolHits(memoryToolTurn).catch(() => false))) {
+                fallbackContext = recalled.context
+                body.messages = makeMessages().messages
+              }
+              const latest = await loadMemoryProfile().catch(() => undefined)
+              if (!latest?.enabled || latest.epoch !== activeMemory?.epoch) {
+                body.system = baseSystem
+                body.messages = makeMessages(false).messages
+              }
+            }
+          } else if (!fallbackAttempted) {
+            offeredMemory = true
+            body.tools = [...tools, ...memoryTools]
+          }
+        }
+        memoryRequest =
+          memoryEligible && activeMemory && toolRound === 0 && !fallbackContext ? body : undefined
+        const events = streamMessage(apiKey ?? '', body, controller.signal)
         const blockIndexes = new Map<number, number>()
         for await (const event of events) {
           receivedContent ||= event.type === 'content_block_start'
+          if (__BETA__ && event.type === 'content_block_start' && request.onLiveTool) {
+            const { content_block: block } = event
+            if (block.type === 'server_tool_use') {
+              notifyLiveTool(block.input.action === 'read_link' ? 'read_link' : 'search')
+            } else if (block.type === 'tool_use') {
+              if (__BETA__ && isMemoryTool(block.name)) {
+                notifyLiveTool('memory')
+              } else if (block.name === 'get_location') {
+                notifyLiveTool('location')
+              }
+            } else if (block.type === 'text' && liveToolActive) {
+              notifyLiveTool(null)
+            }
+          }
           if (
             event.type === 'message_delta' &&
             (event.delta.stop_reason === 'end_turn' || event.delta.stop_reason === 'max_tokens') &&
@@ -1825,6 +2181,18 @@ const streamReply = async (
             titleRequests.delete(controller)
           }
           reply = applyEvent(reply, event, Date.now(), blockIndexes)
+          if (rpTurn && reply.rpContext) {
+            const usage =
+              event.type === 'message_start'
+                ? event.message.usage
+                : event.type === 'message_delta'
+                  ? event.usage
+                  : undefined
+            const input = usage && actualRpInput(usage)
+            if (input !== undefined) {
+              reply = { ...reply, rpContext: { ...reply.rpContext, inputTokens: input } }
+            }
+          }
           if (document.visibilityState === 'hidden') {
             flush()
           } else {
@@ -1836,10 +2204,17 @@ const streamReply = async (
           reply = settleReply(reply, 'stopped', Date.now())
           break
         }
-        const pendingToolUses = getPendingClientToolUses(reply)
+        const pendingToolUses = rpTurn ? [] : getPendingClientToolUses(reply)
         if (pendingToolUses.length > 0 && toolRound < MAX_TOOL_ROUNDS) {
           for (const toolUse of pendingToolUses) {
-            const resultBlock = await executeClientTool(toolUse, controller.signal)
+            const resultBlock =
+              __BETA__ && isMemoryTool(toolUse.name)
+                ? await executeMemoryTool(
+                    toolUse,
+                    offeredMemory ? memoryToolTurn : undefined,
+                    controller.signal
+                  )
+                : await executeClientTool(toolUse, controller.signal)
             reply = { ...reply, blocks: [...reply.blocks, resultBlock] }
             flush()
           }
@@ -1869,6 +2244,29 @@ const streamReply = async (
           reply = settleReply(reply, 'stopped', Date.now())
           break
         }
+        const overflow = rpTurn && !preparing && getRpContextOverflow(error)
+        if (rpTurn && overflow) {
+          if (!receivedContent && !rpTurn.overflow) {
+            rpTurn.overflow = overflow
+            continue
+          }
+          reply = settleReply(reply, 'error', Date.now(), {
+            kind: 'protocol',
+            message: '',
+            localMessage: { key: 'rpContextTooLong' },
+          })
+          break
+        }
+        if (
+          toolRound === 0 &&
+          !receivedContent &&
+          offeredMemory &&
+          combination &&
+          requiresMemoryToolFallback(combination, error)
+        ) {
+          attempt -= 1
+          continue
+        }
         if (preparing) {
           const statusClass = error instanceof ApiError ? classifyStatus(error.status) : 'other'
           if (
@@ -1897,6 +2295,7 @@ const streamReply = async (
         if (
           toolRound === 0 &&
           attempt < FILE_RETRY_LIMIT &&
+          !rpTurn?.overflow &&
           !receivedContent &&
           reuploadInvalidatedFiles(sessionId, request, error)
         ) {
@@ -1934,12 +2333,36 @@ const streamReply = async (
     streamFlushes.delete(sessionId)
     cancelAnimationFrame(frame)
     // 收尾时把草稿一次性并入会话：整段落盘只有这一次。
-    commitReply(sessionId, reply)
+    const visibleReply = __BETA__ ? presentMemoryTools(reply) : reply
+    commitReply(sessionId, visibleReply)
     set((state) => ({
       streaming: Object.fromEntries(
         Object.entries(state.streaming).filter(([id]) => id !== sessionId)
       ),
     }))
+    if (memoryEligible) {
+      if (
+        memoryProfile?.enabled &&
+        memorySource?.enabled &&
+        prepared.question.content.trim() &&
+        reply.stopReason === 'end_turn' &&
+        isMemoryReply(reply) &&
+        !get().importingHistory &&
+        !deletingSessions.has(sessionId)
+      ) {
+        const turn = {
+          questionId: prepared.question.id,
+          replyId: reply.id,
+          epoch: memoryProfile.epoch,
+          sourceRevision: memorySource.revision,
+        }
+        pendingMemoryTurns.set(sessionId, turn)
+        if (memoryRequest && (memorySource.active || request.history.length === 0)) {
+          captureMemoryRequest(sessionId, turn, memoryProfile, memoryRequest, reply)
+        }
+      }
+      noteMemoryActivity(sessionId, false)
+    }
     persist(sessionId)
   }
   return reply

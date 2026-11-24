@@ -88,6 +88,10 @@
 
 .withCollapsedSider {
   margin-left: 113px;
+
+  &[data-rp-context] {
+    margin-left: 149px;
+  }
 }
 
 .inputContainer {

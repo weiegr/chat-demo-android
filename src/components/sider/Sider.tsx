@@ -8,12 +8,15 @@ import {
   NewChatIcon,
 } from '../base/icons.js'
 import { setSiderCollapsed } from '../../services/settings.js'
-import { newChat, removeSession } from '../../services/chat/store.js'
+import { loadSession } from '../../services/chat/db.js'
+import { isMemorySession } from '../../services/chat/memoryModel.js'
+import { newChat, removeSession, useChatStore } from '../../services/chat/store.js'
 import type { SessionSummary } from '../../services/chat/types.js'
 import { Button } from '../base/Button.js'
 import { IconButton } from '../base/IconButton.js'
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
+import { usePresence } from '../base/usePresence.js'
 import { openChatSearch, useChatSearch } from '../search/chatSearchState.js'
 import { openSettings } from '../settings/settingsDialogState.js'
 import {
@@ -27,17 +30,57 @@ import {
   useMobileSider,
 } from './mobileSiderState.js'
 import { SessionList } from './SessionList.js'
+import { RpContextRing } from '../session/RpContextRing.js'
 import styles from './Sider.module.css'
 
 /** 展开的侧边栏：名称与收起按钮、开启新对话、按时间分组的会话列表、底部设置；移动端放在抽屉里，收起按钮关闭抽屉 */
-export const Sider = memo(function Sider({ mobile = false }: { mobile?: boolean }) {
+export const Sider = memo(function Sider({
+  mobile = false,
+  showRpContext = false,
+}: {
+  mobile?: boolean
+  showRpContext?: boolean
+}) {
   const t = useTranslate()
   const chatSearchOpen = useChatSearch((state) => mobile && state.open)
   const chatSearchPresenting = useChatSearch((state) => mobile && state.presenting)
   const chatSearchClosingToSession = useChatSearch((state) => mobile && state.closingToSession)
   const [deleting, setDeleting] = useState<SessionSummary | null>(null)
   const [deletePending, setDeletePending] = useState(false)
-  const requestDelete = useCallback((session: SessionSummary) => setDeleting(session), [])
+  const lastDeletingRef = useRef<SessionSummary | null>(null)
+  if (deleting) {
+    lastDeletingRef.current = deleting
+  }
+  const deleteTarget = deleting ?? lastDeletingRef.current
+  const cachedDeleteTarget = useChatStore((state) =>
+    deleteTarget && Object.hasOwn(state.sessionCache, deleteTarget.id)
+      ? state.sessionCache[deleteTarget.id]
+      : undefined
+  )
+  const deletePresence = usePresence(deleting !== null, 220)
+  const requestDelete = useCallback((session: SessionSummary) => {
+    if (
+      !__BETA__ ||
+      session.mode !== undefined ||
+      Object.hasOwn(useChatStore.getState().sessionCache, session.id)
+    ) {
+      setDeleting(session)
+      return
+    }
+    void loadSession(session.id)
+      .then((loaded) =>
+        setDeleting(
+          loaded
+            ? { ...session, mode: loaded.mode, origin: loaded.origin ?? session.origin }
+            : session
+        )
+      )
+      .catch(() => setDeleting(session))
+  }, [])
+  const resolvedDeleteTarget = cachedDeleteTarget ?? deleteTarget
+  const showDeleteMemoryHint = Boolean(
+    __BETA__ && resolvedDeleteTarget && isMemorySession(resolvedDeleteTarget)
+  )
 
   return (
     <div
@@ -80,22 +123,25 @@ export const Sider = memo(function Sider({ mobile = false }: { mobile?: boolean 
         )}
       </div>
       {mobile ? null : (
-        <button
-          type="button"
-          className={styles.newChat}
-          onClick={() => {
-            newChat()
-            closeMobileSider()
-          }}
-        >
-          <span className={styles.newChatIcon}>
-            <NewChatIcon />
-          </span>
-          {t('newChat')}
-          <span className={styles.newChatHint} aria-hidden="true">
-            Ctrl+J
-          </span>
-        </button>
+        <div className={styles.newChatRow}>
+          <button
+            type="button"
+            className={styles.newChat}
+            onClick={() => {
+              newChat()
+              closeMobileSider()
+            }}
+          >
+            <span className={styles.newChatIcon}>
+              <NewChatIcon />
+            </span>
+            {t('newChat')}
+            <span className={styles.newChatHint} aria-hidden="true">
+              Ctrl+J
+            </span>
+          </button>
+          {showRpContext ? <RpContextRing /> : null}
+        </div>
       )}
       <SessionList mobile={mobile} onDelete={requestDelete} />
       <div className={styles.bottom}>
@@ -106,9 +152,10 @@ export const Sider = memo(function Sider({ mobile = false }: { mobile?: boolean 
           <span className={styles.settingsLabel}>{t('settings')}</span>
         </button>
       </div>
-      {deleting ? (
+      {deletePresence.mounted && lastDeletingRef.current ? (
         <Modal
           title={t('deleteSessionModalContentTitle')}
+          visible={deletePresence.visible}
           onClose={() => {
             if (!deletePending) {
               setDeleting(null)
@@ -116,13 +163,21 @@ export const Sider = memo(function Sider({ mobile = false }: { mobile?: boolean 
           }}
           footer={
             <>
-              <Button variant="outlined" disabled={deletePending} onClick={() => setDeleting(null)}>
+              <Button
+                variant="outlined"
+                autoFocus={!mobile}
+                disabled={deletePending}
+                onClick={() => setDeleting(null)}
+              >
                 {t('cancel')}
               </Button>
               <Button
                 variant="danger"
-                disabled={deletePending}
+                disabled={deletePending || !deleting}
                 onClick={async () => {
+                  if (!deleting || deletePending) {
+                    return
+                  }
                   setDeletePending(true)
                   try {
                     if (await removeSession(deleting.id)) {
@@ -140,7 +195,11 @@ export const Sider = memo(function Sider({ mobile = false }: { mobile?: boolean 
             </>
           }
         >
-          {t('deleteSessionWithFilesDescription')}
+          {t(
+            showDeleteMemoryHint
+              ? 'deleteSessionWithMemoryDescription'
+              : 'deleteSessionWithFilesDescription'
+          )}
         </Modal>
       ) : null}
     </div>

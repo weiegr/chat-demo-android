@@ -97,14 +97,20 @@
   color: var(--dsw-alias-label-caption);
 }
 
+.newChatRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .newChat {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  flex: 1;
   box-sizing: border-box;
-  width: 100%;
+  min-width: 0;
   height: 40px;
   padding: 0 16px;
   border-radius: 100px;
@@ -170,6 +176,7 @@
 }
 
 .list {
+  box-sizing: border-box;
   height: 100%;
   margin: 0 -2px;
   padding: 0 2px;
@@ -347,10 +354,6 @@
 
   .listWrap {
     margin-top: 4px;
-  }
-
-  .list {
-    padding-bottom: var(--ime-settled, 0px);
   }
 
   .listWrap,

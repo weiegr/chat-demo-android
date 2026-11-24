@@ -7,6 +7,7 @@ declare const styles: {
   readonly searchEntryIcon: string
   readonly searchEntryLabel: string
   readonly searchEntryHint: string
+  readonly newChatRow: string
   readonly newChat: string
   readonly newChatIcon: string
   readonly newChatHint: string

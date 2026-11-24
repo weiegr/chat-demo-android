@@ -21,6 +21,7 @@ import { LiveCallView } from '../components/live/LiveCallView.js'
 import type { LiveCall } from '../components/live/useLiveCall.js'
 import { createSpeechOutput, type SpeechOutput } from '../services/speech/pcmPlayback.js'
 import { MobileHeader } from '../components/session/MobileHeader.js'
+import { RpContextProgress } from '../components/session/RpContextProgress.js'
 import { Welcome } from '../components/session/Welcome.js'
 import { ensureApiKey } from '../components/settings/settingsDialogState.js'
 import { SettingsDialog } from '../components/settings/SettingsDialog.js'
@@ -209,7 +210,7 @@ export const App = () => {
   }
 
   return (
-    <>
+    <RpContextProgress>
       <div ref={frameRef} className={styles.frame}>
         {liveCall ? (
           <LiveCallView
@@ -294,6 +295,6 @@ export const App = () => {
       <SettingsDialog />
       <ImagePreview />
       <Toast />
-    </>
+    </RpContextProgress>
   )
 }

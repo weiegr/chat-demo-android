@@ -53,6 +53,7 @@ import { dismissKeyboard } from '../sider/mobileSiderState.js'
 import { DragMask, useFileDrop } from './DragMask.js'
 import { showToast } from '../base/toastState.js'
 import { ACCEPT, useUploads } from '../../services/attachments.js'
+import { AUDIO_ACCEPT, canAttachAudio, MAX_AUDIO_SECONDS } from '../../services/audio/format.js'
 import {
   cancelUserEdit,
   removeUserEditExistingFile,
@@ -62,6 +63,7 @@ import {
 import { ChatModeToggles } from './ChatModeToggles.js'
 import { ChatTextarea } from './ChatTextarea.js'
 import { DraftAttachments } from './DraftAttachments.js'
+import { useAudioInput } from './useAudioInput.js'
 import { useVoiceInput } from './useVoiceInput.js'
 import { useVideoInput } from './useVideoInput.js'
 import { VoiceButton } from './VoiceButton.js'
@@ -148,8 +150,19 @@ const Input = ({
   const videoAllowed = useSettings((settings) => canUploadVideo(activeMode, settings))
   const videoAudioEnabled = useSettings((settings) => canTranscribeVideo(activeMode, settings))
   const video = useVideoInput(draftKey, sessionId)
+  const audioAllowed = canAttachAudio(activeMode)
+  const audio = useAudioInput(draftKey, sessionId)
+  const audioBlocked =
+    !audioAllowed &&
+    (attachments.some((file) => file.audio) || activeEdit?.files.some((file) => file.audio))
+  const audioInputFailure =
+    audio.failure && attachments.some((item) => item.id === audio.failure?.id)
+      ? audio.failure
+      : null
   const videoBlocked = !videoAllowed && Boolean(draft.video)
-  const audioFailed = videoAudioEnabled && draft.video && video.audioFailureId === draft.video.id
+  const videoAudioFailed =
+    videoAudioEnabled && draft.video && video.audioFailureId === draft.video.id
+  const draftOptions = { useOcrModel, videoAllowed, audioAllowed, existingFiles: activeEdit?.files }
 
   useEffect(() => {
     if (!useOcrModel && attachments.length > 0) {
@@ -158,14 +171,7 @@ const Input = ({
   }, [useOcrModel, attachments.length, draftKey])
 
   const draftReady = useUploads(
-    (state) =>
-      prepareDraftMessage(
-        draft,
-        state.tasks,
-        useOcrModel,
-        videoAllowed,
-        Boolean(activeEdit?.files.length)
-      ) !== null
+    (state) => prepareDraftMessage(draft, state.tasks, draftOptions) !== null
   )
   const streaming = useChatStore(
     (state) => sessionId !== null && Object.hasOwn(state.streaming, sessionId)
@@ -431,7 +437,13 @@ const Input = ({
     if (files.length === 0 || useChatStore.getState().importingHistory || !ensureApiKey()) {
       return
     }
-    const error = addDraftFiles(draftKey, files, useSettings.getState().apiKey ?? '', useOcrModel)
+    const error = addDraftFiles(
+      draftKey,
+      files,
+      useSettings.getState().apiKey ?? '',
+      useOcrModel,
+      audioAllowed
+    )
     if (error) {
       showToast(error)
     }
@@ -571,13 +583,15 @@ const Input = ({
 
   // 移动端录音时用频谱替代输入框内容
   const recording = voice.status === 'recording'
-  const processingAudio = video.status !== null && video.status.phase !== 'frames'
+  const processingAudio =
+    audio.status !== null || (video.status !== null && video.status.phase !== 'frames')
 
   // 排队、上传中或上传失败的附件都留在输入框，全部上传成功后才能发送
   const canSend =
     !importingHistory &&
     !streaming &&
     voice.status === 'idle' &&
+    audio.status === null &&
     video.status === null &&
     draftReady
 
@@ -607,30 +621,25 @@ const Input = ({
     return true
   }
 
-  const send = () => {
+  const sendWithMedia = async (skipVideoDialogue = false) => {
     if (
       useChatStore.getState().importingHistory ||
+      (sessionId !== null && Boolean(useChatStore.getState().streaming[sessionId])) ||
       voice.status !== 'idle' ||
+      audio.isProcessing() ||
       video.isProcessing()
     ) {
       return
     }
-    if (
-      !prepareDraftMessage(
-        getDraft(draftKey),
-        useUploads.getState().tasks,
-        useOcrModel,
-        videoAllowed,
-        Boolean(activeEdit?.files.length)
-      )
-    ) {
+    if (!prepareDraftMessage(getDraft(draftKey), useUploads.getState().tasks, draftOptions)) {
       return
     }
     // 文本与上传完成态由提交动作读取最新快照，不使用上一次渲染的草稿。
-    if (ensureApiKey()) {
-      void video.send(submitDraft)
+    if (ensureApiKey() && (await audio.prepare())) {
+      await video.send(submitDraft, skipVideoDialogue)
     }
   }
+  const send = () => void sendWithMedia()
 
   const hasNativeGallery = Boolean(getAndroidHost())
   const fileAction = {
@@ -718,6 +727,30 @@ const Input = ({
           onRemove={removeFile}
           onRemoveExisting={removeUserEditExistingFile}
         />
+        {audio.status ? (
+          <div className={styles.videoStatus}>
+            <span role="status">
+              {audio.status.phase === 'analyzing'
+                ? t('audioAnalyzing', { name: audio.status.name })
+                : t('audioTranscribing', {
+                    name: audio.status.name,
+                    current: audio.status.completed + 1,
+                    count: audio.status.total,
+                  })}
+            </span>
+            <button type="button" className={styles.videoAction} onClick={audio.cancel}>
+              {t('cancel')}
+            </button>
+          </div>
+        ) : audioInputFailure ? (
+          <div className={styles.videoStatus} role="status">
+            {t(audioInputFailure.code, {
+              name: audioInputFailure.name,
+              seconds: MAX_AUDIO_SECONDS,
+            })}
+          </div>
+        ) : null}
+        {audioBlocked ? <div className={styles.videoStatus}>{t('audioEnableToSend')}</div> : null}
         {video.status ? (
           <div className={styles.videoStatus}>
             <span role="status">
@@ -733,7 +766,7 @@ const Input = ({
               {t('cancel')}
             </button>
           </div>
-        ) : audioFailed ? (
+        ) : videoAudioFailed ? (
           <div className={styles.videoStatus}>
             <span role="status">{t('videoAudioFailed')}</span>
             <div className={styles.videoActions}>
@@ -749,7 +782,7 @@ const Input = ({
                 type="button"
                 className={styles.videoAction}
                 disabled={!canSend}
-                onClick={() => void video.send(submitDraft, true)}
+                onClick={() => void sendWithMedia(true)}
               >
                 {t('videoAudioSendVisuals')}
               </button>
@@ -820,7 +853,7 @@ const Input = ({
                 icon={<IconPaperclipOutline16 />}
                 tooltip={t('uploadFile')}
                 disabled={importingHistory}
-                onClick={() => ensureApiKey() && fileInputRef.current?.click()}
+                onClick={fileAction.onClick}
               />
             )}
             <input
@@ -857,7 +890,7 @@ const Input = ({
               type="file"
               multiple
               hidden
-              accept={ACCEPT}
+              accept={audioAllowed ? `${ACCEPT},${AUDIO_ACCEPT}` : ACCEPT}
               onChange={handleFilesSelected}
             />
             {streaming && sessionId ? (
@@ -891,6 +924,7 @@ const Input = ({
                   if (
                     voice.status !== 'idle' ||
                     (!useChatStore.getState().importingHistory &&
+                      !audio.isProcessing() &&
                       !video.isProcessing() &&
                       ensureApiKey())
                   ) {

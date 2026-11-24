@@ -119,13 +119,7 @@ const PROMPT_TARGET_CONFIG: Record<PromptTarget, PromptConfig> = {
 const MODE_PROMPT_GROUPS: { main: PromptTarget; tools: PromptTarget[] }[] = [
   {
     main: 'fastSystem',
-    tools: [
-      'fastSearchTool',
-      'fastReadLinkTool',
-      'fastLocationTool',
-      'fastVideo',
-      'fastLive',
-    ],
+    tools: ['fastSearchTool', 'fastReadLinkTool', 'fastLocationTool', 'fastVideo', 'fastLive'],
   },
   {
     main: 'expertSystem',
@@ -160,6 +154,7 @@ export const PromptEditorModal = ({
   }, [target])
 
   const sheetPresence = usePresence(target !== null && isMobile, 280)
+  const modalPresence = usePresence(target !== null && !isMobile, 220)
   const isDefault = draft === config.defaultValue
 
   const saveAndClose = () => {
@@ -214,13 +209,14 @@ export const PromptEditorModal = ({
     )
   }
 
-  if (!target) {
+  if (!modalPresence.mounted) {
     return null
   }
 
   return (
     <Modal
       title={t(config.titleKey)}
+      visible={modalPresence.visible}
       className={styles.promptModal}
       onClose={onClose}
       footer={
@@ -228,7 +224,7 @@ export const PromptEditorModal = ({
           <Button variant="outlined" size="m" onClick={onClose}>
             {t('cancel')}
           </Button>
-          <Button variant="primary" size="m" onClick={saveAndClose}>
+          <Button variant="primary" size="m" disabled={target === null} onClick={saveAndClose}>
             {t('confirm')}
           </Button>
         </>

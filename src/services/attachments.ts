@@ -3,6 +3,7 @@ import type { LinkedMessage, TranslationMessage } from '../i18n/index.js'
 import { uploadFile } from './api/client.js'
 import { classifyApiError, getUploadErrorInfo, isRetryableApiError } from './api/errors.js'
 import type { FilePurpose } from './api/types.js'
+import { getAudioMimeType, MAX_AUDIO_MB } from './audio/format.js'
 import { ACCEPT_FILE_EXTS } from './uploadExts.js'
 
 /** 允许上传的扩展名，按扩展名白名单过滤，清单见 uploadExts.ts */
@@ -43,13 +44,19 @@ const getMaxSizeMB = (file: File) =>
     : MAX_SIZE_MB
 
 /** 添加前校验：格式 → 大小 → 数量，任一不满足即整批不添加 */
-export const validateFiles = (files: File[], currentCount: number): TranslationMessage | null => {
-  if (files.some((file) => !isAcceptedExt(file.name))) {
+export const validateFiles = (
+  files: File[],
+  currentCount: number,
+  audioAllowed = false
+): TranslationMessage | null => {
+  const isAcceptedAudio = (file: File) => audioAllowed && getAudioMimeType(file) !== undefined
+  if (files.some((file) => !isAcceptedExt(file.name) && !isAcceptedAudio(file))) {
     return { key: 'uploadUnsupportedFormat' }
   }
-  const oversized = files.find((file) => file.size > getMaxSizeMB(file) * 1024 * 1024)
+  const sizeLimit = (file: File) => (isAcceptedAudio(file) ? MAX_AUDIO_MB : getMaxSizeMB(file))
+  const oversized = files.find((file) => file.size > sizeLimit(file) * 1024 * 1024)
   if (oversized) {
-    return { key: 'uploadMaxMBSize', params: { size: getMaxSizeMB(oversized) } }
+    return { key: 'uploadMaxMBSize', params: { size: sizeLimit(oversized) } }
   }
   if (currentCount + files.length > MAX_COUNT) {
     return { key: 'uploadMaxFiles', params: { count: MAX_COUNT } }

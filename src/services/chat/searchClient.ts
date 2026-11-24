@@ -1,24 +1,40 @@
-import { hasPersistentStorage, onSessionChange } from './db.js'
+import { hasPersistentStorage, onMemoryChange, onSessionChange } from './db.js'
+import type { MemorySearchHit } from './memorySearch.js'
 import type { ChatSearchHit } from './search.js'
-import type { SearchRequest, SearchResponse } from './searchIndex.js'
+import type { SearchRequest, SearchResponse, SearchResults } from './searchIndex.js'
 
 let searchWorker: Worker | null | undefined
 let searchQueue = Promise.resolve()
 let revision = 0
-let resetIndex = true
-const changedIds = new Set<string>()
+const indexes = {
+  chat: { reset: true, changedIds: new Set<string>() },
+  memory: { reset: true, changedIds: new Set<string>() },
+}
 const listeners = new Set<() => void>()
 
 onSessionChange((id) => {
-  if (id === null) {
-    resetIndex = true
-    changedIds.clear()
-  } else if (!resetIndex) {
-    changedIds.add(id)
+  for (const index of Object.values(indexes)) {
+    if (id === null) {
+      index.reset = true
+      index.changedIds.clear()
+    } else if (!index.reset) {
+      index.changedIds.add(id)
+    }
   }
   revision += 1
   for (const listener of listeners) {
     listener()
+  }
+})
+
+onMemoryChange((change, sessionId) => {
+  if (change === 'sources') {
+    if (sessionId === undefined) {
+      indexes.memory.reset = true
+      indexes.memory.changedIds.clear()
+    } else if (!indexes.memory.reset) {
+      indexes.memory.changedIds.add(sessionId)
+    }
   }
 })
 
@@ -46,7 +62,7 @@ const getSearchWorker = async () => {
   return searchWorker
 }
 
-const queryWorker = (worker: Worker, request: SearchRequest): Promise<ChatSearchHit[]> =>
+const queryWorker = (worker: Worker, request: SearchRequest): Promise<SearchResults> =>
   new Promise((resolve, reject) => {
     const cleanup = () => {
       worker.removeEventListener('message', onMessage)
@@ -55,8 +71,8 @@ const queryWorker = (worker: Worker, request: SearchRequest): Promise<ChatSearch
     }
     const onMessage = ({ data }: MessageEvent<SearchResponse>) => {
       cleanup()
-      if ('hits' in data) {
-        resolve(data.hits)
+      if (!('error' in data)) {
+        resolve(data)
       } else {
         reject(new Error(data.error))
       }
@@ -78,14 +94,26 @@ const queryWorker = (worker: Worker, request: SearchRequest): Promise<ChatSearch
   })
 
 /** 串行消费写入变更。连续输入时，排队中已过期的查询会在读库前跳过。 */
-export const queryChatHistory = (query: string, signal: AbortSignal): Promise<ChatSearchHit[]> => {
+const queryIndex = (
+  scope: SearchRequest['scope'],
+  query: string,
+  signal: AbortSignal,
+  excludeId?: string
+) => {
   const task = searchQueue.then(async () => {
     signal.throwIfAborted()
     const worker = await getSearchWorker()
     signal.throwIfAborted()
-    const request: SearchRequest = { query, reset: resetIndex, changedIds: [...changedIds] }
-    resetIndex = false
-    changedIds.clear()
+    const index = indexes[scope]
+    const request: SearchRequest = {
+      scope,
+      query,
+      excludeId,
+      reset: index.reset,
+      changedIds: [...index.changedIds],
+    }
+    index.reset = false
+    index.changedIds.clear()
     try {
       if (worker) {
         try {
@@ -93,13 +121,16 @@ export const queryChatHistory = (query: string, signal: AbortSignal): Promise<Ch
         } catch {
           worker.terminate()
           searchWorker = null
+          indexes.chat.reset = true
+          indexes.memory.reset = true
+          request.reset = true
         }
       }
-      const { querySearchIndex } = await import('./searchIndex.js')
-      return await querySearchIndex(request)
+      const { runSearchIndex } = await import('./searchIndex.js')
+      return await runSearchIndex(request)
     } catch (error) {
-      resetIndex = true
-      changedIds.clear()
+      index.reset = true
+      index.changedIds.clear()
       throw error
     }
   })
@@ -108,4 +139,22 @@ export const queryChatHistory = (query: string, signal: AbortSignal): Promise<Ch
     () => {}
   )
   return task
+}
+
+export const queryChatHistory = async (
+  query: string,
+  signal: AbortSignal
+): Promise<ChatSearchHit[]> => {
+  const result = await queryIndex('chat', query, signal)
+  return 'hits' in result ? result.hits : []
+}
+
+export const queryMemoryHistory = async (
+  query: string,
+  signal: AbortSignal,
+  excludeId?: string
+): Promise<MemorySearchHit[]> => {
+  const result = await queryIndex('memory', query, signal, excludeId)
+  signal.throwIfAborted()
+  return 'memoryHits' in result ? result.memoryHits : []
 }

@@ -8,6 +8,21 @@ declare const styles: {
   readonly navItem: string
   readonly navItemActive: string
   readonly content: string
+  readonly desktopSubPanel: string
+  readonly desktopSubHeader: string
+  readonly desktopBackButton: string
+  readonly desktopSubTitle: string
+  readonly desktopSubScroll: string
+  readonly desktopMemoryAlert: string
+  readonly memoryFileDesktop: string
+  readonly memoryFileDesktopBody: string
+  readonly memoryDesktopStatus: string
+  readonly memoryDesktopFooter: string
+  readonly memoryDesktopDelete: string
+  readonly memoryDocCard: string
+  readonly memoryEmptyState: string
+  readonly memoryEmptyIcon: string
+  readonly memoryDocument: string
   readonly mobileSubHeader: string
   readonly mobileTitleStack: string
   readonly mobileTitleItem: string
@@ -20,6 +35,7 @@ declare const styles: {
   readonly mobileMainPagePushed: string
   readonly mobileSubPage: string
   readonly mobileSubPageVisible: string
+  readonly mobileSubPagePushed: string
   readonly mobileDataContent: string
   readonly mobileLocationContent: string
   readonly mobileSubActionRow: string

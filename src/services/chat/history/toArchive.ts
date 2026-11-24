@@ -1,7 +1,14 @@
 import type { ServerToolUseBlock } from '../../api/types.js'
 import { getVisibleMessages, normalizeSession } from '../branches.js'
 import { describeReply } from '../describe.js'
-import type { AssistantMessage, Message, ReplyBlock, Session, UserMessage } from '../types.js'
+import type {
+  AssistantMessage,
+  Message,
+  ReplyBlock,
+  Session,
+  SessionMemoryState,
+  UserMessage,
+} from '../types.js'
 import { fail } from './errors.js'
 import type {
   ChatMessage,
@@ -32,11 +39,12 @@ const userFragments = (message: UserMessage, exportOriginal: ExportOriginal): Fr
       file_size: file.size,
       token_usage: null,
       inserted_at: iso(message.createdAt),
-      export_path: isImage ? exportOriginal(file) : null,
+      export_path: isImage || file.audio ? exportOriginal(file) : null,
       is_image: isImage,
       width: null,
       height: null,
       ...(file.ocrText !== undefined ? { ocr_text: file.ocrText } : {}),
+      ...(file.audio && { api_demo_audio: { ...file.audio, mimeType: file.mimeType } }),
     }
   })
   return [
@@ -228,7 +236,11 @@ const numberMessages = (messages: Message[]) => {
   return { ordered, ids }
 }
 
-export const toSessionFile = (original: Session, exportOriginal: ExportOriginal): SessionFile => {
+export const toSessionFile = (
+  original: Session,
+  exportOriginal: ExportOriginal,
+  memory?: SessionMemoryState
+): SessionFile => {
   const session = normalizeSession(original)
   const { ordered, ids } = numberMessages(session.messages)
   const id = (message: Message) => ids.get(message.id) ?? fail('backupInvalidBranches')
@@ -254,18 +266,36 @@ export const toSessionFile = (original: Session, exportOriginal: ExportOriginal)
       accumulated_token_usage: message.role === 'user' ? 0 : contextTokens(message),
       inserted_at: iso(message.createdAt),
       fragments:
-        message.role === 'user' ? userFragments(message, exportOriginal) : assistantFragments(message),
-      ...(message.role === 'user' && message.video && {
-        video: { ...message.video, export_path: exportOriginal(message.video) },
+        message.role === 'user'
+          ? userFragments(message, exportOriginal)
+          : assistantFragments(message),
+      ...(__BETA__ && message.role === 'assistant' && message.rpSummary && {
+        api_demo_rp_summary: message.rpSummary,
       }),
+      ...(message.role === 'user' &&
+        message.video && {
+          video: { ...message.video, export_path: exportOriginal(message.video) },
+        }),
     }
   })
   const current = getVisibleMessages(session).at(-1)
+  const processed = memory?.processed?.flatMap((questionId) => {
+    const archivedId = ids.get(questionId)
+    return archivedId === undefined ? [] : [archivedId]
+  })
   return {
     id: session.id,
     title: session.title || null,
     pinned: false,
     ...(session.mode ? { mode: session.mode } : {}),
+    ...(session.origin ? { origin: session.origin } : {}),
+    ...(memory && {
+      api_demo_memory: {
+        enabled: memory.enabled,
+        active: memory.active,
+        ...(processed?.length ? { processed_user_message_ids: processed } : {}),
+      },
+    }),
     // 格式要求非空；空会话没有消息可指向，写 0。
     current_message_id: current ? id(current) : 0,
     inserted_at: iso(session.createdAt),

@@ -13,8 +13,10 @@ const BINARY_USER_DATA_EXTS = new Set(['xlsx', 'xls', 'epub', 'mobi'])
 /** 与 user_data 的文本内容上限一致，超过就退回上传，避免把超长文本塞进请求 */
 const MAX_INLINE_BYTES = 8 * 1024 * 1024
 
-export const isTextAttachment = (file: Pick<FileAttachment, 'name' | 'isImage'>): boolean => {
-  if (file.isImage) {
+export const isTextAttachment = (
+  file: Pick<FileAttachment, 'name' | 'isImage' | 'audio'>
+): boolean => {
+  if (file.isImage || file.audio) {
     return false
   }
   const ext = getFileExt(file.name)
@@ -23,7 +25,7 @@ export const isTextAttachment = (file: Pick<FileAttachment, 'name' | 'isImage'>)
 
 /** 满足本地内联条件的纯文本附件：无需经 Files API 上传，发送时直接读出正文并入提问 */
 export const canInlineTextAttachment = (
-  file: Pick<FileAttachment, 'name' | 'size' | 'isImage'>
+  file: Pick<FileAttachment, 'name' | 'size' | 'isImage' | 'audio'>
 ): boolean => isTextAttachment(file) && file.size > 0 && file.size <= MAX_INLINE_BYTES
 
 /**

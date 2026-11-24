@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useRef } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef } from 'react'
 import { useReversibleProgress } from './useReversibleProgress.js'
 import styles from './icons.module.css'
 
@@ -14,17 +14,142 @@ export const IconPhoneOutline20 = () => (
   </svg>
 )
 
-export const IconNotebookOutline20 = () => (
-  <svg width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-    <rect x={5} y={3} width={15} height={18} rx={2.5} stroke="currentColor" strokeWidth={1.65} />
-    <path
-      d="M3 7h4M3 12h4m-4 5h4m3-9h6m-6 4h6"
-      stroke="currentColor"
-      strokeWidth={1.65}
-      strokeLinecap="round"
-    />
-  </svg>
-)
+const SLASH_DURATION_MS = 340
+const SLASH_EASE_DECAY = 6.5
+const SLASH_EASE_NORM = 1 - Math.pow(2, -SLASH_EASE_DECAY)
+
+/** 归一化指数缓出：斜线起笔迅捷、末端平滑减速，呈现鲜明的由快到慢视觉效果 */
+const easeOutExpo = (t: number) =>
+  t >= 1 ? 1 : (1 - Math.pow(2, -SLASH_EASE_DECAY * t)) / SLASH_EASE_NORM
+
+const prefersReducedMotion = () =>
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+/**
+ * 笔记本图标：保持图标本体静止，仅斜杠与同步 SVG 镂空断口做由快到慢的可逆划出/收回动效。
+ * 传入 `undefined` 时保持静默待就绪，首次解析出布尔态直接落位不误播动画；
+ * 仅在 `false <-> true` 切换时播放平滑双向斜线动效。
+ */
+export const IconNotebookOutline20 = ({ slashed }: { slashed?: boolean }) => {
+  const maskId = useId()
+  const slashRef = useRef<SVGPathElement>(null)
+  const maskPathRef = useRef<SVGPathElement>(null)
+  const progressRef = useRef(slashed ? 1 : 0)
+  const settledRef = useRef(slashed !== undefined)
+  const prevSlashedRef = useRef(slashed)
+
+  const applyFrame = (progress: number) => {
+    const offset = `${(100 * (1 - progress)).toFixed(3)}`
+    const opacity = progress <= 0.002 ? '0' : progress < 0.08 ? (progress / 0.08).toFixed(3) : '1'
+    if (slashRef.current) {
+      slashRef.current.style.strokeDashoffset = offset
+      slashRef.current.style.opacity = opacity
+    }
+    if (maskPathRef.current) {
+      maskPathRef.current.style.strokeDashoffset = offset
+      maskPathRef.current.style.opacity = opacity
+    }
+  }
+
+  useLayoutEffect(() => {
+    applyFrame(progressRef.current)
+  }, [])
+
+  useEffect(() => {
+    if (slashed === undefined) {
+      return
+    }
+    const target = slashed ? 1 : 0
+    // 首次从加载态解析出真实开关状态时直接静默落位，不误播切换动画
+    if (!settledRef.current) {
+      settledRef.current = true
+      prevSlashedRef.current = slashed
+      progressRef.current = target
+      applyFrame(target)
+      return
+    }
+    if (slashed === prevSlashedRef.current) {
+      return
+    }
+    prevSlashedRef.current = slashed
+
+    const start = progressRef.current
+    const distance = Math.abs(target - start)
+    if (distance < 0.001 || prefersReducedMotion()) {
+      progressRef.current = target
+      applyFrame(target)
+      return
+    }
+
+    const spanMs = Math.max(160, SLASH_DURATION_MS * distance)
+    const startTime = performance.now()
+    let rafId = 0
+
+    const step = (now: number) => {
+      const raw = Math.min(1, Math.max(0, now - startTime) / spanMs)
+      const current = start + (target - start) * easeOutExpo(raw)
+      progressRef.current = current
+      applyFrame(current)
+
+      if (raw < 1) {
+        rafId = window.requestAnimationFrame(step)
+      } else {
+        progressRef.current = target
+        applyFrame(target)
+      }
+    }
+
+    rafId = window.requestAnimationFrame(step)
+    return () => window.cancelAnimationFrame(rafId)
+  }, [slashed])
+
+  return (
+    <svg width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <defs>
+        <mask id={maskId} maskUnits="userSpaceOnUse" x={0} y={0} width={24} height={24}>
+          <rect x={0} y={0} width={24} height={24} fill="#fff" />
+          <path
+            ref={maskPathRef}
+            d="M3.2 3.2L20.8 20.8"
+            pathLength={100}
+            stroke="#000"
+            strokeWidth={4.4}
+            strokeLinecap="round"
+            strokeDasharray={100}
+          />
+        </mask>
+      </defs>
+      <g mask={`url(#${maskId})`}>
+        <rect
+          x={5}
+          y={3}
+          width={15}
+          height={18}
+          rx={2.5}
+          stroke="currentColor"
+          strokeWidth={1.65}
+        />
+        <path
+          d="M3 7h4M3 12h4m-4 5h4m3-9h6m-6 4h6"
+          stroke="currentColor"
+          strokeWidth={1.65}
+          strokeLinecap="round"
+        />
+      </g>
+      <path
+        ref={slashRef}
+        d="M3.2 3.2L20.8 20.8"
+        pathLength={100}
+        stroke="currentColor"
+        strokeWidth={1.75}
+        strokeLinecap="round"
+        strokeDasharray={100}
+      />
+    </svg>
+  )
+}
 
 export const IconCheckOutline16 = () => (
   <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">

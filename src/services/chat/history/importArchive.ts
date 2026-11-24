@@ -87,8 +87,9 @@ export const importArchive = async (
   }
   const imported = new Set<string>()
   const originals: LocalSession['originals'] = new Map()
-  /** 普通附件与只用于本地播放的原视频不得共用文件 ID。 */
-  const fileKinds = new Map<string, 'attachment' | 'video'>()
+  /** 普通附件与只用于本地播放的音视频原件不得共用文件 ID。 */
+  type FileKind = 'attachment' | 'audio' | 'video'
+  const fileKinds = new Map<string, FileKind>()
   /** 已保存的原件：文件 ID → MIME。同一图片出现在多个会话目录时只保存一次。 */
   const stored = new Map<string, string>()
   let manifest = false
@@ -97,19 +98,19 @@ export const importArchive = async (
 
   const saveOriginal = async (
     entry: ArchiveEntry,
-    { id, videoType }: { id: string; videoType?: string }
+    { id, mediaType }: { id: string; mediaType?: string }
   ) => {
     if (stored.has(id)) {
       await skipEntry(entry)
       return
     }
     const data = await readEntry(entry)
-    const type = videoType ?? imageType(new Uint8Array(await data.slice(0, 16).arrayBuffer()))
+    const type = mediaType ?? imageType(new Uint8Array(await data.slice(0, 16).arrayBuffer()))
     await db.saveStagingFiles([{ id, blob: new Blob([data], { type }) }])
     stored.set(id, type)
   }
 
-  const registerFile = (id: string, kind: 'attachment' | 'video') => {
+  const registerFile = (id: string, kind: FileKind) => {
     const previous = fileKinds.get(id)
     if (previous && previous !== kind) {
       fail('backupInvalidFiles')
@@ -139,7 +140,9 @@ export const importArchive = async (
         currentSessionId = sessionId
         for (const message of local.session.messages) {
           if (message.role === 'user') {
-            message.files.forEach((file) => registerFile(file.id, 'attachment'))
+            message.files.forEach((file) =>
+              registerFile(file.id, file.audio ? 'audio' : 'attachment')
+            )
             if (message.video) {
               registerFile(message.video.id, 'video')
             }

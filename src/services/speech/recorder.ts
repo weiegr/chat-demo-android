@@ -91,8 +91,8 @@ export const startRecording = async (onLimit: () => void): Promise<Recording> =>
   }
 }
 
-export const encodeWav = (chunks: Float32Array[], length: number) => {
-  const samples = Math.min(length, MAX_SECONDS * SAMPLE_RATE)
+export const encodeWav = (chunks: Float32Array[], length: number, sampleRate = SAMPLE_RATE) => {
+  const samples = Math.min(length, MAX_SECONDS * sampleRate)
   const buffer = new ArrayBuffer(44 + samples * 2)
   const view = new DataView(buffer)
   const writeString = (offset: number, text: string) => {
@@ -107,8 +107,8 @@ export const encodeWav = (chunks: Float32Array[], length: number) => {
   view.setUint32(16, 16, true)
   view.setUint16(20, 1, true) // PCM
   view.setUint16(22, 1, true) // 单声道
-  view.setUint32(24, SAMPLE_RATE, true)
-  view.setUint32(28, SAMPLE_RATE * 2, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * 2, true)
   view.setUint16(32, 2, true)
   view.setUint16(34, 16, true)
   writeString(36, 'data')

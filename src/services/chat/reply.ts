@@ -8,6 +8,7 @@ import type {
   TextBlockParam,
   ToolResultBlockParam,
 } from '../api/types.js'
+import { audioContextText, getAudioSpectrogramIds } from '../audio/metadata.js'
 import { isTextAttachment } from './inlineFiles.js'
 import type {
   AssistantMessage,
@@ -18,6 +19,7 @@ import type {
   ReplyStatus,
   UserMessage,
 } from './types.js'
+import { buildWebSearchRecord, hasWebSearchRecord } from './webSearchContext.js'
 
 /**
  * 文件按 Files API 的 file_id（附件的 serverId）引用：图片用 image 块，其余用 document 块。
@@ -252,12 +254,15 @@ const isUsableReply = (message: Message): message is AssistantMessage =>
   !message.blocks.some((block) => block.type === 'text' && block.isTemplate) &&
   getReplyText(message) !== ''
 
+type UserMessageParam = Extract<MessageParam, { role: 'user' }>
+
 type UserParamOptions = {
   texts?: Map<string, string>
   ocrTexts?: Map<string, string>
   strictInline?: boolean
   useOcrForVisual?: boolean
   includeVideo?: boolean
+  includeAudio?: boolean
   /** 置于正文最前的注入文本（旁路搜索结果），与内联附件、正文按空行连接 */
   prepend?: string
 }
@@ -277,18 +282,23 @@ const toUserParam = (
     strictInline = false,
     useOcrForVisual = false,
     includeVideo,
+    includeAudio,
     prepend,
   }: UserParamOptions
-): { message: MessageParam; hasVideo: boolean } => {
+): { message: UserMessageParam; hasVideo: boolean } => {
+  const spectrogramIds = getAudioSpectrogramIds(files)
   const isInlinedText = (file: FileAttachment) =>
     isTextAttachment(file) && (strictInline || texts?.has(file.id))
-  const isInlinedOcr = (file: FileAttachment) => useOcrForVisual && isOcrSupportedAttachment(file)
+  const isInlinedOcr = (file: FileAttachment) =>
+    useOcrForVisual && !spectrogramIds.has(file.id) && !file.audio && isOcrSupportedAttachment(file)
 
   const requestFiles = files.filter((file) => !isInlinedText(file) && !isInlinedOcr(file))
   const videoSource = includeVideo ? video : undefined
   const frameIds = new Set(videoSource?.frameIds)
   const blocks: (FileBlockParam | TextBlockParam)[] = toFileBlocks(
-    requestFiles.filter((file) => !frameIds.has(file.id))
+    requestFiles.filter(
+      (file) => !file.audio && !frameIds.has(file.id) && !spectrogramIds.has(file.id)
+    )
   )
   const frames = toFileBlocks(
     (videoSource?.frameIds ?? []).flatMap((id) => {
@@ -305,6 +315,20 @@ const toUserParam = (
   const transcript = videoSource?.transcript?.trim()
   if (transcript) {
     blocks.push({ type: 'text', text: `【视频对白】\n${transcript}` })
+  }
+  if (includeAudio) {
+    for (const file of files) {
+      if (!file.audio) {
+        continue
+      }
+      const { spectrogramId, analysis } = file.audio
+      const image = requestFiles.find((item) => item.id === spectrogramId && item.isImage)
+      const spectrogram = image ? toFileBlocks([image]) : []
+      blocks.push(
+        { type: 'text', text: audioContextText(file.name, analysis, spectrogram.length > 0) },
+        ...spectrogram
+      )
+    }
   }
   const inline = files.flatMap((file) => {
     if (isInlinedText(file)) {
@@ -332,6 +356,11 @@ const toUserParam = (
   const hasBlocks = blocks.length > 0
   if (hasBlocks && merged) {
     blocks.push({ type: 'text', text: merged })
+  } else if (includeAudio && files.some((file) => file.audio)) {
+    blocks.push({
+      type: 'text',
+      text: '如果音频里有明确向助手提出的问题，请回答。否则结合对白和声音特征简要描述音频。',
+    })
   }
   return {
     message: {
@@ -393,6 +422,9 @@ const toReplyParams = (
   }
 
   for (const block of blocks) {
+    if (block.type === 'memory_tool_step') {
+      continue
+    }
     if (block.type === 'client_tool_result') {
       pendingToolResults.push({
         type: 'tool_result',
@@ -468,7 +500,7 @@ export const getContextRounds = (history: Message[]): [UserMessage, AssistantMes
  */
 export const toRequestMessages = (
   history: Message[],
-  question: UserMessage,
+  question: UserMessage | undefined,
   prefix?: AssistantMessage,
   thinking = prefix?.thinking ?? false,
   latestReminder?: string,
@@ -480,6 +512,8 @@ export const toRequestMessages = (
     omitLatestReminder?: boolean
     useOcrForVisual?: boolean
     includeVideo?: boolean
+    includeAudio?: boolean
+    onContextRound?: (reply: AssistantMessage, end: number, reminder?: string) => void
     /** 旁路搜索注入文本，仅置于本轮提问最前（历史轮搜索块不进请求） */
     searchContext?: string
   }
@@ -490,9 +524,11 @@ export const toRequestMessages = (
   const omitLatestReminder = options?.omitLatestReminder ?? false
   const useOcrForVisual = options?.useOcrForVisual ?? false
   const includeVideo = options?.includeVideo ?? false
+  const includeAudio = options?.includeAudio ?? false
   const messages: MessageParam[] = []
   let hasVideoContext = false
   let previousReminder: string | undefined
+  let latestSearch: { reply: AssistantMessage; question: UserMessageParam } | undefined
   const appendReminder = (reminder: string | undefined) => {
     // 服务端不支持 latest_reminder 的模型（deepseek-v4-pro）整个请求省略该角色；
     // 其余仅在当前分支首次出现或内容变化时插入快照，缺少快照的消息保持原有内容。
@@ -503,15 +539,21 @@ export const toRequestMessages = (
     previousReminder = reminder
   }
   for (const [user, reply] of getContextRounds(history)) {
+    const spectrogramIds = getAudioSpectrogramIds(user.files)
     const hasInlineText = user.files.some((file) => texts?.has(file.id))
     const hasOcr =
       useOcrForVisual &&
       user.files.some(
         (file) =>
-          isOcrSupportedAttachment(file) && (ocrTexts?.has(file.id) || file.ocrText !== undefined)
+          !file.audio &&
+          !spectrogramIds.has(file.id) &&
+          isOcrSupportedAttachment(file) &&
+          (ocrTexts?.has(file.id) || file.ocrText !== undefined)
       )
     const remainingFiles = user.files.filter(
       (file) =>
+        !file.audio &&
+        !spectrogramIds.has(file.id) &&
         !(isTextAttachment(file) && (omitServerTools || texts?.has(file.id))) &&
         !(useOcrForVisual && isOcrSupportedAttachment(file))
     )
@@ -521,15 +563,18 @@ export const toRequestMessages = (
       !remainingFiles.some((file) => file.serverId) &&
       !hasInlineText &&
       !hasOcr &&
+      !(includeAudio && user.files.some((file) => file.audio)) &&
       !(includeVideo && user.video?.transcript?.trim())
     ) {
+      options?.onContextRound?.(reply, messages.length, previousReminder)
+      continue
+    }
+    const replyParams = toReplyParams(reply, false, false, omitServerTools)
+    if (replyParams.at(-1)?.role !== 'assistant') {
+      options?.onContextRound?.(reply, messages.length, previousReminder)
       continue
     }
     appendReminder(reply.latestReminder)
-    const replyParams = toReplyParams(reply, false, false, omitServerTools)
-    if (replyParams.at(-1)?.role !== 'assistant') {
-      continue
-    }
     // RP 模式下历史里的文本附件同样强制内联，避免遗留 serverId 把请求带回 32K 受限通道。
     const userParam = toUserParam(user, {
       texts,
@@ -537,20 +582,37 @@ export const toRequestMessages = (
       strictInline: omitServerTools,
       useOcrForVisual,
       includeVideo,
+      includeAudio,
     })
+    if (!omitServerTools && hasWebSearchRecord(reply)) {
+      latestSearch = { reply, question: userParam.message }
+    }
     messages.push(userParam.message, ...replyParams)
+    options?.onContextRound?.(reply, messages.length, previousReminder)
     hasVideoContext ||= userParam.hasVideo
   }
+  if (latestSearch) {
+    const { question: searchedQuestion, reply: searchedReply } = latestSearch
+    const record = buildWebSearchRecord(searchedReply)
+    searchedQuestion.content =
+      typeof searchedQuestion.content === 'string'
+        ? `${searchedQuestion.content}\n\n${record}`
+        : [...searchedQuestion.content, { type: 'text', text: record }]
+  }
   appendReminder(latestReminder)
-  const questionParam = toUserParam(question, {
-    texts,
-    ocrTexts,
-    strictInline: true,
-    useOcrForVisual,
-    includeVideo,
-    prepend: options?.searchContext,
-  })
-  messages.push(questionParam.message)
+  if (question) {
+    const questionParam = toUserParam(question, {
+      texts,
+      ocrTexts,
+      strictInline: true,
+      useOcrForVisual,
+      includeVideo,
+      includeAudio,
+      prepend: options?.searchContext,
+    })
+    messages.push(questionParam.message)
+    hasVideoContext ||= questionParam.hasVideo
+  }
   if (toolLoopReply) {
     messages.push(...toReplyParams(toolLoopReply, true, thinking, omitServerTools))
   } else if (prefix?.prefix) {
@@ -567,7 +629,7 @@ export const toRequestMessages = (
       messages.push(assistant)
     }
   }
-  return { messages, hasVideoContext: hasVideoContext || questionParam.hasVideo }
+  return { messages, hasVideoContext }
 }
 
 /** 思考用时（秒），至少 1 秒 */

@@ -1,9 +1,19 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
+import { createId } from '../../utils/id.js'
 import { createMemoryDB } from './memoryDB.js'
+import {
+  defaultMemorySource,
+  emptyMemoryProfile,
+  isMemorySession,
+  MEMORY_IDLE_MS,
+  type MemoryProfile,
+  type MemorySource,
+  type MemoryTurn,
+} from './memoryModel.js'
 import { toSessionSummary, type Session, type SessionSummary } from './types.js'
 
 /** IndexedDB 存储结构版本；新增或调整存储、索引时递增。 */
-const DB_VERSION = 11
+const DB_VERSION = 13
 
 /** 内存库与真实库保持同一组存储名 */
 const STORE_NAMES = [
@@ -12,6 +22,8 @@ const STORE_NAMES = [
   'files',
   'sessionsStaging',
   'filesStaging',
+  'globalMemory',
+  'memorySources',
 ] as const
 
 /**
@@ -54,6 +66,12 @@ interface ChatDB extends DBSchema {
    */
   sessionsStaging: { key: string; value: Session }
   filesStaging: { key: string; value: StoredFile }
+  globalMemory: { key: 'profile'; value: MemoryProfile }
+  memorySources: {
+    key: string
+    value: MemorySource
+    indexes: { dueAt: number; publicId: string }
+  }
 }
 
 let dbPromise: Promise<IDBPDatabase<ChatDB>> | null = null
@@ -102,6 +120,48 @@ export const onSessionChange = (listener: SessionChangeListener) => {
   return () => sessionChangeListeners.delete(listener)
 }
 
+type MemoryChange = 'profile' | 'sources'
+type MemoryListener = (change: MemoryChange, sessionId?: string) => void
+const memoryListeners = new Set<MemoryListener>()
+const memoryChanges = (() => {
+  if (
+    !__BETA__ ||
+    isEphemeralStorage ||
+    typeof window === 'undefined' ||
+    typeof BroadcastChannel === 'undefined'
+  ) {
+    return null
+  }
+  try {
+    const channel = new BroadcastChannel('chat-demo:memory-changes')
+    channel.onmessage = ({ data }) => {
+      if (usingMemoryStorage) {
+        return
+      }
+      if (data === 'profile' || data === 'sources') {
+        memoryListeners.forEach((listener) => listener(data))
+      } else if (data && typeof data === 'object' && typeof data.sessionId === 'string') {
+        memoryListeners.forEach((listener) => listener('sources', data.sessionId))
+      }
+    }
+    return channel
+  } catch {
+    return null
+  }
+})()
+
+export const onMemoryChange = (listener: MemoryListener) => {
+  memoryListeners.add(listener)
+  return () => memoryListeners.delete(listener)
+}
+
+export const notifyMemoryChange = (change: MemoryChange, sessionId?: string) => {
+  memoryListeners.forEach((listener) => listener(change, sessionId))
+  if (!usingMemoryStorage) {
+    memoryChanges?.postMessage(sessionId === undefined ? change : { sessionId })
+  }
+}
+
 const storedSummary = (session: Session): StoredSessionSummary => ({
   ...toSessionSummary(session),
   fileIds: [
@@ -115,7 +175,7 @@ const storedSummary = (session: Session): StoredSessionSummary => ({
   ],
 })
 
-const abortTransaction = (tx: { abort(): void }) => {
+export const abortTransaction = (tx: { abort(): void }) => {
   try {
     tx.abort()
   } catch {
@@ -134,9 +194,15 @@ const openDatabase = (): Promise<IDBPDatabase<ChatDB>> => {
     return Promise.resolve(createMemoryDB(STORE_NAMES) as unknown as IDBPDatabase<ChatDB>)
   }
   return openDB<ChatDB>('chat-demo', DB_VERSION, {
-    upgrade(db, _oldVersion, _newVersion, tx) {
+    upgrade(db, oldVersion, _newVersion, tx) {
       // 初始化当前格式需要的存储与索引，不迁移旧消息。
-      for (const name of ['sessions', 'files', 'sessionsStaging', 'filesStaging'] as const) {
+      for (const name of [
+        'sessions',
+        'files',
+        'sessionsStaging',
+        'filesStaging',
+        'globalMemory',
+      ] as const) {
         if (!db.objectStoreNames.contains(name)) {
           db.createObjectStore(name, { keyPath: 'id' })
         }
@@ -147,12 +213,65 @@ const openDatabase = (): Promise<IDBPDatabase<ChatDB>> => {
       if (!summaries.indexNames.contains('fileIds')) {
         summaries.createIndex('fileIds', 'fileIds', { multiEntry: true })
       }
+      const sources = db.objectStoreNames.contains('memorySources')
+        ? tx.objectStore('memorySources')
+        : db.createObjectStore('memorySources', { keyPath: 'id' })
+      if (!sources.indexNames.contains('dueAt')) {
+        sources.createIndex('dueAt', 'dueAt')
+      }
+      if (!sources.indexNames.contains('publicId')) {
+        sources.createIndex('publicId', 'publicId')
+      }
+      if (oldVersion === 12) {
+        // 扫描只授予过检索资格。已归纳或排队的新会话才算实际参与过记忆。
+        void (async () => {
+          const settings = tx.objectStore('globalMemory')
+          const profile = await settings.get('profile')
+          if (profile) {
+            const { enabled, epoch, markdown, updatedAt, lastUsage } = profile
+            await settings.put({
+              id: 'profile',
+              enabled,
+              epoch: epoch + 1,
+              markdown,
+              updatedAt,
+              lastUsage,
+            })
+          }
+          for (let cursor = await sources.openCursor(); cursor; cursor = await cursor.continue()) {
+            const source = cursor.value as MemorySource & { scope?: 'new' | 'history' }
+            const { id, publicId, processed, pending, dueAt, attempts } = source
+            if (source.scope === 'new' && (pending?.length || processed?.length)) {
+              await cursor.update({
+                id,
+                publicId: publicId ?? createId(),
+                enabled: true,
+                active: true,
+                revision: 0,
+                processed,
+                pending: pending?.map((turn) => ({ ...turn, sourceRevision: 0 })),
+                dueAt,
+                attempts,
+              })
+            } else {
+              await cursor.delete()
+            }
+          }
+        })().catch(() => abortTransaction(tx))
+      }
+    },
+    blocking() {
+      void dbPromise?.then((database) => database.close())
+      dbPromise = null
+    },
+    terminated() {
+      dbPromise = null
     },
   })
 }
 
 // 每个操作拿到连接后立即创建事务；IndexedDB 按创建顺序执行范围重叠的事务，读取总能看到之前发起的写入。
-const getDB = () =>
+export const getDB = () =>
   (dbPromise ??= openDatabase().catch((error: unknown) => {
     if (isStorageDenied(error)) {
       // 探测通过但实际打开被拒（如无痕模式）：同样退回内存库，避免整页不可用。
@@ -199,9 +318,20 @@ export async function* readSessionBatches(): AsyncGenerator<Session[]> {
   }
 }
 
-export const saveSession = async (session: Session, files: StoredFile[] = []): Promise<void> => {
+export const saveSession = async (
+  session: Session,
+  files: StoredFile[] = [],
+  memoryTurn?: MemoryTurn,
+  initiallyExcluded = false
+): Promise<void> => {
   const summary = storedSummary(session)
-  const tx = (await getDB()).transaction(['sessions', 'sessionSummaries', 'files'], 'readwrite')
+  const managesMemory =
+    __BETA__ && (memoryTurn !== undefined || initiallyExcluded) && isMemorySession(session)
+  const stores = ['sessions', 'sessionSummaries', 'files'] as const
+  const tx = (await getDB()).transaction(
+    managesMemory ? ([...stores, 'globalMemory', 'memorySources'] as const) : stores,
+    'readwrite'
+  )
   await Promise.all([
     (async () => {
       try {
@@ -210,6 +340,40 @@ export const saveSession = async (session: Session, files: StoredFile[] = []): P
         }
         await tx.objectStore('sessions').put(session)
         await tx.objectStore('sessionSummaries').put(summary)
+        if (!managesMemory) {
+          return
+        }
+        const sources = tx.objectStore('memorySources')
+        const existing = await sources.get(session.id)
+        const source = existing ?? defaultMemorySource(session.id)
+        if (initiallyExcluded && !existing) {
+          await sources.put({ ...source, enabled: false })
+          return
+        }
+        const profile = (await tx.objectStore('globalMemory').get('profile')) ?? emptyMemoryProfile
+        if (
+          memoryTurn &&
+          profile.enabled &&
+          memoryTurn.epoch === profile.epoch &&
+          source.enabled &&
+          source.revision === memoryTurn.sourceRevision &&
+          !source.processed?.includes(memoryTurn.questionId) &&
+          !source.pending?.some(({ replyId }) => replyId === memoryTurn.replyId)
+        ) {
+          await sources.put({
+            ...source,
+            active: true,
+            publicId: source.publicId ?? createId(),
+            pending: [
+              ...(source.pending ?? []).filter(
+                ({ questionId }) => questionId !== memoryTurn.questionId
+              ),
+              memoryTurn,
+            ],
+            dueAt: Date.now() + MEMORY_IDLE_MS,
+            attempts: 0,
+          })
+        }
       } catch (error) {
         abortTransaction(tx)
         throw error
@@ -245,7 +409,10 @@ export const renameSession = async (id: string, title: string): Promise<void> =>
 
 /** 删除会话，仅清理已无会话引用的本地原件；远端文件不删。 */
 export const deleteSession = async (sessionId: string): Promise<void> => {
-  const tx = (await getDB()).transaction(['sessions', 'sessionSummaries', 'files'], 'readwrite')
+  const tx = (await getDB()).transaction(
+    ['sessions', 'sessionSummaries', 'files', 'memorySources'],
+    'readwrite'
+  )
   await Promise.all([
     (async () => {
       try {
@@ -253,6 +420,7 @@ export const deleteSession = async (sessionId: string): Promise<void> => {
         const summary = await summaries.get(sessionId)
         await tx.objectStore('sessions').delete(sessionId)
         await summaries.delete(sessionId)
+        await tx.objectStore('memorySources').delete(sessionId)
         for (const id of summary?.fileIds ?? []) {
           if ((await summaries.index('fileIds').count(id)) === 0) {
             await tx.objectStore('files').delete(id)
@@ -304,7 +472,7 @@ export const addStagingSession = async (session: Session): Promise<void> => {
 export const saveStagingFiles = (files: StoredFile[]): Promise<void> =>
   putFiles('filesStaging', files)
 
-/** 图片位于会话 JSON 之后；全部读完后回填具体 MIME，保留归档给出的 isImage 标识。 */
+/** 附件原件位于会话 JSON 之后；全部读完后回填 MIME，保留归档给出的 isImage 标识。 */
 export const updateStagingFileTypes = async (types: ReadonlyMap<string, string>): Promise<void> => {
   const tx = (await getDB()).transaction('sessionsStaging', 'readwrite')
   await Promise.all([
@@ -317,7 +485,7 @@ export const updateStagingFileTypes = async (types: ReadonlyMap<string, string>)
             continue
           }
           for (const file of message.files) {
-            const type = types.get(file.id) ?? ''
+            const type = types.get(file.id) ?? (file.audio ? file.mimeType : '')
             if (file.mimeType !== type) {
               file.mimeType = type
               changed = true
@@ -340,7 +508,15 @@ export const updateStagingFileTypes = async (types: ReadonlyMap<string, string>)
 export const commitStaging = async (): Promise<SessionSummary[]> => {
   const summaries: SessionSummary[] = []
   const tx = (await getDB()).transaction(
-    ['sessions', 'sessionSummaries', 'files', 'sessionsStaging', 'filesStaging'],
+    [
+      'sessions',
+      'sessionSummaries',
+      'files',
+      'sessionsStaging',
+      'filesStaging',
+      'globalMemory',
+      'memorySources',
+    ],
     'readwrite'
   )
   const move = async (from: 'sessionsStaging' | 'filesStaging', to: 'sessions' | 'files') => {
@@ -349,17 +525,28 @@ export const commitStaging = async (): Promise<SessionSummary[]> => {
       await target.clear()
       if (to === 'sessions') {
         await tx.objectStore('sessionSummaries').clear()
+        await resetMemorySources()
       }
       for (
         let cursor = await tx.objectStore(from).openCursor();
         cursor;
         cursor = await cursor.continue()
       ) {
-        await target.put(cursor.value)
         if (to === 'sessions') {
-          const summary = storedSummary(cursor.value as Session)
+          const { memoryRestore, ...session } = cursor.value as Session
+          await tx.objectStore('sessions').put(session)
+          const summary = storedSummary(session)
           await tx.objectStore('sessionSummaries').put(summary)
           summaries.push(toSessionSummary(summary))
+          if (__BETA__ && memoryRestore && isMemorySession(session)) {
+            await tx.objectStore('memorySources').put({
+              ...defaultMemorySource(session.id),
+              ...memoryRestore,
+              publicId: memoryRestore.active && memoryRestore.enabled ? createId() : undefined,
+            })
+          }
+        } else {
+          await tx.objectStore('files').put(cursor.value as StoredFile)
         }
       }
       await tx.objectStore(from).clear()
@@ -369,8 +556,26 @@ export const commitStaging = async (): Promise<SessionSummary[]> => {
       throw error
     }
   }
+  const resetMemorySources = async () => {
+    try {
+      const settings = tx.objectStore('globalMemory')
+      const profile = await settings.get('profile')
+      if (profile) {
+        await settings.put({
+          ...profile,
+          epoch: profile.epoch + 1,
+          lease: undefined,
+        })
+      }
+      await tx.objectStore('memorySources').clear()
+    } catch (error) {
+      abortTransaction(tx)
+      throw error
+    }
+  }
   await Promise.all([move('sessionsStaging', 'sessions'), move('filesStaging', 'files'), tx.done])
   notifySessionChange(null)
+  notifyMemoryChange('profile')
   // 直接返回本次提交的列表，调用方无需在替换成功后再发起可能失败的读取。
   return summaries
 }

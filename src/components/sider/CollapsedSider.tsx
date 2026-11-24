@@ -4,6 +4,7 @@ import { useTranslate } from '../../i18n/index.js'
 import { setSiderCollapsed } from '../../services/settings.js'
 import { newChat } from '../../services/chat/store.js'
 import { IconButton } from '../base/IconButton.js'
+import { RpContextRing } from '../session/RpContextRing.js'
 import styles from './Sider.module.css'
 
 /** 收起后左上角的按钮组；常驻挂载，靠透明度切换，展开时与侧栏同步淡出 */
@@ -29,6 +30,7 @@ export const CollapsedSider = ({ collapsed }: { collapsed: boolean }) => {
           tooltip={t('newChat')}
           onClick={newChat}
         />
+        {collapsed ? <RpContextRing /> : null}
       </div>
     </div>
   )

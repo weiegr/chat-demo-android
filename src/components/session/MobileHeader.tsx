@@ -1,11 +1,14 @@
 import { IconCameraOutline20, IconMenuOutline20, IconNewChatOutline20 } from '../base/icons.js'
 import { useTranslate } from '../../i18n/index.js'
 import { newChat, useChatStore } from '../../services/chat/store.js'
+import type { Session } from '../../services/chat/types.js'
 import { canUploadVideo, useSettings, type ChatMode } from '../../services/settings.js'
 import { IconButton } from '../base/IconButton.js'
 import { showToast } from '../base/toastState.js'
 import { openMobileSider, closeMobileSider, useMobileSider } from '../sider/mobileSiderState.js'
 import { getChatModeMeta } from './chatModeMeta.js'
+import { SessionMemoryButton } from './SessionMemoryButton.js'
+import { RpContextRing } from './RpContextRing.js'
 import styles from './MobileHeader.module.css'
 
 /** 移动端顶栏：侧边栏、会话标题与模式、拍照快捷入口和新对话 */
@@ -14,11 +17,13 @@ export const MobileHeader = ({
   mode,
   editing = false,
   onTakePhoto,
+  memorySession,
 }: {
   title?: string
   mode?: ChatMode
   editing?: boolean
   onTakePhoto?: () => void
+  memorySession?: Session | null
 }) => {
   const t = useTranslate()
   const siderOpen = useMobileSider((state) => state.open)
@@ -61,6 +66,7 @@ export const MobileHeader = ({
           </button>
         ) : null}
       </div>
+      {memorySession !== undefined ? <SessionMemoryButton session={memorySession} /> : null}
       {onTakePhoto && showCameraShortcut ? (
         <IconButton
           size="xl"
@@ -71,6 +77,7 @@ export const MobileHeader = ({
           onClick={onTakePhoto}
         />
       ) : null}
+      <RpContextRing mobile />
       <IconButton
         size="xl"
         tone="primary"

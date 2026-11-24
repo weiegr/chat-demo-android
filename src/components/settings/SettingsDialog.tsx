@@ -27,6 +27,7 @@ import {
 import { formatSize } from '../../services/attachments.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { useChatStore } from '../../services/chat/store.js'
+import { useGlobalMemory } from '../../services/chat/globalMemory.js'
 import {
   setAutoReadAloud,
   setAllowVideoUpload,
@@ -42,12 +43,14 @@ import { hasVideoAudioSupport } from '../../services/video/audio.js'
 import type { TtsVoice } from '../../services/api/speech.js'
 import { useTranslate, type TranslationKey, type TranslationMessage } from '../../i18n/index.js'
 import { Button } from '../base/Button.js'
+import { IconButton } from '../base/IconButton.js'
 import { Modal } from '../base/Modal.js'
 import { Select } from '../base/Select.js'
 import { Switch } from '../base/Switch.js'
 import { showToast } from '../base/toastState.js'
 import { usePresence } from '../base/usePresence.js'
 import { ApiKeySetting } from './ApiKeyField.js'
+import { GlobalMemoryPage, MemoryFilePage } from './GlobalMemorySettings.js'
 import { InfoModalButton } from './InfoModalButton.js'
 import {
   AiLocationSetting,
@@ -66,13 +69,64 @@ import {
 import { closeSettings, useSettingsDialog, type SettingsSection } from './settingsDialogState.js'
 import styles from './Settings.module.css'
 
-type MobileSubPage = 'data' | 'location' | 'systemPrompt' | 'rpMode'
+type MobileRootSubPage = 'data' | 'location' | 'systemPrompt' | 'rpMode'
+type MemoryPage = 'globalMemory' | 'memoryFile'
+type MobileSubPage = MobileRootSubPage | MemoryPage
 
 const MOBILE_SUB_TITLE_KEY: Record<MobileSubPage, TranslationKey> = {
   data: 'settingDialogAsideDataOptionLabel',
   location: 'settingsLocation',
   systemPrompt: 'settingsSystemPrompt',
   rpMode: 'settingsRpMode',
+  globalMemory: 'globalMemory',
+  memoryFile: 'memoryFile',
+}
+
+/** 移动端二级/三级推入页面层：负责首次挂载布局锁定、视差压栈与底层 inert 隔离 */
+const MobileSubLayer = ({
+  visible,
+  pushed,
+  level,
+  children,
+}: {
+  visible: boolean
+  pushed: boolean
+  level: 1 | 2 | 3
+  children: ReactNode
+}) => {
+  const ref = useRef<HTMLDivElement>(null)
+  const mountedOnceRef = useRef(false)
+
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.inert = pushed
+    }
+  }, [pushed])
+
+  // 子页首次以屏外初始态挂载时主动刷新布局，防止 WebView 跳过首次滑入过渡
+  useLayoutEffect(() => {
+    if (!mountedOnceRef.current) {
+      mountedOnceRef.current = true
+      if (!visible && ref.current) {
+        void ref.current.getBoundingClientRect()
+      }
+    }
+  }, [visible])
+
+  return (
+    <div
+      ref={ref}
+      aria-hidden={pushed || undefined}
+      style={{ zIndex: level + 1 }}
+      className={clsx(
+        styles.mobileSubPage,
+        visible && styles.mobileSubPageVisible,
+        pushed && styles.mobileSubPagePushed
+      )}
+    >
+      {children}
+    </div>
+  )
 }
 
 /**
@@ -100,16 +154,20 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
   const storeSection = useSettingsDialog((state) => state.section)
   // 打开时按调用方指定的分组选中，之后在弹窗内切换；退场未结束时快速重开同步复位
   const [section, setSection] = useState<SettingsSection>(storeSection)
-  const [mobilePage, setMobilePage] = useState<'main' | MobileSubPage>('main')
-  const [renderedSubPage, setRenderedSubPage] = useState<MobileSubPage | null>(null)
+  const [mobileStack, setMobileStack] = useState<MobileSubPage[]>([])
+  const [renderedL1, setRenderedL1] = useState<MobileRootSubPage | null>(null)
+  const [renderedL2, setRenderedL2] = useState<'globalMemory' | null>(null)
+  const [renderedL3, setRenderedL3] = useState<'memoryFile' | null>(null)
+  const [desktopMemoryPage, setDesktopMemoryPage] = useState<MemoryPage | null>(null)
+  const memoryEnabled = useGlobalMemory((state) => state.profile.enabled)
   const prevOpenRef = useRef(open)
   const mobileMainRef = useRef<HTMLDivElement>(null)
-  const mobileSubRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (open && !prevOpenRef.current) {
       setSection(storeSection)
-      setMobilePage('main')
+      setMobileStack([])
+      setDesktopMemoryPage(null)
     }
     prevOpenRef.current = open
   }, [open, storeSection])
@@ -121,26 +179,48 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
   const replacingHistory = useChatStore((state) => state.importingHistory)
   const historyBusy =
     historyImport.busy || historyUrlImport.busy || historyDelete.busy || replacingHistory
-  const inMobileSubPage = isMobile && mobilePage !== 'main'
-  const subPresence = usePresence(inMobileSubPage, 280)
+  const hasL1 = isMobile && mobileStack.length >= 1
+  const hasL2 = isMobile && mobileStack.length >= 2
+  const hasL3 = isMobile && mobileStack.length >= 3
+  const l1Presence = usePresence(hasL1, 280)
+  const l2Presence = usePresence(hasL2, 280)
+  const l3Presence = usePresence(hasL3, 280)
 
-  const openMobileSubPage = (page: MobileSubPage) => {
-    setRenderedSubPage(page)
-    setMobilePage(page)
+  const openMobileSubPage = (page: MobileRootSubPage) => {
+    setRenderedL1(page)
+    setMobileStack([page])
+  }
+
+  const openMobileMemory = () => {
+    setRenderedL2('globalMemory')
+    setMobileStack((prev) => (prev[0] === 'data' ? ['data', 'globalMemory'] : prev))
+  }
+
+  const openMobileMemoryFile = () => {
+    setRenderedL3('memoryFile')
+    setMobileStack((prev) =>
+      prev[1] === 'globalMemory' ? ['data', 'globalMemory', 'memoryFile'] : prev
+    )
+  }
+
+  const backFromMobilePage = () => {
+    setMobileStack((prev) => prev.slice(0, -1))
   }
 
   useEffect(() => {
-    if (mobileMainRef.current) {
-      mobileMainRef.current.inert = inMobileSubPage
+    if (!memoryEnabled) {
+      setMobileStack((prev) => (prev.at(-1) === 'memoryFile' ? prev.slice(0, -1) : prev))
+      if (desktopMemoryPage === 'memoryFile') {
+        setDesktopMemoryPage('globalMemory')
+      }
     }
-  }, [inMobileSubPage])
+  }, [memoryEnabled, desktopMemoryPage])
 
-  // 二级子页首次以屏外初始态挂载时主动刷新布局，防止 WebView 跳过首次滑入过渡
-  useLayoutEffect(() => {
-    if (subPresence.mounted && !subPresence.visible && mobileSubRef.current) {
-      void mobileSubRef.current.getBoundingClientRect()
+  useEffect(() => {
+    if (mobileMainRef.current) {
+      mobileMainRef.current.inert = hasL1
     }
-  }, [subPresence.mounted, subPresence.visible])
+  }, [hasL1])
 
   return (
     <>
@@ -151,10 +231,10 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
               <button
                 type="button"
                 className={styles.mobileBackButton}
-                aria-label={t(inMobileSubPage ? 'back' : 'close')}
+                aria-label={t(hasL1 ? 'back' : 'close')}
                 onClick={() => {
-                  if (inMobileSubPage) {
-                    setMobilePage('main')
+                  if (hasL1) {
+                    backFromMobilePage()
                   } else if (!historyDelete.busy) {
                     closeSettings()
                   }
@@ -164,23 +244,53 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
               </button>
               <span className={styles.mobileTitleStack}>
                 <span
-                  aria-hidden={inMobileSubPage}
+                  aria-hidden={hasL1}
                   className={clsx(
                     styles.mobileTitleItem,
-                    subPresence.visible ? styles.mobileTitleExitLeft : styles.mobileTitleActive
+                    l1Presence.visible ? styles.mobileTitleExitLeft : styles.mobileTitleActive
                   )}
                 >
                   {t('settings')}
                 </span>
-                {subPresence.mounted && renderedSubPage ? (
+                {l1Presence.mounted && renderedL1 ? (
                   <span
-                    aria-hidden={!inMobileSubPage}
+                    aria-hidden={!hasL1 || hasL2}
                     className={clsx(
                       styles.mobileTitleItem,
-                      subPresence.visible ? styles.mobileTitleActive : styles.mobileTitleEnterRight
+                      l2Presence.visible
+                        ? styles.mobileTitleExitLeft
+                        : l1Presence.visible
+                          ? styles.mobileTitleActive
+                          : styles.mobileTitleEnterRight
                     )}
                   >
-                    {t(MOBILE_SUB_TITLE_KEY[renderedSubPage])}
+                    {t(MOBILE_SUB_TITLE_KEY[renderedL1])}
+                  </span>
+                ) : null}
+                {l2Presence.mounted && renderedL2 ? (
+                  <span
+                    aria-hidden={!hasL2 || hasL3}
+                    className={clsx(
+                      styles.mobileTitleItem,
+                      l3Presence.visible
+                        ? styles.mobileTitleExitLeft
+                        : l2Presence.visible
+                          ? styles.mobileTitleActive
+                          : styles.mobileTitleEnterRight
+                    )}
+                  >
+                    {t(MOBILE_SUB_TITLE_KEY[renderedL2])}
+                  </span>
+                ) : null}
+                {l3Presence.mounted && renderedL3 ? (
+                  <span
+                    aria-hidden={!hasL3}
+                    className={clsx(
+                      styles.mobileTitleItem,
+                      l3Presence.visible ? styles.mobileTitleActive : styles.mobileTitleEnterRight
+                    )}
+                  >
+                    {t(MOBILE_SUB_TITLE_KEY[renderedL3])}
                   </span>
                 ) : null}
               </span>
@@ -199,8 +309,8 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
           if (historyDelete.busy) {
             return
           }
-          if (inMobileSubPage) {
-            setMobilePage('main')
+          if (hasL1) {
+            backFromMobilePage()
             return
           }
           closeSettings()
@@ -212,9 +322,9 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
               ref={mobileMainRef}
               className={clsx(
                 styles.mobileMainPage,
-                subPresence.visible && styles.mobileMainPagePushed
+                l1Presence.visible && styles.mobileMainPagePushed
               )}
-              aria-hidden={inMobileSubPage}
+              aria-hidden={hasL1}
             >
               <div className={styles.content}>
                 <div className={styles.mobileGroupTitle}>
@@ -250,19 +360,24 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
                 </div>
               </div>
             </div>
-            {subPresence.mounted && renderedSubPage ? (
-              <div
-                ref={mobileSubRef}
-                className={clsx(
-                  styles.mobileSubPage,
-                  subPresence.visible && styles.mobileSubPageVisible
-                )}
-              >
-                {renderedSubPage === 'data' ? (
+            {l1Presence.mounted && renderedL1 ? (
+              <MobileSubLayer visible={l1Presence.visible} pushed={l2Presence.visible} level={1}>
+                {renderedL1 === 'data' ? (
                   <div className={clsx(styles.content, styles.mobileDataContent)}>
                     <ImportHistory historyImport={historyImport} disabled={historyBusy} />
                     <ImportHistoryFromUrl urlImport={historyUrlImport} disabled={historyBusy} />
                     <ExportHistory disabled={historyBusy} />
+                    {__BETA__ ? (
+                      <MobileActionCard
+                        label={t('globalMemory')}
+                        right={
+                          <span className={styles.mobileNavRight}>
+                            <IconChevronRightOutline14 />
+                          </span>
+                        }
+                        onAction={openMobileMemory}
+                      />
+                    ) : null}
                     <MobileActionCard
                       danger
                       label={t('deleteAllSessions')}
@@ -270,14 +385,24 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
                       onAction={historyDelete.open}
                     />
                   </div>
-                ) : renderedSubPage === 'location' ? (
+                ) : renderedL1 === 'location' ? (
                   <MobileLocationPage />
-                ) : renderedSubPage === 'systemPrompt' ? (
+                ) : renderedL1 === 'systemPrompt' ? (
                   <MobileSystemPromptPage />
                 ) : (
                   <MobileRpModePage />
                 )}
-              </div>
+              </MobileSubLayer>
+            ) : null}
+            {l2Presence.mounted && renderedL2 ? (
+              <MobileSubLayer visible={l2Presence.visible} pushed={l3Presence.visible} level={2}>
+                <GlobalMemoryPage disabled={historyBusy} onOpenFile={openMobileMemoryFile} />
+              </MobileSubLayer>
+            ) : null}
+            {l3Presence.mounted && renderedL3 ? (
+              <MobileSubLayer visible={l3Presence.visible} pushed={false} level={3}>
+                <MemoryFilePage disabled={historyBusy} />
+              </MobileSubLayer>
             ) : null}
           </div>
         ) : (
@@ -290,56 +415,103 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
                   role="tab"
                   aria-selected={section === item.value}
                   className={clsx(styles.navItem, section === item.value && styles.navItemActive)}
-                  onClick={() => setSection(item.value)}
+                  onClick={() => {
+                    setSection(item.value)
+                    setDesktopMemoryPage(null)
+                  }}
                 >
                   {item.icon}
                   {t(item.label)}
                 </button>
               ))}
             </div>
-            <div role="tabpanel" className={styles.content}>
-              {section === 'general' ? (
-                <>
-                  <ThemeSetting />
-                  <LocaleSetting />
-                  <TtsVoiceSetting />
-                  <AutoReadAloudSetting />
-                  <LocationSetting />
-                  <AiLocationSetting />
-                  <SystemPromptSetting />
-                  <RpModeSetting />
-                  <VideoSettings />
-                </>
-              ) : (
-                <>
-                  <ApiKeySetting />
-                  <ImportHistory historyImport={historyImport} disabled={historyBusy} />
-                  <ImportHistoryFromUrl urlImport={historyUrlImport} disabled={historyBusy} />
-                  <ExportHistory disabled={historyBusy} />
-                  <SettingCell
-                    label={t('deleteAllSessions')}
-                    status={null}
-                    action={
-                      <Button
-                        variant="dangerOutlined"
-                        size="m"
-                        className={styles.cellButton}
-                        disabled={historyBusy}
-                        onClick={historyDelete.open}
-                      >
-                        {t('delete')}
-                      </Button>
+            {section === 'data' && desktopMemoryPage ? (
+              <div role="tabpanel" className={styles.desktopSubPanel}>
+                <div className={styles.desktopSubHeader}>
+                  <IconButton
+                    size="xs"
+                    tone="primary"
+                    className={styles.desktopBackButton}
+                    aria-label={t('back')}
+                    icon={<IconChevronRightOutline14 />}
+                    onClick={() =>
+                      setDesktopMemoryPage(
+                        desktopMemoryPage === 'memoryFile' ? 'globalMemory' : null
+                      )
                     }
                   />
-                </>
-              )}
-            </div>
+                  <span className={styles.desktopSubTitle}>{t(desktopMemoryPage)}</span>
+                </div>
+                {desktopMemoryPage === 'globalMemory' ? (
+                  <GlobalMemoryPage
+                    disabled={historyBusy}
+                    onOpenFile={() => setDesktopMemoryPage('memoryFile')}
+                  />
+                ) : (
+                  <MemoryFilePage disabled={historyBusy} />
+                )}
+              </div>
+            ) : (
+              <div role="tabpanel" className={styles.content}>
+                {section === 'general' ? (
+                  <>
+                    <ThemeSetting />
+                    <LocaleSetting />
+                    <TtsVoiceSetting />
+                    <AutoReadAloudSetting />
+                    <LocationSetting />
+                    <AiLocationSetting />
+                    <SystemPromptSetting />
+                    <RpModeSetting />
+                    <VideoSettings />
+                  </>
+                ) : (
+                  <>
+                    <ApiKeySetting />
+                    <ImportHistory historyImport={historyImport} disabled={historyBusy} />
+                    <ImportHistoryFromUrl urlImport={historyUrlImport} disabled={historyBusy} />
+                    <ExportHistory disabled={historyBusy} />
+                    {__BETA__ ? (
+                      <SettingCell
+                        label={t('globalMemory')}
+                        status={null}
+                        action={
+                          <Button
+                            variant="outlined"
+                            size="m"
+                            className={styles.cellButton}
+                            onClick={() => setDesktopMemoryPage('globalMemory')}
+                          >
+                            {t('memoryManage')}
+                          </Button>
+                        }
+                      />
+                    ) : null}
+                    <SettingCell
+                      label={t('deleteAllSessions')}
+                      status={null}
+                      action={
+                        <Button
+                          variant="dangerOutlined"
+                          size="m"
+                          className={styles.cellButton}
+                          disabled={historyBusy}
+                          onClick={historyDelete.open}
+                        >
+                          {t('delete')}
+                        </Button>
+                      }
+                    />
+                  </>
+                )}
+              </div>
+            )}
           </>
         )}
       </Modal>
-      {historyImport.file ? <ImportConfirm historyImport={historyImport} /> : null}
+      <ImportConfirm historyImport={historyImport} />
       <UrlImportDialog urlImport={historyUrlImport} />
-      {historyDelete.opened ? <DeleteAllConfirm historyDelete={historyDelete} /> : null}
+      <DeleteAllConfirm historyDelete={historyDelete} />
     </>
   )
 }
@@ -351,16 +523,22 @@ const DeleteAllConfirm = ({
   historyDelete: ReturnType<typeof useHistoryDelete>
 }) => {
   const t = useTranslate()
+  const isMobile = useIsMobile()
+  const presence = usePresence(historyDelete.opened, 220)
+  if (!presence.mounted) {
+    return null
+  }
   return (
     <Modal
       title={t('deleteAllSessionsModalTitle')}
+      visible={presence.visible}
       className={styles.deleteConfirm}
       onClose={historyDelete.cancel}
       footer={
         <div className={styles.deleteActions} aria-busy={historyDelete.busy}>
           <Button
             variant="outlined"
-            autoFocus
+            autoFocus={!isMobile}
             disabled={historyDelete.busy}
             onClick={historyDelete.cancel}
           >
@@ -368,7 +546,7 @@ const DeleteAllConfirm = ({
           </Button>
           <Button
             variant="danger"
-            disabled={historyDelete.busy}
+            disabled={historyDelete.busy || !historyDelete.opened}
             onClick={() => void historyDelete.confirm()}
           >
             {t(historyDelete.busy ? 'historyDeleting' : 'deleteAllSessions')}
@@ -709,17 +887,28 @@ const ImportConfirm = ({
   historyImport: ReturnType<typeof useHistoryImport>
 }) => {
   const t = useTranslate()
+  const isMobile = useIsMobile()
+  const presence = usePresence(historyImport.file !== null, 220)
+  if (!presence.mounted) {
+    return null
+  }
   return (
     <Modal
       title={t('historyImportConfirmTitle')}
+      visible={presence.visible}
       className={styles.importConfirm}
       onClose={historyImport.cancel}
       footer={
         <>
-          <Button variant="outlined" size="m" autoFocus onClick={historyImport.cancel}>
+          <Button variant="outlined" size="m" autoFocus={!isMobile} onClick={historyImport.cancel}>
             {t('cancel')}
           </Button>
-          <Button variant="dangerOutlined" size="m" onClick={() => void historyImport.confirm()}>
+          <Button
+            variant="dangerOutlined"
+            size="m"
+            disabled={!historyImport.file}
+            onClick={() => void historyImport.confirm()}
+          >
             {t('historyImportConfirm')}
           </Button>
         </>
@@ -1186,6 +1375,7 @@ const UrlImportDialog = ({ urlImport }: { urlImport: ReturnType<typeof useHistor
   const t = useTranslate()
   const isMobile = useIsMobile()
   const sheetPresence = usePresence(urlImport.open && isMobile, 280)
+  const modalPresence = usePresence(urlImport.open && !isMobile, 220)
   const { progress } = urlImport
   const confirmLabel =
     progress === null
@@ -1241,13 +1431,14 @@ const UrlImportDialog = ({ urlImport }: { urlImport: ReturnType<typeof useHistor
     )
   }
 
-  if (!urlImport.open) {
+  if (!modalPresence.mounted) {
     return null
   }
 
   return (
     <Modal
       title={t('historyUrlModalTitle')}
+      visible={modalPresence.visible}
       className={styles.urlModal}
       onClose={urlImport.closeModal}
       footer={
@@ -1258,7 +1449,7 @@ const UrlImportDialog = ({ urlImport }: { urlImport: ReturnType<typeof useHistor
           <Button
             variant="primary"
             size="m"
-            disabled={urlImport.busy}
+            disabled={urlImport.busy || !urlImport.open}
             onClick={() => void urlImport.submit()}
           >
             {confirmLabel}

@@ -1,0 +1,22 @@
+.modal {
+  width: 440px;
+  max-height: calc(100dvh - 32px - var(--safe-top, 0px) - var(--safe-bottom, 0px));
+}
+
+.title {
+  overflow-wrap: anywhere;
+}
+
+.main {
+  min-height: 0;
+}
+
+.player {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+.unavailable {
+  margin: 0;
+}

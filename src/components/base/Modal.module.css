@@ -44,6 +44,25 @@
     0 12px 32px 0 rgba(0, 0, 0, 0.08);
 }
 
+/* 零权重默认居中弹层缩放淡入淡出：自定义抽屉/全屏弹层可通过普通类无冲突覆写 */
+:where(.contentHidden) {
+  opacity: 0;
+  transform: scale(0.94);
+  will-change: transform, opacity;
+  transition:
+    opacity 0.18s ease-out,
+    transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:where(.contentVisible) {
+  opacity: 1;
+  transform: scale(1);
+  will-change: transform, opacity;
+  transition:
+    opacity 0.18s ease-out,
+    transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 .header {
   display: flex;
   align-items: center;
@@ -79,7 +98,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .overlay {
+  .overlay,
+  :where(.contentHidden),
+  :where(.contentVisible) {
     transition: none;
   }
 }

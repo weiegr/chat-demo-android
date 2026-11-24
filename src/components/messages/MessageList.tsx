@@ -13,6 +13,7 @@ import type {
   Session,
 } from '../../services/chat/types.js'
 import { closeSearchPanel } from '../search/searchPanelState.js'
+import { useMobileSider } from '../sider/mobileSiderState.js'
 import type { SelectMessageVersion } from './BranchSwitcher.js'
 import { AssistantMessage } from './AssistantMessage.js'
 import { ScrollToBottomContext } from './scrollContext.js'
@@ -427,11 +428,21 @@ export const MessageList = ({
     }
 
     const initial = getImeMotionState()
-    if (!initial.animating && initial.settled > 0.5) {
+    if (!useMobileSider.getState().open && !initial.animating && initial.settled > 0.5) {
       settle(initial.settled)
     }
 
+    const isLifted = () =>
+      mode !== 'idle' ||
+      getPaddingBottom() > 0.5 ||
+      currentContentLift > 0.5 ||
+      Boolean(footerSlotRef.current?.style.transform)
+
     const unsubscribe = subscribeImeMotion((phase, ime) => {
+      // 移动端侧边栏打开期间（如侧栏重命名会话）弹起键盘时，保持右侧露出的对话页与输入区静止
+      if (useMobileSider.getState().open && !isLifted()) {
+        return
+      }
       if (phase === 'prepare') {
         clearSmoothTransition()
         if (getPaddingBottom() <= 0.5) {

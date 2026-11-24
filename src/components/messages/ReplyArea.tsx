@@ -9,6 +9,7 @@ import {
   IconChevronRightOutline14,
   IconCheckedOutline14,
   IconCloseFill14,
+  IconFileOutline16,
   IconLinkOutline16,
   IconLocationOutline16,
   IconLocationWarningOutline16,
@@ -17,7 +18,7 @@ import {
   IconSearchWarningOutline16,
   IconThinkOutline16,
 } from '../base/icons.js'
-import type { AssistantMessage } from '../../services/chat/types.js'
+import type { AssistantMessage, MemoryToolStepBlock } from '../../services/chat/types.js'
 import {
   getAreaTitle,
   isDeepSearchKind,
@@ -191,7 +192,9 @@ const stepKey = (step: Step, index: number) =>
     ? step.key
     : step.type === 'location'
       ? `location-${step.id}`
-      : `${step.type}-${index}`
+      : step.type === 'memory_tool_step'
+        ? `memory-${step.id}`
+        : `${step.type}-${index}`
 
 const StepItem = ({
   step,
@@ -244,6 +247,8 @@ const StepItem = ({
       return <ReadLinkRow step={step} isLast={isLast} />
     case 'location':
       return <LocationRow step={step} message={message} streaming={streaming} isLast={isLast} />
+    case 'memory_tool_step':
+      return <HistoryToolRow step={step} isLast={isLast} />
     default:
       return null
   }
@@ -361,6 +366,57 @@ const ToolRow = ({
     <div className={styles.toolBody}>{children}</div>
   </div>
 )
+
+const historyToolLabels = {
+  search: {
+    wip: 'toolHistorySearchPending',
+    done: 'toolHistorySearchDone',
+    failed: 'toolHistorySearchFailed',
+    stopped: 'toolHistorySearchStopped',
+  },
+  read: {
+    wip: 'toolHistoryReadPending',
+    done: 'toolHistoryReadDone',
+    failed: 'toolHistoryReadFailed',
+    stopped: 'toolHistoryReadStopped',
+  },
+} as const
+
+const HistoryToolRow = ({ step, isLast }: { step: MemoryToolStepBlock; isLast: boolean }) => {
+  const t = useTranslate()
+  const searching = step.action === 'search'
+  const failed = step.status === 'failed'
+  const icon = searching ? (
+    failed ? (
+      <IconSearchWarningOutline16 />
+    ) : (
+      <IconSearchOutline16 />
+    )
+  ) : failed ? (
+    <IconBrowseWarningOutline16 />
+  ) : (
+    <IconFileOutline16 />
+  )
+  const matches = searching && step.status === 'done' ? step.matchCount : undefined
+  const label =
+    matches === 0 ? 'toolHistorySearchEmpty' : historyToolLabels[step.action][step.status]
+  return (
+    <ToolRow icon={icon} isLast={isLast}>
+      <span role="status" className={clsx(styles.intro, step.status === 'wip' && styles.shimmer)}>
+        {t(label)}
+      </span>
+      {matches ? (
+        <span className={styles.chip}>
+          <span className={styles.chipText}>
+            {t(matches === 1 ? 'toolHistorySearchOne' : 'toolHistorySearchMatches', {
+              count: matches,
+            })}
+          </span>
+        </span>
+      ) : null}
+    </ToolRow>
+  )
+}
 
 const PageLink = ({ page, failedTip }: { page: PageItem; failedTip?: string }) => (
   <span
