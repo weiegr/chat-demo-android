@@ -5,7 +5,8 @@ import { defineConfig } from '@rspack/cli'
 import { rspack, type Configuration } from '@rspack/core'
 
 const dev = process.env.NODE_ENV !== 'production'
-const targets = ['chrome >= 80', 'edge >= 80', 'safari >= 16', 'firefox >= 110']
+// 覆盖 Android 8.0+（含 Magic UI 3.1 / EMUI 10.1 常见内置 Chromium 74~79）的全量系统 WebView
+const targets = ['chrome >= 61', 'edge >= 79', 'safari >= 14', 'firefox >= 78']
 const root = path.dirname(fileURLToPath(import.meta.url))
 const { version } = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8')
@@ -32,6 +33,7 @@ export const createConfig = ({
   singleFile = false,
 }: ConfigOptions = {}): Configuration => ({
   mode: dev ? 'development' : 'production',
+  target: ['web', 'es2017'],
   entry: './src/main.tsx',
   output: {
     path: path.resolve(root, singleFile ? 'dist-single' : 'dist'),
@@ -73,6 +75,22 @@ export const createConfig = ({
         },
         type: 'javascript/auto',
       },
+      // 第三方依赖（如 mermaid / prismjs / katex）也可能含 ES2020+ 语法，一并降级避免低版本 WebView 解析报错
+      {
+        test: /\.m?js$/,
+        include: /[\\/]node_modules[\\/]/,
+        exclude: /[\\/]node_modules[\\/](?:react|react-dom|scheduler|@swc)[\\/]/,
+        loader: 'builtin:swc-loader',
+        options: {
+          isModule: 'unknown',
+          jsc: {
+            parser: { syntax: 'ecmascript' },
+            externalHelpers: true,
+          },
+          env: { targets },
+        },
+        type: 'javascript/auto',
+      },
       // 单文件模式下字体直接转成 data URI，避免再依赖相邻的 media 目录
       { test: /\.(woff2?|ttf)$/, type: singleFile ? 'asset/inline' : 'asset/resource' },
     ],
@@ -94,6 +112,16 @@ export const createConfig = ({
       patterns: [{ from: path.resolve(root, 'LICENSE'), to: 'LICENSE', toType: 'file' }],
     }),
   ],
+  optimization: {
+    minimizer: [
+      new rspack.SwcJsMinimizerRspackPlugin({
+        minimizerOptions: { ecma: 2017 },
+      }),
+      new rspack.LightningCssMinimizerRspackPlugin({
+        minimizerOptions: { targets },
+      }),
+    ],
+  },
   performance: { hints: false },
   devServer: { port: 8090, ...devServer },
 })

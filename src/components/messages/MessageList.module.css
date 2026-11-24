@@ -50,8 +50,13 @@
 @media not all and (min-width: 768px) {
   .container {
     overflow: hidden;
-    overflow: clip;
     scrollbar-gutter: auto;
+  }
+
+  @supports (overflow: clip) {
+    .container {
+      overflow: clip;
+    }
   }
 
   .footerSlot {

@@ -318,7 +318,7 @@
   bottom: 0;
   left: 0;
   z-index: 1;
-  width: var(--mobile-sider-width, min(76vw, 320px));
+  width: var(--mobile-sider-width, 76vw);
   background-color: var(--dsw-specific-sidebar-fill);
   /* 独立层：右移的是对话界面，抽屉不参与重绘 */
   contain: layout paint style;

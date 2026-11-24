@@ -374,7 +374,12 @@
     flex-shrink: 0;
     border-radius: 26px;
     max-height: calc(var(--app-viewport-height, 100vh) - var(--ime-settled, 0px) - 120px);
-    max-height: calc(var(--app-viewport-height, 100dvh) - var(--ime-settled, 0px) - 120px);
+  }
+
+  @supports (height: 100dvh) {
+    .wrapper {
+      max-height: calc(var(--app-viewport-height, 100dvh) - var(--ime-settled, 0px) - 120px);
+    }
   }
 
   .textarea,
@@ -666,29 +671,36 @@
   &.attachPanelToIme {
     display: grid;
     grid-template-rows: minmax(0, 1fr);
-    height: clamp(
-      0px,
-      calc(
-        var(--attach-start-h, 0px) -
-          (var(--attach-start-vh, 100vh) - var(--app-viewport-height, 100vh)) *
-          var(--attach-ime-ratio, 0.55)
-      ),
-      var(--attach-start-h, 0px)
-    );
-    height: clamp(
-      0px,
-      calc(
-        var(--attach-start-h, 0px) -
-          (var(--attach-start-vh, 100dvh) - var(--app-viewport-height, 100dvh)) *
-          var(--attach-ime-ratio, 0.55)
-      ),
-      var(--attach-start-h, 0px)
-    );
+    height: var(--attach-start-h, 0px);
     overflow: hidden;
     opacity: 1;
     pointer-events: none;
     visibility: visible;
     transition: none;
+
+    @supports (height: clamp(0px, 1vh, 1px)) {
+      height: clamp(
+        0px,
+        calc(
+          var(--attach-start-h, 0px) -
+            (var(--attach-start-vh, 100vh) - var(--app-viewport-height, 100vh)) *
+            var(--attach-ime-ratio, 0.55)
+        ),
+        var(--attach-start-h, 0px)
+      );
+    }
+
+    @supports (height: clamp(0px, 1dvh, 1px)) {
+      height: clamp(
+        0px,
+        calc(
+          var(--attach-start-h, 0px) -
+            (var(--attach-start-vh, 100dvh) - var(--app-viewport-height, 100dvh)) *
+            var(--attach-ime-ratio, 0.55)
+        ),
+        var(--attach-start-h, 0px)
+      );
+    }
   }
 }
 

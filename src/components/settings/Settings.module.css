@@ -1071,7 +1071,12 @@
 
 .urlSheet {
   max-height: calc(100vh - 24px - var(--safe-top) - var(--ime-settled, 0px));
-  max-height: calc(100dvh - 24px - var(--safe-top) - var(--ime-settled, 0px));
+}
+
+@supports (height: 100dvh) {
+  .urlSheet {
+    max-height: calc(100dvh - 24px - var(--safe-top) - var(--ime-settled, 0px));
+  }
 }
 
 .urlSheetMain {

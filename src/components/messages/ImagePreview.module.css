@@ -32,13 +32,17 @@
 }
 
 .video {
+  width: 100%;
+  max-width: 900px;
   width: min(100%, 900px);
   height: auto;
 }
 
 .close {
   position: absolute;
+  top: calc(var(--safe-top) + 8px);
   top: max(16px, calc(var(--safe-top) + 8px));
+  right: 16px;
   right: max(16px, calc(env(safe-area-inset-right) + 8px));
   z-index: 1;
   display: flex;
