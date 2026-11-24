@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { getAbortReason, throwIfAborted } from '../../utils/abort.js'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
 import { isOcrSupportedAttachment, recognizeFileText } from '../api/ocr.js'
@@ -15,7 +16,13 @@ import {
   getFileErrorCode,
   isRetryableApiError,
 } from '../api/errors.js'
-import { cancelUpload, describeUploadError, uploadAttachment, useUploads } from '../attachments.js'
+import {
+  cancelUpload,
+  checkImageFileIds,
+  describeUploadError,
+  uploadAttachment,
+  useUploads,
+} from '../attachments.js'
 import { GeolocationError, getCurrentPosition } from '../geolocation.js'
 import {
   canTranscribeVideo,
@@ -1174,8 +1181,11 @@ type PreparedRequest = Request & {
   ocrTexts?: Map<string, string>
 }
 
-/** 把补传得到的 serverId 写回会话里所有引用同一附件的消息（编辑、重新生成会共用附件） */
-const saveServerIds = (sessionId: string, serverIds: Map<string, string>) => {
+/**
+ * 将 serverId 写回所有引用同一附件的消息。传入 null 会清除超限旧图的 ID，触发补传。
+ * 尺寸标记随有效 ID 保存，因为本地保留的是原图，刷新后可以直接复用已检查的上传副本。
+ */
+const saveServerIds = (sessionId: string, serverIds: ReadonlyMap<string, string | null>) => {
   if (serverIds.size === 0) {
     return
   }
@@ -1185,9 +1195,12 @@ const saveServerIds = (sessionId: string, serverIds: Map<string, string>) => {
       message.role === 'user' && message.files.some((file) => serverIds.has(file.id))
         ? {
             ...message,
-            files: message.files.map((file) =>
-              serverIds.has(file.id) ? { ...file, serverId: serverIds.get(file.id) ?? null } : file
-            ),
+            files: message.files.map((file) => {
+              const serverId = serverIds.get(file.id)
+              return serverId === undefined
+                ? file
+                : { ...file, serverId, imageSizeChecked: file.isImage && serverId !== null }
+            }),
           }
         : message
     ),
@@ -1282,7 +1295,7 @@ const prepareFiles = async (
   const ocrTexts = new Map<string, string>()
   // 停止生成立即生效；上传本身不取消（输入框与其他消息可能共用同一任务），完成后照常写回 serverId
   const aborted = new Promise<never>((_, reject) => {
-    signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+    signal.addEventListener('abort', () => reject(getAbortReason(signal)), { once: true })
   })
 
   if (useOcr) {
@@ -1382,12 +1395,26 @@ const prepareFiles = async (
       }
     }
   } else {
+    // 旧图片超限时先清除 ID，交给下方已有的附件补传流程（补传前自动按长边 4096 压缩）。
+    const filesToCheck = [
+      ...request.question.files,
+      ...getContextRounds(request.history).flatMap(([user]) => user.files),
+    ]
+    const checked = await Promise.race([
+      checkImageFileIds(filesToCheck, signal, pendingBlobs),
+      aborted,
+    ])
+    if (checked.size > 0) {
+      saveServerIds(sessionId, checked)
+      request = refreshRequest(sessionId, request)
+    }
+
     const uploads = Promise.allSettled(
       request.question.files
         .filter((file) => !texts.has(file.id) && !isTextAttachment(file))
         .map(async (file) => {
           const serverId = await ensureServerId(apiKey, file, pendingBlobs)
-          if (serverId) {
+          if (serverId && serverId !== file.serverId) {
             serverIds.set(file.id, serverId)
           }
         })
@@ -1418,7 +1445,7 @@ const prepareFiles = async (
       }
     }
     for (const file of pending.values()) {
-      signal.throwIfAborted()
+      throwIfAborted(signal)
       try {
         const serverId = await Promise.race([ensureServerId(apiKey, file, pendingBlobs), aborted])
         if (serverId) {
@@ -1426,7 +1453,7 @@ const prepareFiles = async (
           saveServerIds(sessionId, new Map([[file.id, serverId]]))
         }
       } catch {
-        signal.throwIfAborted()
+        throwIfAborted(signal)
       }
     }
   }
@@ -1492,7 +1519,7 @@ const reuploadInvalidatedFiles = (sessionId: string, request: Request, error: un
       }
       localIds.push(file.id)
       changed = true
-      return { ...file, serverId: null }
+      return { ...file, serverId: null, imageSizeChecked: false }
     })
     return changed ? { ...message, files } : message
   })
