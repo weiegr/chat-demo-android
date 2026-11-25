@@ -4,8 +4,12 @@ import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 const query = window.matchMedia('not all and (min-width: 768px)')
 
 const subscribe = (onChange: () => void) => {
-  query.addEventListener('change', onChange)
-  return () => query.removeEventListener('change', onChange)
+  if (typeof query.addEventListener === 'function') {
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }
+  query.addListener(onChange)
+  return () => query.removeListener(onChange)
 }
 
 export const useIsMobile = () => useSyncExternalStore(subscribe, () => query.matches)

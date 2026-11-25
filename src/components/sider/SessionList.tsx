@@ -43,15 +43,18 @@ const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3)
 
 export const SessionList = memo(function SessionList({
   mobile,
+  floatingBottom = false,
   onDelete,
 }: {
   mobile: boolean
+  floatingBottom?: boolean
   onDelete: (session: SessionSummary) => void
 }) {
   const t = useTranslate()
   const sessions = useChatStore((state) => state.sessions)
   const activeId = useChatStore((state) => state.activeId)
   const listRef = useRef<HTMLDivElement>(null)
+  const bottomSpacerRef = useRef<HTMLDivElement>(null)
   const imeSpacerRef = useRef<HTMLDivElement>(null)
   const commitEditingRef = useRef<(() => void) | null>(null)
   const [now, setNow] = useState(Date.now)
@@ -251,7 +254,8 @@ export const SessionList = memo(function SessionList({
         setImePadding(0)
         return
       }
-      const naturalMax = Math.max(0, totalHeightRef.current - list.clientHeight)
+      const extraBottom = bottomSpacerRef.current?.offsetHeight ?? 0
+      const naturalMax = Math.max(0, totalHeightRef.current + extraBottom - list.clientHeight)
       if (list.scrollTop > naturalMax + 1) {
         if (animate) {
           smoothScrollTo(naturalMax, 180, () => setImePadding(0))
@@ -275,9 +279,13 @@ export const SessionList = memo(function SessionList({
       updateScrollTop(list.scrollTop)
     }
     measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(list)
-    return () => observer.disconnect()
+    if (typeof ResizeObserver === 'function') {
+      const observer = new ResizeObserver(measure)
+      observer.observe(list)
+      return () => observer.disconnect()
+    }
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
   }, [updateScrollTop])
 
   // Android 原生软键盘逐帧联动：键盘升起时跟手把下方重命名行托至键盘上方，收起时平滑回落零闪跳
@@ -347,7 +355,8 @@ export const SessionList = memo(function SessionList({
           clearPendingCleanup()
           cancelSmoothScroll()
           mode = 'closing'
-          const naturalMax = Math.max(0, totalHeightRef.current - list.clientHeight)
+          const extraBottom = bottomSpacerRef.current?.offsetHeight ?? 0
+          const naturalMax = Math.max(0, totalHeightRef.current + extraBottom - list.clientHeight)
           closeStartRaise = Math.max(ime.raise, ime.settled, 1)
           closeStartScrollTop = list.scrollTop
           closeTargetScrollTop = Math.min(closeStartScrollTop, naturalMax)
@@ -699,6 +708,10 @@ export const SessionList = memo(function SessionList({
             )
           })}
         </div>
+        {/* 悬浮纯头像模式下给列表最末项预留底部滚动空间，使最后一条会话可完整滑出左下角头像上方 */}
+        {floatingBottom ? (
+          <div ref={bottomSpacerRef} className={styles.listBottomSpacer} aria-hidden="true" />
+        ) : null}
         {/* 移动端重命名软键盘动态底部占位：只增加可滚动高度，不改变滚动容器自身尺寸 */}
         <div ref={imeSpacerRef} aria-hidden="true" />
       </div>

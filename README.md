@@ -54,7 +54,7 @@ pnpm build:single
 - Attachment uploads (local inlining for plain-text files, automatic OCR for images on Pro, plus documents and code), voice input (ASR), and read-aloud playback (TTS, with optional auto read-aloud when a reply finishes) with a live audio spectrum while recording on mobile.
 - Fast mode accepts one video of up to 60 seconds per message after **Allow video uploads** is enabled in chat settings. Each video sends 16 evenly sampled frames arranged into four 2×2 images. Original videos play in the app, and Android can transcribe their dialogue when you send them.
 - Start a **DeepSeek Live** voice call from the Fast mode attachment menu. Calls can continue an existing text conversation, support interruptions, and save the transcript to a separate chat.
-- Editable system prompt, plus optional advanced tool prompt for the real-time location tool, each with one-tap restore to defaults.
+- Editable system prompts per mode (Fast, Expert, and RP), each with one-tap restore to defaults.
 - Markdown, Prism syntax highlighting, KaTeX math, and Mermaid diagrams.
 - Simplified Chinese and English, light and dark themes, location settings, and ZIP chat history import/export.
 

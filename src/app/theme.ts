@@ -12,11 +12,20 @@ type AndroidHostBridge = {
 const getAndroidHost = (): AndroidHostBridge | undefined =>
   (window as Window & { AndroidHost?: AndroidHostBridge }).AndroidHost
 
+const listenQuery = (listener: () => void) => {
+  if (typeof query.addEventListener === 'function') {
+    query.addEventListener('change', listener)
+    return () => query.removeEventListener('change', listener)
+  }
+  query.addListener(listener)
+  return () => query.removeListener(listener)
+}
+
 const subscribeOsTheme = (listener: () => void) => {
-  query.addEventListener('change', listener)
+  const unlistenQuery = listenQuery(listener)
   window.addEventListener('os-theme-change', listener)
   return () => {
-    query.removeEventListener('change', listener)
+    unlistenQuery()
     window.removeEventListener('os-theme-change', listener)
   }
 }
@@ -87,6 +96,6 @@ export const setupTheme = () => {
   if (document.readyState !== 'complete') {
     window.addEventListener('load', syncPageBackground, { once: true })
   }
-  query.addEventListener('change', syncTheme)
+  listenQuery(syncTheme)
   useSettings.subscribe(syncTheme)
 }

@@ -16,27 +16,61 @@ type LayoutElements = {
 type OrbMetrics = {
   stageHeight: number
   viewportWidth: number
+  viewportHeight: number
   transcriptOpen: boolean
 }
 
-const computeBaseGeometry = ({ stageHeight, viewportWidth, transcriptOpen }: OrbMetrics) => {
-  const notebookGap = Math.min(12, stageHeight * 0.035)
-  if (transcriptOpen) {
-    const baseOrbSize = Math.min(118, viewportWidth * 0.34, stageHeight * 0.31)
-    const baseCenterY = Math.max(baseOrbSize / 2 + 8, Math.min(78, stageHeight * 0.23))
+const supportsCss = (property: string, value: string) =>
+  typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports(property, value)
+
+const computeBaseGeometry = ({
+  stageHeight,
+  viewportWidth,
+  viewportHeight,
+  transcriptOpen,
+}: OrbMetrics) => {
+  const supportsCqh = supportsCss('height', '1cqh')
+  if (supportsCqh) {
+    const notebookGap = Math.min(12, stageHeight * 0.035)
+    if (transcriptOpen) {
+      const baseOrbSize = Math.min(118, viewportWidth * 0.34, stageHeight * 0.31)
+      const baseCenterY = Math.max(baseOrbSize / 2 + 8, Math.min(78, stageHeight * 0.23))
+      return { baseOrbSize, baseCenterY, notebookGap }
+    }
+    const baseOrbSize = Math.min(
+      220,
+      viewportWidth * 0.64,
+      Math.max(40, stageHeight - 72),
+      stageHeight * 0.52
+    )
+    const baseCenterY = Math.max(
+      baseOrbSize / 2,
+      Math.min(stageHeight * 0.56, stageHeight - baseOrbSize / 2 - notebookGap - NOTEBOOK_SIZE)
+    )
     return { baseOrbSize, baseCenterY, notebookGap }
   }
-  const baseOrbSize = Math.min(
-    220,
-    viewportWidth * 0.64,
-    Math.max(40, stageHeight - 72),
-    stageHeight * 0.52
-  )
-  const baseCenterY = Math.max(
-    baseOrbSize / 2,
-    Math.min(stageHeight * 0.56, stageHeight - baseOrbSize / 2 - notebookGap - NOTEBOOK_SIZE)
-  )
-  return { baseOrbSize, baseCenterY, notebookGap }
+
+  const supportsMin = supportsCss('width', 'min(1px, 2px)')
+  if (supportsMin) {
+    const notebookGap = Math.min(12, viewportHeight * 0.03)
+    if (transcriptOpen) {
+      const baseOrbSize = Math.min(118, viewportWidth * 0.34, viewportHeight * 0.24)
+      const baseCenterY = Math.max(baseOrbSize / 2 + 8, Math.min(78, stageHeight * 0.23))
+      return { baseOrbSize, baseCenterY, notebookGap }
+    }
+    const baseOrbSize = Math.min(220, viewportWidth * 0.64, viewportHeight * 0.42)
+    const baseCenterY = Math.max(
+      baseOrbSize / 2,
+      Math.min(stageHeight * 0.56, stageHeight - baseOrbSize / 2 - notebookGap - NOTEBOOK_SIZE)
+    )
+    return { baseOrbSize, baseCenterY, notebookGap }
+  }
+
+  const notebookGap = 12
+  if (transcriptOpen) {
+    return { baseOrbSize: 108, baseCenterY: 78, notebookGap }
+  }
+  return { baseOrbSize: 180, baseCenterY: stageHeight * 0.5, notebookGap }
 }
 
 type TargetTransforms = {
@@ -180,6 +214,7 @@ export const createBetaLiveImeController = (
   let latestShift = 0
   let cachedStageHeight = stage.clientHeight
   let cachedViewportWidth = window.innerWidth
+  let cachedViewportHeight = window.innerHeight
 
   const animatedNodes = notebook
     ? [form, orbGroup, visualizer, notebook]
@@ -230,6 +265,9 @@ export const createBetaLiveImeController = (
     if (cachedViewportWidth <= 0) {
       cachedViewportWidth = window.innerWidth
     }
+    if (cachedViewportHeight <= 0) {
+      cachedViewportHeight = window.innerHeight
+    }
 
     const active = shift > 0.05
     const animateTransition = transitionMode !== 'none' && !reducedMotion()
@@ -257,6 +295,7 @@ export const createBetaLiveImeController = (
       const target = computeTargetTransforms(shift, {
         stageHeight: cachedStageHeight,
         viewportWidth: cachedViewportWidth,
+        viewportHeight: cachedViewportHeight,
         transcriptOpen: getTranscriptOpen(),
       })
       form.style.transform = `translate3d(0, ${(-shift).toFixed(2)}px, 0)`
@@ -319,6 +358,7 @@ export const createBetaLiveImeController = (
   const syncMetrics = (mode: 'none' | 'layout' = 'none') => {
     cachedStageHeight = stage.clientHeight
     cachedViewportWidth = window.innerWidth
+    cachedViewportHeight = window.innerHeight
     if (latestShift > 0.05) {
       applyFrame(latestShift, false, mode, true)
     }
@@ -328,6 +368,7 @@ export const createBetaLiveImeController = (
     clearSmooth()
     cachedStageHeight = stage.clientHeight
     cachedViewportWidth = window.innerWidth
+    cachedViewportHeight = window.innerHeight
     setWillChange(true)
   }
 

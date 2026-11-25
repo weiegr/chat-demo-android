@@ -1,3 +1,4 @@
+import '../../app/compat.js'
 import { hasPersistentStorage } from './db.js'
 import { runSearchIndex, type SearchRequest, type SearchResponse } from './searchIndex.js'
 

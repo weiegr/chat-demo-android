@@ -1,11 +1,22 @@
 .frame {
-  --mobile-sider-width: min(76vw, 320px);
+  --mobile-sider-width: 76vw;
   position: absolute;
   inset: 0;
   display: flex;
   overflow: hidden;
-  overflow: clip;
   background-color: var(--dsw-alias-bg-base);
+}
+
+@supports (overflow: clip) {
+  .frame {
+    overflow: clip;
+  }
+}
+
+@supports (width: min(1px, 2px)) {
+  .frame {
+    --mobile-sider-width: min(76vw, 320px);
+  }
 }
 
 /* 对话界面在上层：被抽屉推开的阴影投向侧栏，关掉抽屉后回到原位 */
@@ -23,6 +34,48 @@
   position: relative;
   flex: 1;
   min-height: 0;
+  /* 锁定内部磨砂元素的 Backdrop Root，侧栏推开整体平移主屏时不穿透重采且零延迟闪变 */
+  isolation: isolate;
+}
+
+.chatBackgroundLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  contain: strict;
+  transform: translate3d(0, 0, 0);
+  pointer-events: none;
+}
+
+.chatBackgroundParallax {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* 开启动态视差时四周预留 14px 出血边，背景反向微移时不露白/黑边 */
+.chatBackgroundParallaxBleed {
+  inset: -14px;
+}
+
+.chatBackgroundImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  user-select: none;
+}
+
+.chatBackgroundScrim {
+  position: absolute;
+  inset: 0;
+  background-color: transparent;
+
+  [data-ds-dark-theme] & {
+    background-color: rgba(0, 0, 0, 0.22);
+  }
 }
 
 .saveError {
@@ -40,6 +93,7 @@
 .loadingView {
   position: absolute;
   inset: 0;
+  z-index: 1;
   display: flex;
   flex-direction: column;
 }
@@ -62,7 +116,7 @@
     position: fixed;
     top: var(--app-viewport-top, 0px);
     bottom: auto;
-    height: var(--app-viewport-height, 100dvh);
+    height: var(--app-viewport-height, 100%);
     /* 与下层抽屉保持同一底色：搜索展开把 .main 滑出屏幕外时，76vw 右侧与抽屉浑然一体无接缝 */
     background-color: var(--dsw-specific-sidebar-fill);
   }
@@ -78,20 +132,29 @@
   .main[data-sider-dragging='true'],
   .mainPushed,
   .mainSearchPushed {
-    overflow: clip;
+    overflow: hidden;
     border-radius: 18px 0 0 18px;
     will-change: transform;
   }
 
+  @supports (overflow: clip) {
+    .main[data-sider-active='true'],
+    .main[data-sider-dragging='true'],
+    .mainPushed,
+    .mainSearchPushed {
+      overflow: clip;
+    }
+  }
+
   .mainPushed {
     transform: translate3d(var(--mobile-sider-width), 0, 0);
-    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.18);
+    box-shadow: -6px 0 16px rgba(0, 0, 0, 0.14);
   }
 
   /* 侧边栏打开搜索时，对话界面顺势继续向右滑出屏幕外，同时把左侧阴影带离视口 */
   .mainSearchPushed {
     transform: translate3d(calc(100% + 28px), 0, 0);
-    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.18);
+    box-shadow: -6px 0 16px rgba(0, 0, 0, 0.14);
     pointer-events: none;
   }
 }

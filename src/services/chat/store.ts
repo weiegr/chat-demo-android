@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { getAbortReason, throwIfAborted } from '../../utils/abort.js'
 import { formatDate } from '../../utils/format.js'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
@@ -16,15 +17,21 @@ import {
   getFileErrorCode,
   isRetryableApiError,
 } from '../api/errors.js'
-import { cancelUpload, describeUploadError, uploadAttachment, useUploads } from '../attachments.js'
+import {
+  cancelUpload,
+  checkImageFileIds,
+  describeUploadError,
+  uploadAttachment,
+  useUploads,
+} from '../attachments.js'
 import { canAttachAudio } from '../audio/format.js'
 import { getAudioSpectrogramIds } from '../audio/metadata.js'
+import { useMockAccount } from '../account.js'
 import { GeolocationError, getCurrentPosition } from '../geolocation.js'
 import {
   canTranscribeVideo,
   canUploadVideo,
-  DEFAULT_LOCATION_TOOL_PROMPT,
-  getModePrompts,
+  getModeSystemPrompt,
   resolveModeModel,
   useSettings,
   type ChatMode,
@@ -113,9 +120,48 @@ const MAX_TOOL_ROUNDS = 5
 
 const LINK_PATTERN = /https?:\/\//i
 
-const buildLocationTool = (description: string): ClientToolDefinition => ({
+/** DeepSeek Live 通话模式内置附加提示词 */
+const FAST_LIVE_PROMPT = [
+  '你正在 DeepSeek Live 通话模式中，由 DeepSeek Flash 模型提供回答。',
+  '像当面聊天一样，用自然口语和简短连贯的句子直接回答。少用书面语、列表、分点、括号注释和复杂长句。',
+  '复杂话题先讲当前最关键的一小段，把后续逻辑拆成几轮对话，给用户留出插话和追问的空间。',
+  '用户打断或改问时，跟随最新发言。需要核实信息或实际位置时，按可用工具和授权使用搜索或定位。',
+].join('\n')
+
+/** 视频抽帧拼图与对白转写的内置说明提示词 */
+const FAST_VIDEO_PROMPT = [
+  '「视频画面」后的每张图按左上、右上、左下、右下排列四幅画面。每格对应独立时刻，以单格画面判断该时刻的物体数量和位置。',
+  '「视频对白」是视频中人物说的话。结合画面和对白，用自然的语言直接回答用户的问题。需要引用时，直接说视频里的人讲了什么。',
+  '回答聚焦视频内容。只有用户问到处理方式时，才说明提供了哪些画面和对白。证据不足时，只指出影响回答的具体细节。',
+].join('\n')
+
+/** 联网搜索工具（deepseek_web_search）内置提示词说明 */
+const SEARCH_TOOL_PROMPT = [
+  '本轮已启用联网能力：你可以调用 deepseek_web_search 搜索网页。是否调用由你根据问题需要判断，不需要用户先提出「搜索」的要求。',
+  '当问题涉及最新信息、具体事实、人物、地点、地标、机构、产品、作品、影视游戏、动植物、事件新闻或操作步骤时，先搜索核实再回答；寒暄、闲聊、纯创作或你已确定的常识问题不必搜索。',
+  '你具备上述能力，请不要表示自己无法联网或没有搜索工具。',
+].join('\n')
+
+/** 链接阅读工具（deepseek_read_url）内置提示词说明 */
+const READ_LINK_TOOL_PROMPT =
+  '本轮消息包含网页链接，你可以调用 deepseek_read_url 阅读用户消息中的链接内容以辅助回答。'
+
+/** 快速/专家模式下开启「昵称用于回复」时，将非空昵称拼接到基础提示词 */
+const buildNicknamePrompt = (nickname: string, enabled: boolean): string => {
+  if (!enabled) {
+    return ''
+  }
+  const normalized = nickname.replace(/[\r\n]+/g, ' ').trim()
+  if (!normalized) {
+    return ''
+  }
+  return `用户的昵称是「${normalized}」。在合适的对话情境下可以使用该昵称自然地称呼用户，但无需每轮回复都刻意提及。`
+}
+
+const LOCATION_TOOL: ClientToolDefinition = {
   name: 'get_location',
-  description: description.trim() || DEFAULT_LOCATION_TOOL_PROMPT,
+  description:
+    "Get the user's real-time physical geographic location (latitude, longitude, and resolved address when available). Call this tool only when the user's request depends on their actual current location (such as local weather, nearby places, current city, or directions).",
   input_schema: {
     type: 'object',
     properties: {
@@ -125,7 +171,7 @@ const buildLocationTool = (description: string): ClientToolDefinition => ({
       },
     },
   },
-})
+}
 
 /**
  * 组装本轮请求的 system 提示词：
@@ -139,15 +185,11 @@ const buildRequestSystem = (
     now,
     search,
     hasLink,
-    searchToolPrompt,
-    readLinkToolPrompt,
   }: {
     isRpMode: boolean
     now: Date
     search: boolean
     hasLink: boolean
-    searchToolPrompt: string
-    readLinkToolPrompt: string
   }
 ): string => {
   if (isRpMode) {
@@ -156,8 +198,8 @@ const buildRequestSystem = (
   const date = formatDate(now)
   return [
     basePrompt.trim(),
-    search ? searchToolPrompt.trim() : '',
-    hasLink ? readLinkToolPrompt.trim() : '',
+    search ? SEARCH_TOOL_PROMPT : '',
+    hasLink ? READ_LINK_TOOL_PROMPT : '',
     date
       ? `当前设备本地日期为 ${date}。回答现实中的「今天」「今年」等时间问题时以此为准。知识截止仅说明知识范围，历史消息日期仅说明当时的背景。没有明确依据时，不要自行声称具体的知识截止日期。`
       : '',
@@ -181,8 +223,7 @@ const requestTools = (
   search: boolean,
   hasLink: boolean,
   allowAiLocation: boolean,
-  thinking: boolean,
-  locationToolDescription: string
+  thinking: boolean
 ): NonNullable<CreateMessageRequest['tools']> => {
   if (isRpMode || isV4Pro) {
     return []
@@ -196,7 +237,7 @@ const requestTools = (
   }
   // 服务端约束：客户端工具只能在思考模式下与 deepseek_web_search 一同声明，缺一返回 400
   if (allowAiLocation && thinking && search) {
-    tools.push(buildLocationTool(locationToolDescription))
+    tools.push(LOCATION_TOOL)
   }
   return tools
 }
@@ -1280,8 +1321,11 @@ type PreparedRequest = Request & {
   ocrTexts?: Map<string, string>
 }
 
-/** 把补传得到的 serverId 写回会话里所有引用同一附件的消息（编辑、重新生成会共用附件） */
-const saveServerIds = (sessionId: string, serverIds: Map<string, string>) => {
+/**
+ * 将 serverId 写回所有引用同一附件的消息。传入 null 会清除超限旧图的 ID，触发补传。
+ * 尺寸标记随有效 ID 保存，因为本地保留的是原图，刷新后可以直接复用已检查的上传副本。
+ */
+const saveServerIds = (sessionId: string, serverIds: ReadonlyMap<string, string | null>) => {
   if (serverIds.size === 0) {
     return
   }
@@ -1291,9 +1335,12 @@ const saveServerIds = (sessionId: string, serverIds: Map<string, string>) => {
       message.role === 'user' && message.files.some((file) => serverIds.has(file.id))
         ? {
             ...message,
-            files: message.files.map((file) =>
-              serverIds.has(file.id) ? { ...file, serverId: serverIds.get(file.id) ?? null } : file
-            ),
+            files: message.files.map((file) => {
+              const serverId = serverIds.get(file.id)
+              return serverId === undefined
+                ? file
+                : { ...file, serverId, imageSizeChecked: file.isImage && serverId !== null }
+            }),
           }
         : message
     ),
@@ -1383,7 +1430,7 @@ const prepareFiles = async (
     (pendingFiles.get(sessionId) ?? []).map((file) => [file.id, file.blob])
   )
   /** 纯文本附件的正文在本地读出后直接并入提问，不再上传为 document */
-  const fileHistory = useRpContext ? getRpHistoryForFiles(request.history) : request.history
+  let fileHistory = useRpContext ? getRpHistoryForFiles(request.history) : request.history
   const texts = await loadInlineTexts([...fileHistory, request.question], pendingBlobs)
   const apiKey = useSettings.getState().apiKey ?? ''
   const useOcr = model === 'deepseek-v4-pro'
@@ -1391,12 +1438,12 @@ const prepareFiles = async (
     const ignore = includeAudio ? undefined : getAudioSpectrogramIds(files)
     return files.filter((file) => !file.audio && !ignore?.has(file.id))
   }
-  const questionFiles = uploadableFiles(request.question)
+  let questionFiles = uploadableFiles(request.question)
   const serverIds = new Map<string, string>()
   const ocrTexts = new Map<string, string>()
   // 停止生成立即生效；上传本身不取消（输入框与其他消息可能共用同一任务），完成后照常写回 serverId
   const aborted = new Promise<never>((_, reject) => {
-    signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+    signal.addEventListener('abort', () => reject(getAbortReason(signal)), { once: true })
   })
 
   if (useOcr) {
@@ -1496,12 +1543,28 @@ const prepareFiles = async (
       }
     }
   } else {
+    // 旧图片超限时先清除 ID，交给下方已有的附件补传流程（补传前自动按长边 4096 压缩）。
+    const filesToCheck = [
+      ...questionFiles,
+      ...getContextRounds(fileHistory).flatMap(([user]) => uploadableFiles(user)),
+    ]
+    const checked = await Promise.race([
+      checkImageFileIds(filesToCheck, signal, pendingBlobs),
+      aborted,
+    ])
+    if (checked.size > 0) {
+      saveServerIds(sessionId, checked)
+      request = refreshRequest(sessionId, request)
+      fileHistory = useRpContext ? getRpHistoryForFiles(request.history) : request.history
+      questionFiles = uploadableFiles(request.question)
+    }
+
     const uploads = Promise.allSettled(
       questionFiles
         .filter((file) => !texts.has(file.id) && !isTextAttachment(file))
         .map(async (file) => {
           const serverId = await ensureServerId(apiKey, file, pendingBlobs)
-          if (serverId) {
+          if (serverId && serverId !== file.serverId) {
             serverIds.set(file.id, serverId)
           }
         })
@@ -1532,7 +1595,7 @@ const prepareFiles = async (
       }
     }
     for (const file of pending.values()) {
-      signal.throwIfAborted()
+      throwIfAborted(signal)
       try {
         const serverId = await Promise.race([ensureServerId(apiKey, file, pendingBlobs), aborted])
         if (serverId) {
@@ -1540,7 +1603,7 @@ const prepareFiles = async (
           saveServerIds(sessionId, new Map([[file.id, serverId]]))
         }
       } catch {
-        signal.throwIfAborted()
+        throwIfAborted(signal)
       }
     }
   }
@@ -1606,7 +1669,7 @@ const reuploadInvalidatedFiles = (sessionId: string, request: Request, error: un
       }
       localIds.push(file.id)
       changed = true
-      return { ...file, serverId: null }
+      return { ...file, serverId: null, imageSizeChecked: false }
     })
     return changed ? { ...message, files } : message
   })
@@ -2034,10 +2097,17 @@ const streamReply = async (
           : makeMessages()
         const currentSettings = useSettings.getState()
         const { apiKey } = currentSettings
-        const modePrompts = getModePrompts(sessionMode, currentSettings, hasVideoContext)
+        const modeSystemPrompt = getModeSystemPrompt(sessionMode, currentSettings)
+        const accountState = useMockAccount.getState()
+        const nicknamePrompt =
+          sessionMode === 'fast' || sessionMode === 'expert'
+            ? buildNicknamePrompt(accountState.nickname, accountState.useNicknameInReply)
+            : ''
+        const videoPrompt =
+          hasVideoContext && canUploadVideo(sessionMode, currentSettings) ? FAST_VIDEO_PROMPT : ''
         const livePrompt = request.live
           ? [
-              currentSettings.fastLivePrompt.trim(),
+              FAST_LIVE_PROMPT,
               __BETA__ && memoryToolTurn
                 ? '需要核实过往对话细节时，按可用工具和授权使用历史记录查询。'
                 : '',
@@ -2045,7 +2115,7 @@ const streamReply = async (
               .filter(Boolean)
               .join('\n')
           : ''
-        const systemPrompt = [modePrompts.systemPrompt.trim(), livePrompt]
+        const systemPrompt = [modeSystemPrompt.trim(), nicknamePrompt, videoPrompt, livePrompt]
           .filter(Boolean)
           .join('\n\n')
         // 服务端约束：v4-pro 不支持 server-side 工具（web_search/read_url）与 title 生成，
@@ -2060,8 +2130,7 @@ const streamReply = async (
           searchEnabled,
           hasLink,
           allowAiLocation,
-          initial.thinking ?? false,
-          modePrompts.locationToolPrompt
+          initial.thinking ?? false
         )
         // RP 模式省略服务端 title（避免触发单条 32K 限制），v4-pro 不支持服务端 title，
         // 两者首轮结束后均写本地兜底标题
@@ -2071,8 +2140,6 @@ const streamReply = async (
           now: turnStartedAt,
           search: searchEnabled,
           hasLink,
-          searchToolPrompt: modePrompts.searchToolPrompt,
-          readLinkToolPrompt: modePrompts.readLinkToolPrompt,
         })
         let body: CreateMessageRequest = {
           model,

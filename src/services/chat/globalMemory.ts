@@ -18,10 +18,12 @@ import {
 import {
   claimMemoryWork,
   finishMemoryWork,
+  hasPausedMemoryWork,
   listMemorySources,
   loadMemoryProfile,
   nextMemorySource,
   readMemorySessions,
+  resumePausedMemoryWork,
   updateMemorySettings,
   type MemoryGenerationResult,
   type MemorySourceVersion,
@@ -35,6 +37,7 @@ type MemoryState = {
   storageError: boolean
   rebuild: 'idle' | 'waiting' | 'generating' | 'failed'
   autoError: boolean
+  hasPausedWork: boolean
 }
 
 export const useGlobalMemory = create<MemoryState>(() => ({
@@ -44,6 +47,7 @@ export const useGlobalMemory = create<MemoryState>(() => ({
   storageError: false,
   rebuild: 'idle',
   autoError: false,
+  hasPausedWork: false,
 }))
 
 const { getState, setState } = useGlobalMemory
@@ -88,7 +92,7 @@ export const noteMemoryActivity = (sessionId: string, active: boolean) => {
   }
 }
 
-const updateProfile = (profile: MemoryProfile) => {
+const updateProfile = (profile: MemoryProfile, pausedWork?: boolean) => {
   const previous = getState().profile
   // IDB reads may complete after a more recent settings write in this tab.
   if (profile.epoch < previous.epoch) {
@@ -98,9 +102,14 @@ const updateProfile = (profile: MemoryProfile) => {
     autoController?.abort()
     rebuildController?.abort()
     requests.clear()
-    setState({ autoError: false })
+    setState({ autoError: false, hasPausedWork: false })
   }
-  setState({ profile, ready: true, storageError: false })
+  setState({
+    profile,
+    ready: true,
+    storageError: false,
+    ...(pausedWork !== undefined ? { hasPausedWork: pausedWork } : {}),
+  })
   if (profile.enabled) {
     schedule()
   } else {
@@ -110,7 +119,36 @@ const updateProfile = (profile: MemoryProfile) => {
 
 const refreshProfile = async () => {
   try {
-    updateProfile(await loadMemoryProfile())
+    const profile = await loadMemoryProfile()
+    const paused = await hasPausedMemoryWork(profile)
+    updateProfile(profile, paused)
+  } catch {
+    setState({ storageError: true })
+  }
+}
+
+const resumeAndSchedule = (includeRetrying = false) => {
+  const { profile } = getState()
+  if (!profile.enabled || !useSettings.getState().apiKey) {
+    return Promise.resolve(false)
+  }
+  return resumePausedMemoryWork(profile.epoch, includeRetrying).then((resumed) => {
+    if (resumed) {
+      setState({ autoError: false, hasPausedWork: false })
+    }
+    schedule(0)
+    return resumed
+  })
+}
+
+export const retryAutoMemory = async () => {
+  const { profile } = getState()
+  if (!profile.enabled || !useSettings.getState().apiKey) {
+    return
+  }
+  setState({ autoError: false, hasPausedWork: false })
+  try {
+    await resumeAndSchedule(true)
   } catch {
     setState({ storageError: true })
   }
@@ -142,10 +180,18 @@ export const initGlobalMemory = () => {
       if (state.apiKey !== previous.apiKey && getState().profile.enabled) {
         autoController?.abort()
         rebuildController?.abort()
-        schedule()
+        if (state.apiKey) {
+          void resumeAndSchedule(false).catch(() => schedule())
+        } else {
+          schedule()
+        }
       }
     })
-    window.addEventListener('online', () => schedule())
+    window.addEventListener('online', () => {
+      if (getState().profile.enabled) {
+        void resumeAndSchedule(false).catch(() => schedule())
+      }
+    })
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && getState().profile.enabled) {
         void refreshProfile()
@@ -233,6 +279,19 @@ const memoryPrompt = (locale: Locale, rebuild: boolean) =>
       : 'Merge the new evidence into the old memory. Return NO_CHANGE exactly when there is no useful update.',
   ].join(' ')
 
+class InvalidMemoryDocumentError extends Error {
+  constructor() {
+    super('Incomplete or invalid memory document')
+    this.name = 'InvalidMemoryDocumentError'
+  }
+}
+
+const stripOuterMarkdownFence = (raw: string) => {
+  const trimmed = raw.trim()
+  const match = /^```(?:markdown|md)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i.exec(trimmed)
+  return match ? match[1].trim() : trimmed
+}
+
 const readGeneratedMemory = async (
   apiKey: string,
   body: CreateMessageRequest,
@@ -255,7 +314,7 @@ const readGeneratedMemory = async (
       usage = event.usage ?? usage
     }
   }
-  const markdown = text.trim()
+  const markdown = stripOuterMarkdownFence(text)
   const overview = locale === 'zh-CN' ? '## 概览' : '## Overview'
   const measured = usage && {
     cached: usage.cache_read_input_tokens,
@@ -265,14 +324,15 @@ const readGeneratedMemory = async (
   if (ended && !rebuild && markdown === 'NO_CHANGE') {
     return { usage: measured }
   }
+  const firstLine = markdown.split(/\r?\n/, 1)[0].trimEnd()
   if (
     !ended ||
-    markdown.split(/\r?\n/, 1)[0] !== overview ||
-    !markdown.slice(overview.length).trim() ||
+    firstLine !== overview ||
+    !markdown.slice(firstLine.length).trim() ||
     textBytes(markdown) > MEMORY_INPUT_BYTES ||
     (usage?.output_tokens ?? 0) > MEMORY_OUTPUT_TOKENS
   ) {
-    throw new Error('Incomplete or invalid memory document')
+    throw new InvalidMemoryDocumentError()
   }
   return { markdown, usage: measured }
 }
@@ -304,7 +364,7 @@ const generateMemory = async (
     const fork: CreateMessageRequest = {
       ...body,
       title: undefined,
-      tool_choice: { type: 'none' },
+      tool_choice: body.tools?.length ? { type: 'none' } : undefined,
       max_tokens: MEMORY_OUTPUT_TOKENS,
       messages: [
         ...body.messages,
@@ -318,11 +378,13 @@ const generateMemory = async (
     try {
       return await readGeneratedMemory(apiKey, fork, locale, false, signal)
     } catch (error) {
-      if (
-        !(error instanceof ApiError) ||
-        error.kind !== 'http' ||
-        (error.status !== 400 && error.status !== 422)
-      ) {
+      const canFallback =
+        !signal.aborted &&
+        (error instanceof InvalidMemoryDocumentError ||
+          (error instanceof ApiError &&
+            error.kind === 'http' &&
+            (error.status === 400 || error.status === 422)))
+      if (!canFallback) {
         throw error
       }
     }
@@ -361,7 +423,11 @@ const advanceQueue = async () => {
     }
     const controller = new AbortController()
     autoController = controller
-    const timeout = window.setTimeout(() => controller.abort('timeout'), 75_000)
+    let timedOut = false
+    const timeout = window.setTimeout(() => {
+      timedOut = true
+      controller.abort('timeout')
+    }, 75_000)
     let finished = false
     try {
       // Another tab could have consumed the first task before we acquired the lease.
@@ -420,12 +486,25 @@ const advanceQueue = async () => {
         finished = true
         setState({ autoError: false })
       } catch (error) {
-        if (!controller.signal.aborted || controller.signal.reason === 'timeout') {
+        if (!controller.signal.aborted || timedOut) {
           const retry =
-            error instanceof ApiError && (error.kind === 'network' || error.status === 503)
-          await finishMemoryWork(claim, { auto: { ...auto, failure: retry ? 'retry' : 'pause' } })
+            timedOut ||
+            (error instanceof ApiError &&
+              (error.kind === 'network' ||
+                error.kind === 'interrupted' ||
+                error.status === 429 ||
+                error.status === 500 ||
+                error.status === 502 ||
+                error.status === 503 ||
+                error.status === 504))
+          const failure = retry ? 'retry' : 'pause'
+          await finishMemoryWork(claim, { auto: { ...auto, failure } })
           finished = true
-          setState({ autoError: true })
+          const pausedNow = failure === 'pause' || (current.attempts ?? 0) + 1 >= 2
+          setState((state) => ({
+            autoError: true,
+            hasPausedWork: state.hasPausedWork || pausedNow,
+          }))
         }
       }
       if (requests.get(current.id) === snapshot) {
@@ -535,6 +614,7 @@ export const regenerateMemory = async (rebuild: MemoryRebuild) => {
   setState({ rebuild: 'waiting' })
   let claim: Awaited<ReturnType<typeof claimMemoryWork>> = null
   let timeout: number | undefined
+  let timedOut = false
   let failed = false
   try {
     while (!claim) {
@@ -554,7 +634,10 @@ export const regenerateMemory = async (rebuild: MemoryRebuild) => {
     }
     controller.signal.throwIfAborted()
     setState({ rebuild: 'generating' })
-    timeout = window.setTimeout(() => controller.abort('timeout'), 75_000)
+    timeout = window.setTimeout(() => {
+      timedOut = true
+      controller.abort('timeout')
+    }, 75_000)
     const generated = await generateMemory(
       apiKey,
       claim.profile,
@@ -566,7 +649,7 @@ export const regenerateMemory = async (rebuild: MemoryRebuild) => {
     failed = !(await finishMemoryWork(claim, { generated, rebuild: rebuild.versions }))
     claim = null
   } catch {
-    failed = !controller.signal.aborted || controller.signal.reason === 'timeout'
+    failed = !controller.signal.aborted || timedOut
   } finally {
     window.clearTimeout(timeout)
     if (claim) {

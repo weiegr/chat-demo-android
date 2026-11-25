@@ -60,6 +60,18 @@
     --think-fade-end: rgba(0, 0, 0, 0);
   }
 
+  /* 自定义背景时思考标题直接贴合背景，不铺纯色底条、不吸顶叠字 */
+  [data-chat-bg='true'] & {
+    position: static;
+    background-color: transparent;
+    box-shadow: none;
+
+    &::before,
+    &::after {
+      display: none;
+    }
+  }
+
   &::after {
     content: '';
     position: absolute;

@@ -68,7 +68,13 @@
   border-radius: 12px;
   border: 1px solid var(--dsw-alias-brand-primary);
   background-color: var(--dsw-specific-input-major);
+  box-shadow: 0 0 0 2px rgba(57, 100, 254, 0.16);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 16%, transparent);
+
+  [data-ds-dark-theme] & {
+    box-shadow: 0 0 0 2px rgba(86, 134, 254, 0.16);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 16%, transparent);
+  }
 }
 
 .renameInput {

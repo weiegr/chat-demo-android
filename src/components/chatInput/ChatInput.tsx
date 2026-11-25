@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type MutableRefObject,
   type Ref,
 } from 'react'
 import {
@@ -99,12 +100,16 @@ type ChatInputProps = {
   sessionId: string | null
   onStartCall?: (sessionId: string | null) => void
   cameraShortcutRef?: Ref<() => void>
+  controlsParallaxRef?: MutableRefObject<HTMLDivElement | null>
+  onParallaxPauseChange?: (paused: boolean) => void
 }
 
 export const ChatInput = memo(function ChatInput({
   sessionId,
   onStartCall,
   cameraShortcutRef,
+  controlsParallaxRef,
+  onParallaxPauseChange,
 }: ChatInputProps) {
   const activeEdit = useUserEdit((state) =>
     sessionId !== null && state.active?.sessionId === sessionId ? state.active : null
@@ -122,6 +127,8 @@ export const ChatInput = memo(function ChatInput({
       activeEdit={activeEdit}
       onStartCall={onStartCall}
       cameraShortcutRef={cameraShortcutRef}
+      controlsParallaxRef={controlsParallaxRef}
+      onParallaxPauseChange={onParallaxPauseChange}
     />
   )
 })
@@ -130,6 +137,8 @@ const Input = ({
   sessionId,
   onStartCall,
   cameraShortcutRef,
+  controlsParallaxRef,
+  onParallaxPauseChange,
   activeEdit,
 }: ChatInputProps & { activeEdit: ActiveUserEdit | null }) => {
   const t = useTranslate()
@@ -187,6 +196,8 @@ const Input = ({
   const attachDismissCleanupRef = useRef<(() => void) | null>(null)
   const [attachMenuOpen, setAttachMenuOpen] = useState(false)
   const [attachDismissMode, setAttachDismissMode] = useState<'idle' | 'to-ime'>('idle')
+  const [inputFocused, setInputFocused] = useState(false)
+  const [desktopAttachMenuOpen, setDesktopAttachMenuOpen] = useState(false)
   const [galleryGranted, setGalleryGranted] = useState(
     () => getAndroidHost()?.hasGalleryPermission?.() ?? false
   )
@@ -586,6 +597,19 @@ const Input = ({
   const processingAudio =
     audio.status !== null || (video.status !== null && video.status.phase !== 'frames')
 
+  const parallaxPaused =
+    inputFocused ||
+    attachMenuOpen ||
+    attachDismissMode !== 'idle' ||
+    desktopAttachMenuOpen ||
+    voice.status !== 'idle'
+
+  useEffect(() => {
+    onParallaxPauseChange?.(parallaxPaused)
+  }, [onParallaxPauseChange, parallaxPaused])
+
+  useEffect(() => () => onParallaxPauseChange?.(false), [onParallaxPauseChange])
+
   // 排队、上传中或上传失败的附件都留在输入框，全部上传成功后才能发送
   const canSend =
     !importingHistory &&
@@ -798,10 +822,12 @@ const Input = ({
           onTextChange={setText}
           onSend={send}
           onFocus={() => {
+            setInputFocused(true)
             if (isMobile && attachMenuOpen) {
               dismissAttachToKeyboard()
             }
           }}
+          onBlur={() => setInputFocused(false)}
           onPaste={(event) => {
             const files = Array.from(event.clipboardData.files)
             if (files.length > 0) {
@@ -812,7 +838,7 @@ const Input = ({
         >
           {recording && isMobile ? <Spectrum getAnalyser={voice.getAnalyser} /> : null}
         </ChatTextarea>
-        <div className={styles.functionRow}>
+        <div ref={controlsParallaxRef} className={styles.functionRow}>
           <ChatModeToggles mode={activeMode} />
           <div className={styles.right}>
             {isMobile ? (
@@ -829,6 +855,7 @@ const Input = ({
             ) : callAction || videoAction ? (
               <Menu
                 align="end"
+                onOpenChange={setDesktopAttachMenuOpen}
                 options={[fileAction, videoAction, callAction]
                   .filter((item) => item !== null)
                   .map(({ onClick, ...item }) => ({ ...item, onSelect: onClick }))}

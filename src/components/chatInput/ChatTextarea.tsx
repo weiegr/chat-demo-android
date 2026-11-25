@@ -10,6 +10,7 @@ type Props = {
   onTextChange: (text: string) => void
   onSend: () => void
   onFocus?: FocusEventHandler<HTMLTextAreaElement>
+  onBlur?: FocusEventHandler<HTMLTextAreaElement>
   onPaste?: ClipboardEventHandler<HTMLTextAreaElement>
   ariaLabel?: string
   autoFocus?: boolean
@@ -23,6 +24,7 @@ export const ChatTextarea = ({
   onTextChange,
   onSend,
   onFocus,
+  onBlur,
   onPaste,
   ariaLabel,
   autoFocus,
@@ -46,6 +48,7 @@ export const ChatTextarea = ({
         value={value}
         onChange={(event) => onTextChange(event.target.value)}
         onFocus={onFocus}
+        onBlur={onBlur}
         onPaste={onPaste}
         onMouseDown={(event) => {
           // 移动浏览器手动聚焦以避免整页滚动，Android WebView 保留原生光标落点。

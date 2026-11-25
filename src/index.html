@@ -16,5 +16,128 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      ;(function () {
+        var shown = false
+        var lastError = ''
+        var timer = 0
+
+        function hasMounted() {
+          var root = document.getElementById('root')
+          return Boolean(root && root.childNodes && root.childNodes.length > 0 && !shown)
+        }
+
+        function cleanup() {
+          if (timer) {
+            clearTimeout(timer)
+            timer = 0
+          }
+          window.removeEventListener('error', onError, true)
+          window.removeEventListener('unhandledrejection', onRejection)
+        }
+
+        function showFallback(reason) {
+          if (shown || hasMounted()) {
+            cleanup()
+            return
+          }
+          var root = document.getElementById('root')
+          if (!root) {
+            return
+          }
+          shown = true
+          cleanup()
+          var ua = String((navigator && navigator.userAgent) || '')
+          var zh =
+            String((navigator && navigator.language) || '')
+              .toLowerCase()
+              .indexOf('zh') === 0
+          var info =
+            (reason || lastError || (zh ? '页面未能完成初始化' : 'App failed to initialize')) +
+            '\nUA: ' +
+            ua
+
+          var box = document.createElement('div')
+          box.setAttribute('role', 'alert')
+          box.style.cssText =
+            'box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+            'min-height:100vh;padding:24px;text-align:center;background:#ffffff;color:#1f2329;' +
+            'font-family:-apple-system,BlinkMacSystemFont,sans-serif;'
+
+          var title = document.createElement('div')
+          title.style.cssText = 'font-size:17px;font-weight:600;margin-bottom:8px;'
+          title.textContent = zh ? '应用启动失败' : 'Failed to start'
+
+          var desc = document.createElement('div')
+          desc.style.cssText =
+            'max-width:340px;font-size:13px;line-height:20px;color:#646a73;margin-bottom:12px;'
+          desc.textContent = zh
+            ? '当前设备系统 WebView 可能版本过低或脚本加载异常，请尝试重新加载，或截图下方信息反馈给开发者：'
+            : 'The device WebView may be outdated or failed to load scripts. Please reload or share the info below:'
+
+          var pre = document.createElement('pre')
+          pre.style.cssText =
+            'max-width:340px;width:100%;margin:0 0 16px;padding:10px 12px;border-radius:10px;text-align:left;' +
+            'white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:16px;background:#f5f6f7;color:#4e5969;'
+          pre.textContent = info
+
+          var btn = document.createElement('button')
+          btn.type = 'button'
+          btn.style.cssText =
+            'padding:10px 22px;border:none;border-radius:999px;background:#4d6bfe;color:#ffffff;' +
+            'font-size:14px;font-weight:500;'
+          btn.textContent = zh ? '重新加载' : 'Reload'
+          btn.onclick = function () {
+            window.location.reload()
+          }
+
+          box.appendChild(title)
+          box.appendChild(desc)
+          box.appendChild(pre)
+          box.appendChild(btn)
+          root.appendChild(box)
+        }
+
+        function onError(event) {
+          if (hasMounted()) {
+            cleanup()
+            return
+          }
+          if (event && event.message) {
+            var loc = event.filename
+              ? ' (' + event.filename.split('/').pop() + ':' + (event.lineno || 0) + ')'
+              : ''
+            lastError = String(event.message) + loc
+            setTimeout(function () {
+              showFallback(lastError)
+            }, 60)
+          } else if (event && event.target && event.target.tagName === 'SCRIPT') {
+            lastError = 'Script load failed: ' + (event.target.src || '')
+            showFallback(lastError)
+          }
+        }
+
+        function onRejection(event) {
+          if (hasMounted()) {
+            cleanup()
+            return
+          }
+          var reason = event && event.reason
+          lastError =
+            'Unhandled rejection: ' +
+            (reason && reason.message ? reason.message : String(reason || ''))
+        }
+
+        window.addEventListener('error', onError, true)
+        window.addEventListener('unhandledrejection', onRejection)
+        timer = setTimeout(function () {
+          if (!hasMounted()) {
+            showFallback(lastError)
+          } else {
+            cleanup()
+          }
+        }, 4500)
+      })()
+    </script>
   </body>
 </html>

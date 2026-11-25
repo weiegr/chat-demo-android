@@ -109,15 +109,21 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
           phase === 'end'
         )
       })
+      const onResize = () => {
+        controller.syncMetrics('none')
+      }
       const resizeObserver =
-        typeof ResizeObserver === 'function'
-          ? new ResizeObserver(() => {
-              controller.syncMetrics('none')
-            })
-          : null
-      resizeObserver?.observe(stage)
+        typeof ResizeObserver === 'function' ? new ResizeObserver(onResize) : null
+      if (resizeObserver) {
+        resizeObserver.observe(stage)
+      } else {
+        window.addEventListener('resize', onResize)
+      }
       return () => {
         resizeObserver?.disconnect()
+        if (!resizeObserver) {
+          window.removeEventListener('resize', onResize)
+        }
         unsubscribe()
         controller.dispose()
         if (betaImeRef.current === controller) {

@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#ffffff" />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='18 18 72 72'%3E%3Crect x='18' y='18' width='72' height='72' rx='16' fill='%23FFFFFF'/%3E%3Cpath d='M76.78,66.11A25.8,25.8 0 0,1 66.11,76.78A5.2,5.2 0 0,1 61.23,67.6A15.4,15.4 0 0,0 67.6,61.23A5.2,5.2 0 0,1 76.78,66.11ZM41.89,76.78A25.8,25.8 0 0,1 31.22,66.11A5.2,5.2 0 0,1 40.4,61.23A15.4,15.4 0 0,0 46.77,67.6A5.2,5.2 0 0,1 41.89,76.78ZM31.22,41.89A25.8,25.8 0 0,1 41.89,31.22A5.2,5.2 0 0,1 46.77,40.4A15.4,15.4 0 0,0 40.4,46.77A5.2,5.2 0 0,1 31.22,41.89ZM66.11,31.22A25.8,25.8 0 0,1 76.78,41.89A5.2,5.2 0 0,1 67.6,46.77A15.4,15.4 0 0,0 61.23,40.4A5.2,5.2 0 0,1 66.11,31.22Z' fill='none' stroke='%232B56C9' stroke-width='4.2' stroke-linejoin='round'/%3E%3Cpath d='M62.54,72.75A20.6,20.6 0 0,1 45.46,72.75M35.25,62.54A20.6,20.6 0 0,1 35.25,45.46M45.46,35.25A20.6,20.6 0 0,1 62.54,35.25M72.75,45.46A20.6,20.6 0 0,1 72.75,62.54' fill='none' stroke='%23FFFFFF' stroke-width='7.4' stroke-linecap='round'/%3E%3Cpath d='M62.54,72.75A20.6,20.6 0 0,1 45.46,72.75M35.25,62.54A20.6,20.6 0 0,1 35.25,45.46M45.46,35.25A20.6,20.6 0 0,1 62.54,35.25M72.75,45.46A20.6,20.6 0 0,1 72.75,62.54' fill='none' stroke='%232B56C9' stroke-width='4.2' stroke-linecap='round'/%3E%3C/svg%3E"
+    />
+    <title>Abyss β</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      ;(function () {
+        var shown = false
+        var lastError = ''
+        var timer = 0
+
+        function hasMounted() {
+          var root = document.getElementById('root')
+          return Boolean(root && root.childNodes && root.childNodes.length > 0 && !shown)
+        }
+
+        function cleanup() {
+          if (timer) {
+            clearTimeout(timer)
+            timer = 0
+          }
+          window.removeEventListener('error', onError, true)
+          window.removeEventListener('unhandledrejection', onRejection)
+        }
+
+        function showFallback(reason) {
+          if (shown || hasMounted()) {
+            cleanup()
+            return
+          }
+          var root = document.getElementById('root')
+          if (!root) {
+            return
+          }
+          shown = true
+          cleanup()
+          var ua = String((navigator && navigator.userAgent) || '')
+          var zh =
+            String((navigator && navigator.language) || '')
+              .toLowerCase()
+              .indexOf('zh') === 0
+          var info =
+            (reason || lastError || (zh ? '页面未能完成初始化' : 'App failed to initialize')) +
+            '\nUA: ' +
+            ua
+
+          var box = document.createElement('div')
+          box.setAttribute('role', 'alert')
+          box.style.cssText =
+            'box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+            'min-height:100vh;padding:24px;text-align:center;background:#ffffff;color:#1f2329;' +
+            'font-family:-apple-system,BlinkMacSystemFont,sans-serif;'
+
+          var title = document.createElement('div')
+          title.style.cssText = 'font-size:17px;font-weight:600;margin-bottom:8px;'
+          title.textContent = zh ? '应用启动失败' : 'Failed to start'
+
+          var desc = document.createElement('div')
+          desc.style.cssText =
+            'max-width:340px;font-size:13px;line-height:20px;color:#646a73;margin-bottom:12px;'
+          desc.textContent = zh
+            ? '当前设备系统 WebView 可能版本过低或脚本加载异常，请尝试重新加载，或截图下方信息反馈给开发者：'
+            : 'The device WebView may be outdated or failed to load scripts. Please reload or share the info below:'
+
+          var pre = document.createElement('pre')
+          pre.style.cssText =
+            'max-width:340px;width:100%;margin:0 0 16px;padding:10px 12px;border-radius:10px;text-align:left;' +
+            'white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:16px;background:#f5f6f7;color:#4e5969;'
+          pre.textContent = info
+
+          var btn = document.createElement('button')
+          btn.type = 'button'
+          btn.style.cssText =
+            'padding:10px 22px;border:none;border-radius:999px;background:#4d6bfe;color:#ffffff;' +
+            'font-size:14px;font-weight:500;'
+          btn.textContent = zh ? '重新加载' : 'Reload'
+          btn.onclick = function () {
+            window.location.reload()
+          }
+
+          box.appendChild(title)
+          box.appendChild(desc)
+          box.appendChild(pre)
+          box.appendChild(btn)
+          root.appendChild(box)
+        }
+
+        function onError(event) {
+          if (hasMounted()) {
+            cleanup()
+            return
+          }
+          if (event && event.message) {
+            var loc = event.filename
+              ? ' (' + event.filename.split('/').pop() + ':' + (event.lineno || 0) + ')'
+              : ''
+            lastError = String(event.message) + loc
+            setTimeout(function () {
+              showFallback(lastError)
+            }, 60)
+          } else if (event && event.target && event.target.tagName === 'SCRIPT') {
+            lastError = 'Script load failed: ' + (event.target.src || '')
+            showFallback(lastError)
+          }
+        }
+
+        function onRejection(event) {
+          if (hasMounted()) {
+            cleanup()
+            return
+          }
+          var reason = event && event.reason
+          lastError =
+            'Unhandled rejection: ' +
+            (reason && reason.message ? reason.message : String(reason || ''))
+        }
+
+        window.addEventListener('error', onError, true)
+        window.addEventListener('unhandledrejection', onRejection)
+        timer = setTimeout(function () {
+          if (!hasMounted()) {
+            showFallback(lastError)
+          } else {
+            cleanup()
+          }
+        }, 4500)
+      })()
+    </script>
+  </body>
+</html>

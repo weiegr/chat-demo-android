@@ -6,7 +6,7 @@
   /* 移动端驱动 ::before 遮罩层透明度 */
 }
 
-.dialog {
+.dialog.dialog {
   --modal-header-gap: 7px;
   width: 760px;
   height: 500px;
@@ -20,7 +20,7 @@
     transform 0.2s var(--ds-ease-in-out);
 }
 
-.dialogVisible {
+.dialog.dialogVisible {
   opacity: 1;
   transform: translate3d(0, 0, 0) scale(1);
   transition:
@@ -43,6 +43,16 @@
   width: 172px;
   margin: 6px 12px 0 -12px;
   padding-top: 4px;
+}
+
+.version {
+  margin-top: auto;
+  padding: 12px 12px 2px;
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
+  user-select: text;
 }
 
 .navItem {
@@ -186,7 +196,7 @@
   box-sizing: border-box;
   padding: 16px 18px;
   border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 16px;
+  border-radius: 10px;
   background-color: var(--dsw-specific-login-input);
 
   [data-ds-dark-theme] & {
@@ -571,10 +581,6 @@
   }
 }
 
-.desktopToolList {
-  padding-left: 16px;
-}
-
 @media not all and (min-width: 768px) {
   /* 双类提权稳稳压过 Modal.overlayHidden 的 opacity: 0，保留 pointer-events: none，
      避免父级 opacity 污染整张滑入/滑出的实心设置卡片 */
@@ -590,6 +596,7 @@
       z-index: 0;
       background-color: rgba(0, 0, 0, 0.24);
       opacity: 0;
+      will-change: opacity;
       pointer-events: none;
       transition: opacity 0.26s cubic-bezier(0.22, 1, 0.36, 1);
 
@@ -603,7 +610,10 @@
     }
   }
 
-  .dialog {
+  .dialog.dialog {
+    --settings-page-bg: #eef0f5;
+    --settings-card-bg: #ffffff;
+    --settings-card-shadow: 0 1px 2px rgba(15, 23, 42, 0.045);
     position: relative;
     z-index: 1;
     align-self: stretch;
@@ -613,22 +623,29 @@
     max-height: none;
     padding: calc(12px + var(--safe-top)) 16px 0;
     border-radius: 0;
-    background-color: var(--dsw-specific-sidebar-fill);
+    background-color: var(--settings-page-bg);
     opacity: 1;
-    box-shadow: -8px 0 28px rgba(0, 0, 0, 0.14);
+    box-shadow: -4px 0 14px rgba(0, 0, 0, 0.12);
     transform: translate3d(100%, 0, 0);
     will-change: transform;
     transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
 
     [data-ds-dark-theme] & {
-      background-color: var(--dsw-alias-bg-base);
-      box-shadow: -8px 0 28px rgba(0, 0, 0, 0.42);
+      --settings-page-bg: #000000;
+      --settings-card-bg: #1c1d22;
+      --settings-card-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+      background-color: var(--settings-page-bg);
+      box-shadow: -4px 0 16px rgba(0, 0, 0, 0.34);
     }
 
     &.dialogVisible {
       opacity: 1;
       transform: translate3d(0, 0, 0);
       transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    &.dialogVisible:not([data-animating='true']) {
+      box-shadow: none;
     }
 
     > div:first-child {
@@ -699,14 +716,11 @@
     padding: 0;
     border: none;
     border-radius: 50%;
-    background-color: var(--dsw-alias-bg-base);
+    background-color: var(--settings-card-bg);
+    box-shadow: var(--settings-card-shadow);
     color: var(--dsw-alias-label-primary);
     cursor: pointer;
     transition: transform 0.14s ease;
-
-    [data-ds-dark-theme] & {
-      background-color: var(--dsw-alias-bg-layer-2);
-    }
 
     &:active {
       transform: scale(0.92);
@@ -739,12 +753,10 @@
     inset: 0;
     display: flex;
     flex-direction: column;
-    background-color: var(--dsw-specific-sidebar-fill);
+    background-color: var(--settings-page-bg);
+    contain: layout style paint;
+    isolation: isolate;
     will-change: transform;
-
-    [data-ds-dark-theme] & {
-      background-color: var(--dsw-alias-bg-base);
-    }
 
     &::after {
       content: '';
@@ -782,18 +794,22 @@
 
   .mobileSubPage {
     z-index: 2;
-    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
+    box-shadow: -3px 0 10px rgba(0, 0, 0, 0.08);
     transform: translate3d(100%, 0, 0);
     transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
 
     [data-ds-dark-theme] & {
-      box-shadow: -8px 0 24px rgba(0, 0, 0, 0.42);
+      box-shadow: -3px 0 12px rgba(0, 0, 0, 0.24);
     }
   }
 
   .mobileSubPageVisible {
     transform: translate3d(0, 0, 0);
     transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .dialog.dialog:not([data-animating='true']) .mobileSubPageVisible {
+    box-shadow: none;
   }
 
   .mobileSubPagePushed {
@@ -843,26 +859,9 @@
     margin-top: 2px;
   }
 
-  .modePromptMainRow .label {
-    font-weight: 500;
-  }
-
-  .modePromptSubList {
-    display: flex;
-    flex-direction: column;
-    border-top: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
-  }
-
-  .mobileActionCardEmbedded.modePromptSubRow {
-    padding-left: 26px;
-
-    .label {
-      color: var(--dsw-alias-label-secondary);
-    }
-  }
-
-  .labelRow .label {
-    transform: translateY(1px);
+  /* 保持各行文字基线与垂直中心一致，仅微调感叹号圆圈视觉重心 */
+  .labelRow .infoButton {
+    transform: translateY(-0.5px);
   }
 
   .mobileActionGroup {
@@ -874,6 +873,14 @@
     margin: 8px 16px 4px;
     font-size: 13px;
     line-height: 19px;
+    color: var(--dsw-alias-label-tertiary);
+    overflow-wrap: anywhere;
+  }
+
+  .mobileEmbeddedHint {
+    margin: -2px 0 10px;
+    font-size: 12px;
+    line-height: 18px;
     color: var(--dsw-alias-label-tertiary);
     overflow-wrap: anywhere;
   }
@@ -891,13 +898,10 @@
     width: 100%;
     min-height: 44px;
     padding: 11px 16px;
-    border-radius: 16px;
-    background-color: var(--dsw-alias-bg-base);
+    border-radius: 10px;
+    background-color: var(--settings-card-bg);
+    box-shadow: var(--settings-card-shadow);
     overflow: hidden;
-
-    [data-ds-dark-theme] & {
-      background-color: var(--dsw-alias-bg-layer-2);
-    }
   }
 
   .mobileActionCardEmbedded {
@@ -906,9 +910,11 @@
     padding: 11px 16px;
     border-radius: 0;
     background-color: transparent;
+    box-shadow: none;
 
     [data-ds-dark-theme] & {
       background-color: transparent;
+      box-shadow: none;
     }
   }
 
@@ -916,12 +922,8 @@
     flex: 0 0 auto;
     padding: 16px;
     border: none;
-    background-color: var(--dsw-alias-bg-base);
-
-    [data-ds-dark-theme] & {
-      border: none;
-      background-color: var(--dsw-alias-bg-layer-2);
-    }
+    background-color: var(--settings-card-bg);
+    box-shadow: var(--settings-card-shadow);
   }
 
   .mobileActionHit {
@@ -985,20 +987,18 @@
   .mobileGroupTitle {
     margin: 18px 0 8px 12px;
     font-size: 13px;
+    font-weight: 500;
     line-height: 18px;
-    color: var(--dsw-alias-label-tertiary);
+    color: var(--dsw-alias-label-secondary);
   }
 
   .mobileCard {
     flex-shrink: 0;
     padding: 0 16px;
-    border-radius: 16px;
-    background-color: var(--dsw-alias-bg-base);
+    border-radius: 10px;
+    background-color: var(--settings-card-bg);
+    box-shadow: var(--settings-card-shadow);
     overflow: hidden;
-
-    [data-ds-dark-theme] & {
-      background-color: var(--dsw-alias-bg-layer-2);
-    }
 
     .cell.switchHeader {
       min-height: 44px;
@@ -1006,10 +1006,17 @@
     }
   }
 
+  .version {
+    margin-top: 22px;
+    padding: 4px 0 8px;
+    text-align: center;
+  }
+
   .mobileNavRow {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 12px;
     box-sizing: border-box;
     width: 100%;
     min-height: 44px;
@@ -1029,7 +1036,13 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    flex-shrink: 0;
     color: var(--dsw-alias-label-tertiary);
+
+    /* 补偿 14x14 右箭头 SVG 右侧内置留白，使其尖端与同卡 Switch 右缘光学齐平 */
+    > svg:last-child {
+      margin-right: -4px;
+    }
   }
 
   .mobileNavValue {
@@ -1071,7 +1084,7 @@
   .apiKeySaved,
   .apiKeyInput {
     height: 48px;
-    padding: 0 12px 0 16px;
+    padding: 0 16px;
     border: none;
     border-radius: 40px;
     background-color: var(--dsw-specific-login-input);
@@ -1080,6 +1093,10 @@
     [data-ds-dark-theme] & {
       background-color: var(--dsw-alias-bg-layer-3);
     }
+  }
+
+  .apiKeySaved {
+    padding-right: 12px;
   }
 
   .apiKeySaved svg {
@@ -1114,7 +1131,7 @@
   }
 }
 
-.themeModal {
+.themeModal.themeModal {
   width: 312px;
   padding: 20px 0 0;
   overflow: hidden;
@@ -1133,7 +1150,7 @@
   }
 }
 
-.themeModalVisible {
+.themeModal.themeModalVisible {
   opacity: 1;
   transform: scale(1);
 }
@@ -1241,9 +1258,9 @@
   font-weight: 400;
 }
 
-.ttsSheet,
-.locationSheet,
-.urlSheet {
+.ttsSheet.ttsSheet,
+.locationSheet.locationSheet,
+.urlSheet.urlSheet {
   align-self: flex-end;
   width: 100%;
   max-width: none;
@@ -1279,7 +1296,13 @@
 }
 
 .urlSheet {
-  max-height: calc(100dvh - 24px - var(--safe-top) - var(--ime-settled, 0px));
+  max-height: calc(100vh - 24px - var(--safe-top) - var(--ime-settled, 0px));
+}
+
+@supports (height: 100dvh) {
+  .urlSheet {
+    max-height: calc(100dvh - 24px - var(--safe-top) - var(--ime-settled, 0px));
+  }
 }
 
 .urlSheetMain {
@@ -1324,6 +1347,7 @@
 
 .promptTextarea {
   min-height: 148px;
+  max-height: 46vh;
   max-height: 46dvh;
   resize: vertical;
   overflow-y: auto;
@@ -1648,6 +1672,7 @@
 }
 
 .deleteConfirm {
+  max-height: calc(100vh - 32px);
   max-height: calc(100dvh - 32px);
   overflow-y: auto;
 }
@@ -1670,25 +1695,787 @@
     overflow-wrap: anywhere;
     max-width: 100%;
   }
+
+  /* Beta 移动端沉浸式头图设置页：背景图铺满状态栏顶部，顶栏绝对悬浮，头像跟手缩小飞向右上角 */
+  .dialog.dialog.dialogImmersive {
+    padding: 0;
+
+    > div:first-child {
+      position: absolute;
+      top: 0;
+      right: 0;
+      left: 0;
+      z-index: 20;
+      min-height: 36px;
+      margin-bottom: 0;
+      padding: calc(10px + var(--safe-top)) 16px 10px;
+      pointer-events: none;
+
+      > div {
+        width: 100%;
+      }
+    }
+
+    .mobileSubHeader {
+      position: relative;
+      min-height: 36px;
+    }
+
+    .mobileBackButton {
+      pointer-events: auto;
+    }
+
+    .mobilePageViewport {
+      margin: 0;
+    }
+
+    .mobileSubPage {
+      box-sizing: border-box;
+      padding-top: calc(var(--safe-top) + 56px);
+    }
+  }
+
+  .mobileHeaderBackdrop {
+    position: absolute;
+    top: calc(-10px - var(--safe-top));
+    right: -16px;
+    bottom: -10px;
+    left: -16px;
+    z-index: -1;
+    background-color: var(--settings-page-bg);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .mobileHeaderBackdropSolid {
+    opacity: 1 !important;
+    transition: opacity 0.2s ease;
+  }
+
+  /* 顶栏分割线：仅在当前页面离开顶部向下滚动时淡入，停在最顶部或不可滚页面自动隐藏 */
+  .mobileHeaderDivider {
+    position: absolute;
+    right: -16px;
+    bottom: -10px;
+    left: -16px;
+    z-index: -1;
+    height: 1px;
+    background-color: var(--dsw-alias-border-l2-darkmode-thin);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease;
+  }
+
+  .mobileHeaderDividerVisible {
+    opacity: 1;
+  }
+
+  .mobileBackButton.mobileBackButtonOverlay {
+    background-color: rgba(255, 255, 255, 0.72);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.8),
+      0 2px 10px rgba(15, 23, 42, 0.1);
+    -webkit-backdrop-filter: blur(10px) saturate(1.4);
+    backdrop-filter: blur(10px) saturate(1.4);
+    transition:
+      transform 0.14s ease,
+      background-color 0.2s ease,
+      box-shadow 0.2s ease;
+
+    [data-ds-dark-theme] & {
+      background-color: rgba(28, 30, 38, 0.66);
+      box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+        0 2px 12px rgba(0, 0, 0, 0.36);
+      -webkit-backdrop-filter: blur(10px) saturate(1.3);
+      backdrop-filter: blur(10px) saturate(1.3);
+    }
+  }
+
+  .mobileBackButton.mobileBackButtonSolid {
+    background-color: var(--settings-card-bg);
+    box-shadow: var(--settings-card-shadow);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .mobileRootTitleInner {
+    display: inline-block;
+    opacity: 0;
+  }
+
+  .floatingAvatarLayer {
+    position: absolute;
+    inset: 0;
+    z-index: 25;
+    pointer-events: none;
+    opacity: 1;
+    visibility: visible;
+    transform: translate3d(0, 0, 0);
+    will-change: opacity, transform;
+    transition:
+      opacity 0.18s cubic-bezier(0.22, 1, 0.36, 1) 0.06s,
+      transform 0.24s cubic-bezier(0.22, 1, 0.36, 1) 0.04s,
+      visibility 0s linear 0.06s;
+  }
+
+  .floatingAvatarLayerHidden {
+    opacity: 0;
+    visibility: hidden;
+    transform: translate3d(-24px, 0, 0);
+    transition:
+      opacity 0.08s ease-out 0s,
+      transform 0.16s cubic-bezier(0.22, 1, 0.36, 1) 0s,
+      visibility 0s linear 0.08s;
+
+    .floatingAvatarHit,
+    .heroAvatarEditButton {
+      pointer-events: none;
+    }
+  }
+
+  .floatingAvatarAnchor {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 88px;
+    height: 88px;
+    transform-origin: center center;
+    will-change: transform;
+    pointer-events: none;
+  }
+
+  /* 无昵称时移除占位文本，同步放大头图头像使其居于视觉中心 */
+  .floatingAvatarAnchorLarge {
+    width: 108px;
+    height: 108px;
+
+    .heroAvatarCircle {
+      width: 108px;
+      height: 108px;
+    }
+
+    .heroAvatarDefaultIcon svg {
+      width: 56px;
+      height: 56px;
+    }
+
+    .heroAvatarEditButton {
+      right: -13px;
+      bottom: -11px;
+    }
+  }
+
+  .mobileHeroBackdrop {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    z-index: 0;
+    /* 延伸覆盖到下方数据管理区域背后，使未拉开时的磨砂玻璃面板能隐约透出背景色彩与光影 */
+    height: calc(var(--safe-top) + 520px);
+    overflow: hidden;
+    contain: strict;
+    pointer-events: none;
+    will-change: transform, opacity;
+    background-color: var(--settings-page-bg);
+  }
+
+  /* 背景 3D 视差内层：四周各预留 22px 安全出血边，随陀螺仪反方向微移时不露缝 */
+  .mobileHeroBackdropParallax {
+    position: absolute;
+    inset: -22px;
+    z-index: 1;
+    pointer-events: none;
+    will-change: transform;
+    background:
+      radial-gradient(105% 68% at 18% 14%, rgba(86, 138, 255, 0.34) 0%, transparent 62%),
+      radial-gradient(95% 66% at 86% 24%, rgba(92, 186, 246, 0.3) 0%, transparent 60%),
+      linear-gradient(180deg, #d6e6ff 0%, #e4eeff 58%, var(--settings-page-bg) 100%);
+
+    [data-ds-dark-theme] & {
+      background:
+        radial-gradient(105% 68% at 18% 14%, rgba(72, 122, 240, 0.42) 0%, transparent 62%),
+        radial-gradient(95% 66% at 86% 24%, rgba(56, 152, 222, 0.32) 0%, transparent 60%),
+        linear-gradient(180deg, #13203b 0%, #111b31 58%, var(--settings-page-bg) 100%);
+    }
+  }
+
+  .mobileHeroBackdropFade {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 2;
+    height: 140px;
+    background: linear-gradient(to bottom, transparent, var(--settings-page-bg));
+  }
+
+  .mobileImmersiveScroll {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobileHeroSpacer {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    box-sizing: border-box;
+    height: calc(var(--safe-top) + 340px);
+    padding: 0 24px 80px;
+    pointer-events: none;
+  }
+
+  .mobileHeroIdentity {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .mobileHeroAccountLabel {
+    display: block;
+    max-width: 240px;
+    overflow: hidden;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 22px;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: var(--dsw-alias-label-primary);
+  }
+
+  .mobileSettingsSheet {
+    position: relative;
+    box-sizing: border-box;
+    min-height: calc(100% - var(--safe-top) - 56px);
+    padding: 4px 16px calc(28px + var(--safe-bottom) + var(--ime-settled, 0px));
+    border-radius: 22px 22px 0 0;
+    overflow: hidden;
+  }
+
+  /* 仅在顶部数据管理卡片背后 240px 范围启用轻量磨砂玻璃，底缘渐变为页面实色以零接缝衔接下方区域 */
+  .mobileSettingsSheetGlass {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    z-index: 0;
+    height: 240px;
+    border-radius: 22px 22px 0 0;
+    background: linear-gradient(
+      to bottom,
+      rgba(242, 244, 249, 0.6) 0%,
+      rgba(242, 244, 249, 0.78) 76%,
+      var(--settings-page-bg) 100%
+    );
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+    -webkit-backdrop-filter: blur(8px) saturate(1.3);
+    backdrop-filter: blur(8px) saturate(1.3);
+    pointer-events: none;
+
+    [data-ds-dark-theme] & {
+      background: linear-gradient(
+        to bottom,
+        rgba(12, 13, 18, 0.56) 0%,
+        rgba(12, 13, 18, 0.76) 76%,
+        var(--settings-page-bg) 100%
+      );
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+      -webkit-backdrop-filter: blur(8px) saturate(1.25);
+      backdrop-filter: blur(8px) saturate(1.25);
+    }
+  }
+
+  .mobileSettingsSheetGlassOff {
+    opacity: 0;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .mobileSettingsSheetLower {
+    position: absolute;
+    top: 240px;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 0;
+    background-color: var(--settings-page-bg);
+    pointer-events: none;
+  }
+
+  .mobileSettingsSheetSolid {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    border-radius: inherit;
+    background-color: var(--settings-page-bg);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .mobileSettingsSheetContent {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* 单层外容器负责 backdrop-filter，卡片采用高纯净度半透明与脆白描边，避免混成灰脏感 */
+  .mobileCard.mobileGlassCard {
+    background-color: rgba(255, 255, 255, 0.78);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.82),
+      0 4px 16px rgba(15, 23, 42, 0.06);
+    transition:
+      background-color 0.2s ease,
+      box-shadow 0.2s ease;
+
+    [data-ds-dark-theme] & {
+      background-color: rgba(30, 32, 40, 0.72);
+      box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.13),
+        0 4px 18px rgba(0, 0, 0, 0.36);
+    }
+  }
+
+  .mobileCard.mobileGlassCardSolid {
+    background-color: var(--settings-card-bg);
+    box-shadow: var(--settings-card-shadow);
+  }
+}
+
+/* 模拟账号通用圆形头像与修改按钮（移动端与桌面端共享） */
+.accountAvatarCircle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  border-radius: 50%;
+  overflow: hidden;
+  background: linear-gradient(145deg, #dce8ff 0%, #bfd5ff 100%);
+  color: #3964fe;
+
+  [data-ds-dark-theme] & {
+    background: linear-gradient(145deg, #273759 0%, #1c2842 100%);
+    color: #8eb2ff;
+  }
+}
+
+.accountAvatarImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  user-select: none;
+}
+
+.accountAvatarDefaultIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.heroParallaxLayer {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.heroAvatar3d {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+}
+
+.heroAvatarShadow {
+  position: absolute;
+  inset: -3px;
+  z-index: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(
+    circle,
+    rgba(30, 58, 138, 0.18) 0%,
+    rgba(30, 58, 138, 0.07) 48%,
+    transparent 70%
+  );
+
+  [data-ds-dark-theme] & {
+    background: radial-gradient(
+      circle,
+      rgba(0, 0, 0, 0.46) 0%,
+      rgba(0, 0, 0, 0.18) 50%,
+      transparent 72%
+    );
+  }
+}
+
+.heroAvatarSheen {
+  position: absolute;
+  inset: -40%;
+  z-index: 2;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0.22;
+  background: radial-gradient(
+    circle at 38% 30%,
+    rgba(255, 255, 255, 0.52) 0%,
+    rgba(255, 255, 255, 0.16) 34%,
+    transparent 64%
+  );
+}
+
+.floatingAvatarHit {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  overflow: hidden;
+  background: none;
+  cursor: pointer;
+  pointer-events: auto;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+}
+
+.heroAvatarCircle {
+  width: 88px;
+  height: 88px;
+  box-shadow: 0 4px 12px rgba(24, 48, 108, 0.1);
+
+  [data-ds-dark-theme] & {
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  }
+}
+
+.heroAvatarDefaultIcon svg {
+  width: 46px;
+  height: 46px;
+}
+
+/* 独立放置在头像右下角外侧（与圆球留出清晰空隙，无白边白底） */
+.heroAvatarEditButton {
+  position: absolute;
+  right: -16px;
+  bottom: -14px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  pointer-events: auto;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  &:active {
+    opacity: 0.65;
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+}
+
+.desktopHeroAvatarEditButton {
+  right: -16px;
+  bottom: -14px;
+  width: 28px;
+  height: 28px;
+
+  svg {
+    width: 15px;
+    height: 15px;
+  }
+}
+
+.heroCoverEditButton {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  pointer-events: auto;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+
+  svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  &:active {
+    opacity: 0.65;
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+}
+
+.desktopHeroCoverEditButton {
+  right: 10px;
+  bottom: 10px;
+  width: 30px;
+  height: 30px;
+
+  svg {
+    width: 15px;
+    height: 15px;
+  }
+}
+
+.heroEditOnCover {
+  color: rgba(255, 255, 255, 0.92);
+  filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.48));
+}
+
+.mobileHeroCoverImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  user-select: none;
+}
+
+.mobileHeroCoverScrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.06) 0%,
+    transparent 36%,
+    rgba(0, 0, 0, 0.12) 100%
+  );
+  pointer-events: none;
+}
+
+.heroLabelOnCover {
+  color: #fff;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.42);
+}
+
+/* 桌面端数据管理栏目顶部账号头图卡片 */
+.desktopAccountHero {
+  position: relative;
+  margin-bottom: 10px;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  background-color: var(--dsw-alias-bg-base);
+
+  [data-ds-dark-theme] & {
+    background-color: var(--dsw-alias-bg-layer-3);
+  }
+}
+
+.desktopAccountHeroBg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.desktopAccountHeroBgParallax {
+  position: absolute;
+  inset: -18px;
+  pointer-events: none;
+  will-change: transform;
+  background:
+    radial-gradient(90% 100% at 15% 15%, rgba(92, 138, 255, 0.24) 0%, transparent 60%),
+    radial-gradient(85% 95% at 88% 20%, rgba(104, 189, 242, 0.24) 0%, transparent 58%),
+    linear-gradient(180deg, rgba(221, 233, 255, 0.72) 0%, transparent 100%);
+
+  [data-ds-dark-theme] & {
+    background:
+      radial-gradient(90% 100% at 15% 15%, rgba(72, 118, 232, 0.3) 0%, transparent 60%),
+      radial-gradient(85% 95% at 88% 20%, rgba(56, 150, 214, 0.24) 0%, transparent 58%),
+      linear-gradient(180deg, rgba(23, 35, 59, 0.85) 0%, transparent 100%);
+  }
+}
+
+.desktopAccountHeroCenter {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 22px 16px 18px;
+}
+
+.desktopAccountHeroCenterAvatarOnly {
+  padding: 26px 16px;
+}
+
+.desktopHeroAvatarWrap {
+  position: relative;
+  width: 72px;
+  height: 72px;
+}
+
+.desktopHeroAvatarLarge {
+  width: 90px;
+  height: 90px;
+
+  .desktopHeroAvatarCircle {
+    width: 90px;
+    height: 90px;
+  }
+
+  .desktopHeroAvatarIcon svg {
+    width: 48px;
+    height: 48px;
+  }
+
+  .desktopHeroAvatarEditButton {
+    right: -13px;
+    bottom: -11px;
+  }
+}
+
+.desktopHeroAvatarCircle {
+  width: 72px;
+  height: 72px;
+  box-shadow: 0 6px 18px rgba(24, 48, 108, 0.14);
+
+  [data-ds-dark-theme] & {
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  }
+}
+
+.desktopHeroAvatarIcon svg {
+  width: 38px;
+  height: 38px;
+}
+
+.desktopHeroAccountLabel {
+  display: block;
+  max-width: 240px;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--dsw-alias-label-primary);
+  will-change: transform;
+}
+
+/* 修改头像操作面板 */
+.avatarModal {
+  width: 320px;
+}
+
+.avatarSheetMain {
+  display: flex;
+  flex-direction: column;
+  padding-top: 8px;
+}
+
+.avatarSheetActions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.avatarSheetButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 14px;
+  background-color: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 22px;
+  cursor: pointer;
+  transition: background-color 0.16s ease;
+
+  &:active {
+    background-color: var(--dsw-alias-interactive-bg-active);
+  }
+
+  @media (hover: hover) {
+    &:hover {
+      background-color: var(--dsw-alias-interactive-bg-active);
+    }
+  }
+}
+
+.avatarSheetButtonDanger {
+  color: var(--dsw-alias-state-error-primary);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .settingsOverlay::before,
-  .dialog,
-  .dialogVisible,
+  .dialog.dialog,
+  .dialog.dialogVisible,
+  .dialog.dialog.dialogVisible,
   .mobileTitleItem,
   .mobileTitleActive,
   .mobileBackButton,
+  .mobileBackButton.mobileBackButtonOverlay,
   .mobileMainPage,
   .mobileMainPage::after,
   .mobileSubPage,
   .mobileSubPage::after,
   .mobileSubPageVisible,
   .mobileSubPagePushed,
-  .themeModal,
-  .ttsSheet,
-  .locationSheet,
-  .urlSheet,
+  .floatingAvatarLayer,
+  .floatingAvatarLayerHidden,
+  .mobileHeaderBackdropSolid,
+  .mobileHeaderDivider,
+  .themeModal.themeModal,
+  .themeModal.themeModalVisible,
+  .ttsSheet.ttsSheet,
+  .locationSheet.locationSheet,
+  .urlSheet.urlSheet,
   .locationSwitchCell {
     transition: none;
   }

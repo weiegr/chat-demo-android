@@ -304,9 +304,12 @@ export const prepareDraftMessage = (
     if (!skipUpload && (task?.status !== 'done' || !task.serverId)) {
       return null
     }
+    const serverId = inlineText ? null : task?.status === 'done' ? task.serverId : null
     files.push({
       id: attachment.id,
-      serverId: inlineText ? null : task?.status === 'done' ? task.serverId : null,
+      serverId,
+      // 草稿图片已通过 Files API 上传完成时，上传前已做过长边检查与超限缩小。
+      imageSizeChecked: attachment.isImage && serverId !== null,
       name: attachment.file.name,
       size: attachment.file.size,
       isImage: attachment.isImage,

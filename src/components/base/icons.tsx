@@ -1031,3 +1031,14 @@ export const IconVideoOutline16 = () => (
     />
   </svg>
 )
+
+/** 模拟账号默认圆形头像内的人物剪影 */
+export const IconUserFill24 = () => (
+  <svg width={24} height={24} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <circle cx={12} cy={8.6} r={3.8} fill="currentColor" />
+    <path
+      d="M4.8 19.4C5.45 15.95 8.38 13.8 12 13.8C15.62 13.8 18.55 15.95 19.2 19.4C19.32 20.04 18.82 20.6 18.17 20.6H5.83C5.18 20.6 4.68 20.04 4.8 19.4Z"
+      fill="currentColor"
+    />
+  </svg>
+)

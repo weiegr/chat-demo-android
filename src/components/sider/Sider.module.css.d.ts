@@ -2,6 +2,7 @@ declare const styles: {
   readonly shell: string
   readonly shellCollapsed: string
   readonly sider: string
+  readonly siderAvatarOnly: string
   readonly top: string
   readonly searchEntry: string
   readonly searchEntryIcon: string
@@ -14,17 +15,25 @@ declare const styles: {
   readonly listWrap: string
   readonly list: string
   readonly listTrack: string
+  readonly listBottomSpacer: string
   readonly section: string
   readonly sessionRow: string
   readonly sectionHeader: string
   readonly bottom: string
+  readonly bottomFloating: string
   readonly settings: string
   readonly settingsIcon: string
   readonly settingsLabel: string
+  readonly accountEntry: string
+  readonly accountEntryAvatarOnly: string
+  readonly accountAvatar: string
+  readonly accountAvatarIcon: string
+  readonly accountLabel: string
   readonly collapsed: string
   readonly collapsedHidden: string
   readonly collapsedGroup: string
   readonly drawer: string
+  readonly drawerMotion: string
   readonly mobile: string
   readonly searchOpen: string
   readonly searchPresenting: string

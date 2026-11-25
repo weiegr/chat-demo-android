@@ -180,6 +180,59 @@ export const nextMemorySource = async () => {
     .sort((a, b) => (a.dueAt ?? 0) - (b.dueAt ?? 0))[0]
 }
 
+export const hasPausedMemoryWork = async (profile: MemoryProfile): Promise<boolean> => {
+  if (!profile.enabled) {
+    return false
+  }
+  const sources = await (await getDB()).getAll('memorySources')
+  return sources.some(
+    (source) =>
+      isMemorySourceAllowed(profile, source) &&
+      (source.pending?.length ?? 0) > 0 &&
+      source.dueAt === undefined
+  )
+}
+
+/** 将因失败暂停（仍有待归纳轮次但 dueAt 已清空）的会话重新入队；手动重试时也可提前触发退避中的任务。 */
+export const resumePausedMemoryWork = async (
+  epoch: number,
+  includeRetrying = false
+): Promise<boolean> => {
+  const tx = (await getDB()).transaction(['globalMemory', 'memorySources'], 'readwrite')
+  const settings = tx.objectStore('globalMemory')
+  const sources = tx.objectStore('memorySources')
+  const [resumed] = await Promise.all([
+    (async () => {
+      try {
+        const profile = await settings.get('profile')
+        if (!profile?.enabled || profile.epoch !== epoch) {
+          return false
+        }
+        const now = Date.now()
+        const targets = (await sources.getAll()).filter(
+          (source) =>
+            isMemorySourceAllowed(profile, source) &&
+            (source.pending?.length ?? 0) > 0 &&
+            (source.dueAt === undefined ||
+              (includeRetrying && (source.attempts ?? 0) > 0 && source.dueAt > now))
+        )
+        if (targets.length === 0) {
+          return false
+        }
+        await Promise.all(
+          targets.map((source) => sources.put({ ...source, dueAt: now, attempts: 0 }))
+        )
+        return true
+      } catch (error) {
+        abortTransaction(tx)
+        throw error
+      }
+    })(),
+    tx.done,
+  ])
+  return resumed
+}
+
 type MemoryClaim = { id: string; profile: MemoryProfile }
 
 export const claimMemoryWork = async (epoch: number): Promise<MemoryClaim | null> => {

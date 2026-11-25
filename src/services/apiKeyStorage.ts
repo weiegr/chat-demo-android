@@ -1,4 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
+import { createId } from '../utils/id.js'
 
 const LEGACY_API_KEY = 'chat-demo:api-key'
 const KEY_RECORD = 'apiKey'
@@ -25,7 +26,7 @@ const requestAndroidStorage = (
   apiKey: string | null
 ): Promise<string | null> =>
   new Promise((resolve, reject) => {
-    const requestId = crypto.randomUUID()
+    const requestId = createId()
     let port: MessagePort | undefined
 
     const cleanup = () => {

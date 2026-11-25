@@ -33,11 +33,20 @@ export const dismissKeyboard = (): { hadNativeIme: boolean; hadFocus: boolean } 
 export const useMobileSider = create(() => ({ open: false }))
 
 /**
- * 抽屉改为把对话界面整体右移，抽屉本身留在下层。
- * 这里保存 App 注册进来的 <main>，手势拖动时直接写内联 transform，避免每帧触发 React 渲染。
+ * 抽屉改为把对话界面整体右移，抽屉在下层随进度做纯 GPU 水平微视差迎合。
+ * 这里保存 App 注册进来的 <main> 与抽屉动效层，手势拖动时直接写内联样式，避免每帧触发 React 渲染。
  */
 let mainElement: HTMLElement | null = null
+let drawerMotionElement: HTMLElement | null = null
 let mainInlineTimer: number | undefined
+
+/** 与 Sider.module.css 中 .drawerMotion 收起态保持严格一致（纯水平位移，零重栅格化缩放/透明度合成） */
+const DRAWER_START_X = -24
+
+const prefersReducedMotion = () =>
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 export const bindSiderMain = (element: HTMLElement | null) => {
   mainElement = element
@@ -45,21 +54,46 @@ export const bindSiderMain = (element: HTMLElement | null) => {
 
 export const getSiderMain = () => mainElement
 
-/** 清除手势拖动遗留在 <main> 上的内联样式，立刻交回 CSS 类过渡控制 */
-export const clearSiderMainInline = () => {
-  window.clearTimeout(mainInlineTimer)
-  mainInlineTimer = undefined
-  if (!mainElement) {
-    return
-  }
-  mainElement.style.removeProperty('transition')
-  mainElement.style.removeProperty('transform')
-  mainElement.style.removeProperty('box-shadow')
-  delete mainElement.dataset.siderDragging
+export const bindSiderDrawerMotion = (element: HTMLElement | null) => {
+  drawerMotionElement = element
 }
 
-export const scheduleClearSiderMainInline = (delayMs = 320) => {
+export const getSiderDrawerMotion = () => drawerMotionElement
+
+/** 按抽屉展开进度（0~1）同步设置水平微视差位移 */
+export const applySiderDrawerProgress = (element: HTMLElement, progress: number) => {
+  if (prefersReducedMotion()) {
+    element.style.transform = 'none'
+    return
+  }
+  const clamped = progress <= 0 ? 0 : progress >= 1 ? 1 : progress
+  const x = DRAWER_START_X * (1 - clamped)
+  element.style.transform = `translate3d(${x.toFixed(2)}px, 0, 0)`
+}
+
+export const cancelClearSiderMainInline = () => {
   window.clearTimeout(mainInlineTimer)
+  mainInlineTimer = undefined
+}
+
+/** 清除手势拖动遗留在 <main> 与抽屉动效层上的内联样式，立刻交回 CSS 类过渡控制 */
+export const clearSiderMainInline = () => {
+  cancelClearSiderMainInline()
+  if (mainElement) {
+    mainElement.style.removeProperty('transition')
+    mainElement.style.removeProperty('transform')
+    mainElement.style.removeProperty('box-shadow')
+    delete mainElement.dataset.siderDragging
+  }
+  if (drawerMotionElement) {
+    drawerMotionElement.style.removeProperty('transition')
+    drawerMotionElement.style.removeProperty('transform')
+    delete drawerMotionElement.dataset.siderDragging
+  }
+}
+
+export const scheduleClearSiderMainInline = (delayMs = 340) => {
+  cancelClearSiderMainInline()
   mainInlineTimer = window.setTimeout(clearSiderMainInline, delayMs)
 }
 

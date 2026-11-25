@@ -1,3 +1,4 @@
+import { getAbortReason } from '../../utils/abort.js'
 import { transcribe } from '../api/speech.js'
 import { encodeWav } from '../speech/recorder.js'
 import { MAX_AUDIO_SECONDS } from './format.js'
@@ -46,7 +47,7 @@ const probeDuration = (blob: Blob, signal: AbortSignal) =>
     }
     const abort = () => {
       cleanup()
-      reject(signal.reason)
+      reject(getAbortReason(signal))
     }
     const timer = setTimeout(() => complete(NaN), 2_000)
     signal.addEventListener('abort', abort, { once: true })
@@ -95,8 +96,20 @@ const decodeAudio = async (blob: Blob, signal: AbortSignal) => {
   signal.throwIfAborted()
   let decoded: AudioBuffer
   try {
-    const context = new OfflineAudioContext(1, 1, SAMPLE_RATE)
-    decoded = await context.decodeAudioData(bytes)
+    const OfflineContext =
+      window.OfflineAudioContext ??
+      (window as Window & { webkitOfflineAudioContext?: typeof OfflineAudioContext })
+        .webkitOfflineAudioContext
+    if (!OfflineContext) {
+      throw new Error('OfflineAudioContext unavailable')
+    }
+    const context = new OfflineContext(1, 1, SAMPLE_RATE)
+    decoded = await new Promise<AudioBuffer>((resolve, reject) => {
+      const pending = context.decodeAudioData(bytes, resolve, reject)
+      if (pending && typeof pending.then === 'function') {
+        pending.then(resolve, reject)
+      }
+    })
   } catch {
     signal.throwIfAborted()
     throw new AudioInputError('audioDecodeFailed')
@@ -205,7 +218,7 @@ const countSpeechUnits = (text: string) => {
 
 const transcribeSegment = async (pcm: Float32Array, apiKey: string, signal: AbortSignal) => {
   const request = new AbortController()
-  const cancel = () => request.abort(signal.reason)
+  const cancel = () => request.abort(getAbortReason(signal))
   signal.addEventListener('abort', cancel, { once: true })
   const timer = setTimeout(() => request.abort(), 75_000)
   try {

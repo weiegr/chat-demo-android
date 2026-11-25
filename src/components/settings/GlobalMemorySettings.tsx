@@ -9,6 +9,7 @@ import {
   initGlobalMemory,
   prepareMemoryRebuild,
   regenerateMemory,
+  retryAutoMemory,
   useGlobalMemory,
   type MemoryRebuild,
 } from '../../services/chat/globalMemory.js'
@@ -152,7 +153,7 @@ export const GlobalMemoryPage = ({
 export const MemoryFilePage = ({ disabled }: { disabled: boolean }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
-  const { profile, saving, storageError, rebuild, autoError } = useGlobalMemory()
+  const { profile, saving, storageError, rebuild, autoError, hasPausedWork } = useGlobalMemory()
   const hasKey = useSettings((state) => Boolean(state.apiKey))
   const [confirm, setConfirm] = useState<MemoryRebuild | 'delete' | null>(null)
   const [preparing, setPreparing] = useState(false)
@@ -240,13 +241,15 @@ export const MemoryFilePage = ({ disabled }: { disabled: boolean }) => {
             ? 'memoryStorageError'
             : !hasKey
               ? 'memoryRequiresApiKey'
-              : autoError
+              : autoError || hasPausedWork
                 ? 'memoryAutoError'
                 : null
   const error =
     message === 'memoryRebuildError' ||
     message === 'memoryStorageError' ||
     message === 'memoryAutoError'
+  const canRetryAuto =
+    message === 'memoryAutoError' && profile.enabled && hasKey && !disabled && !active && !saving
 
   const documentNode = (
     <div className={styles.memoryDocCard}>
@@ -340,6 +343,18 @@ export const MemoryFilePage = ({ disabled }: { disabled: boolean }) => {
               className={clsx(styles.mobileCardHint, error && styles.mobileCardHintError)}
             >
               {t(message)}
+              {canRetryAuto ? (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    className={styles.inlineActionLink}
+                    onClick={() => void retryAutoMemory()}
+                  >
+                    {t('retry')}
+                  </button>
+                </>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -358,6 +373,18 @@ export const MemoryFilePage = ({ disabled }: { disabled: boolean }) => {
             className={clsx(styles.memoryDesktopStatus, error ? styles.error : styles.description)}
           >
             {t(message)}
+            {canRetryAuto ? (
+              <>
+                {' '}
+                <button
+                  type="button"
+                  className={styles.inlineActionLink}
+                  onClick={() => void retryAutoMemory()}
+                >
+                  {t('retry')}
+                </button>
+              </>
+            ) : null}
           </div>
         ) : null}
         {documentNode}

@@ -1,5 +1,12 @@
 import clsx from 'clsx'
-import { useEffect, useId, useLayoutEffect, useRef, type ReactNode } from 'react'
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  type MutableRefObject,
+  type ReactNode,
+} from 'react'
 import { createPortal } from 'react-dom'
 import { getImeMotionState, hasNativeImeMotion, subscribeImeMotion } from '../../app/imeMotion.js'
 import { useIsMobile } from '../../app/viewport.js'
@@ -19,6 +26,7 @@ export const Modal = ({
   closable = false,
   visible,
   fullscreen = false,
+  dialogRef,
   overlayClassName,
   className,
   mainClassName,
@@ -33,6 +41,8 @@ export const Modal = ({
   visible?: boolean
   /** 全屏覆盖弹层（如移动端设置页）不随软键盘整体平移 */
   fullscreen?: boolean
+  /** 可选指向弹窗内容容器的 ref（便于调用方在动效期直接切换 DOM 状态） */
+  dialogRef?: MutableRefObject<HTMLDivElement | null>
   /** 遮罩层的额外 class */
   overlayClassName?: string
   className?: string
@@ -43,7 +53,13 @@ export const Modal = ({
   const t = useTranslate()
   const isMobile = useIsMobile()
   const titleId = useId()
-  const contentRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  const setContentEl = (node: HTMLDivElement | null) => {
+    contentRef.current = node
+    if (dialogRef) {
+      dialogRef.current = node
+    }
+  }
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   const controlled = visible !== undefined
@@ -56,15 +72,23 @@ export const Modal = ({
     }
   }, [controlled, visible])
 
-  // Android 原生键盘动效：使用独立 CSS translate 属性托起底部抽屉/居中弹窗，与自身入退场 transform 互不冲突
+  // Android 原生键盘动效：优先使用独立 CSS translate 属性托起底部抽屉/居中弹窗，
+  // 与入退场 transform 互不冲突；Chrome < 104 不支持独立 translate 时降级用 margin-bottom 托起。
   useLayoutEffect(() => {
     const content = contentRef.current
     if (!isMobile || fullscreen || !active || !hasNativeImeMotion() || !content) {
       return
     }
 
+    const supportsTranslate =
+      typeof content.style.translate === 'string' &&
+      typeof CSS !== 'undefined' &&
+      typeof CSS.supports === 'function' &&
+      CSS.supports('translate', '0 0')
     let factor = 0.5
     let maxLift = 0
+    let currentLift = 0
+    let isBottomSheet = false
 
     const cacheMetrics = () => {
       const safeTop = Number.parseFloat(
@@ -72,21 +96,27 @@ export const Modal = ({
       )
       const topGuard = (Number.isFinite(safeTop) ? safeTop : 0) + 12
       const rect = content.getBoundingClientRect()
-      const currentTranslateY =
-        Number.parseFloat(content.style.translate.split(/\s+/)[1] ?? '0') || 0
-      const naturalTop = rect.top - currentTranslateY
-      const naturalBottom = rect.bottom - currentTranslateY
-      const isBottomSheet = naturalBottom >= window.innerHeight - 4
+      const naturalTop = rect.top + currentLift
+      const naturalBottom = rect.bottom + currentLift
+      isBottomSheet = naturalBottom >= window.innerHeight - 4
       factor = isBottomSheet ? 1 : 0.5
       maxLift = Math.max(0, naturalTop - topGuard)
     }
 
     const applyLift = (raise: number) => {
-      if (raise > 0.05) {
-        const lift = Math.min(raise * factor, maxLift)
-        content.style.translate = lift > 0.05 ? `0 ${(-lift).toFixed(2)}px` : ''
+      const lift = raise > 0.05 ? Math.min(raise * factor, maxLift) : 0
+      currentLift = lift > 0.05 ? lift : 0
+      if (supportsTranslate) {
+        if (currentLift > 0) {
+          content.style.translate = `0 ${(-currentLift).toFixed(2)}px`
+        } else {
+          content.style.removeProperty('translate')
+        }
+      } else if (currentLift > 0) {
+        const margin = isBottomSheet ? currentLift : currentLift * 2
+        content.style.marginBottom = `${margin.toFixed(2)}px`
       } else {
-        content.style.removeProperty('translate')
+        content.style.removeProperty('margin-bottom')
       }
     }
 
@@ -106,7 +136,11 @@ export const Modal = ({
 
     return () => {
       unsubscribe()
-      content.style.removeProperty('translate')
+      if (supportsTranslate) {
+        content.style.removeProperty('translate')
+      } else {
+        content.style.removeProperty('margin-bottom')
+      }
     }
   }, [isMobile, fullscreen, active])
   useEffect(() => {
@@ -142,7 +176,7 @@ export const Modal = ({
       }}
     >
       <div
-        ref={contentRef}
+        ref={setContentEl}
         className={clsx(
           styles.content,
           controlled && (visible ? styles.contentVisible : styles.contentHidden),
