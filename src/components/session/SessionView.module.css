@@ -6,6 +6,35 @@
   flex-direction: column;
 }
 
+.headerSlot {
+  display: contents;
+}
+
+/* 自定义背景时让消息滚动层向上延伸到顶栏背后，使顶部渐进模糊与思考吸顶无缝连成一片 */
+[data-chat-bg='true'] .view {
+  --message-list-inset-top: var(--session-header-height, 60px);
+}
+
+@media not all and (min-width: 768px) {
+  [data-chat-bg='true'] .view {
+    --message-list-inset-top: var(--session-header-height, calc(52px + var(--safe-top)));
+  }
+}
+
+[data-chat-bg='true'] .headerSlot {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 17;
+  display: block;
+}
+
+/* 编辑消息时顶栏沉入聚焦遮罩之下，突出当前正在修改的气泡与输入区 */
+[data-chat-bg='true'] .headerSlotEditing {
+  z-index: 14;
+}
+
 .header {
   position: relative;
   z-index: 17;

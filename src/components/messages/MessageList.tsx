@@ -1,3 +1,4 @@
+import clsx from 'clsx'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { getImeMotionState, hasNativeImeMotion, subscribeImeMotion } from '../../app/imeMotion.js'
 import { useIsMobile } from '../../app/viewport.js'
@@ -16,7 +17,7 @@ import { closeSearchPanel } from '../search/searchPanelState.js'
 import { useMobileSider } from '../sider/mobileSiderState.js'
 import type { SelectMessageVersion } from './BranchSwitcher.js'
 import { AssistantMessage } from './AssistantMessage.js'
-import { ScrollToBottomContext } from './scrollContext.js'
+import { ScrollToBottomContext, ThinkStuckContext } from './scrollContext.js'
 import { cancelUserEdit, useUserEdit } from './userEditState.js'
 import { UserMessage } from './UserMessage.js'
 import type { Message } from '../../services/chat/types.js'
@@ -98,10 +99,12 @@ export const MessageList = ({
   const containerRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
+  const topFrostRef = useRef<HTMLDivElement>(null)
   const footerSlotRef = useRef<HTMLDivElement>(null)
   const scrollButtonRef = useRef<HTMLButtonElement>(null)
   const stickyRef = useRef(true)
   const scrollTopRef = useRef(0)
+  const stuckThinkIdsRef = useRef(new Set<string>())
   const imeTransitioningRef = useRef(false)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const restoreScrollRef = useRef<{ messageId: string; top: number } | null>(null)
@@ -117,16 +120,51 @@ export const MessageList = ({
     setPreviousVersions(versions)
   }
   const lastMessageId = messages.at(-1)?.id
+
+  const syncTopFrostScrolled = useCallback((el: HTMLElement | null) => {
+    const frost = topFrostRef.current
+    if (!frost || !el) {
+      return
+    }
+    const next = el.scrollTop > 2 ? 'true' : 'false'
+    if (frost.dataset.scrolled !== next) {
+      frost.dataset.scrolled = next
+    }
+  }, [])
+
+  const reportThinkStuck = useCallback((id: string, stuck: boolean) => {
+    const set = stuckThinkIdsRef.current
+    if (stuck) {
+      set.add(id)
+    } else {
+      set.delete(id)
+    }
+    const frost = topFrostRef.current
+    if (frost) {
+      const next = set.size > 0 ? 'true' : 'false'
+      if (frost.dataset.thinkStuck !== next) {
+        frost.dataset.thinkStuck = next
+      }
+    }
+  }, [])
+
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current
     if (el && stickyRef.current) {
       el.scrollTop = el.scrollHeight
       scrollTopRef.current = el.scrollTop
+      syncTopFrostScrolled(el)
       setShowScrollButton(false)
     }
-  }, [])
+  }, [syncTopFrostScrolled])
 
-  // 内容、键盘和输入框高度变化时，继续遵循当前跟随状态。
+  const editingUserMessage = useUserEdit(
+    (state) => !readOnly && state.active?.sessionId === session.id
+  )
+  const editingUserMessageRef = useRef(editingUserMessage)
+  editingUserMessageRef.current = editingUserMessage
+
+  // 内容、键盘和输入框高度变化时，继续遵循当前跟随状态；编辑态不因输入框增高强行重排滚底。
   useLayoutEffect(() => {
     const content = contentRef.current
     const scroll = scrollRef.current
@@ -134,7 +172,7 @@ export const MessageList = ({
       return
     }
     const observer = new ResizeObserver(() => {
-      if (!imeTransitioningRef.current) {
+      if (!imeTransitioningRef.current && !editingUserMessageRef.current) {
         scrollToBottom()
       }
     })
@@ -163,14 +201,31 @@ export const MessageList = ({
 
   useEffect(closeSearchPanel, [session.id, lastMessageId])
   useEffect(() => {
+    stuckThinkIdsRef.current.clear()
+    if (topFrostRef.current) {
+      topFrostRef.current.dataset.thinkStuck = 'false'
+    }
     if (!readOnly) {
       cancelUserEdit()
     }
   }, [session.id, lastMessageId, readOnly])
 
-  const editingUserMessage = useUserEdit(
-    (state) => !readOnly && state.active?.sessionId === session.id
-  )
+  // 移动端进入编辑态时（早于 ChatInput useEffect 拉起软键盘），提前预热 footerSlot 合成层消除首帧冷上传尖峰
+  useLayoutEffect(() => {
+    if (!isMobile || !hasNativeImeMotion()) {
+      return
+    }
+    const footerSlot = footerSlotRef.current
+    if (!footerSlot) {
+      return
+    }
+    if (editingUserMessage) {
+      footerSlot.style.willChange = 'transform'
+    } else if (!imeTransitioningRef.current && !footerSlot.style.transform) {
+      footerSlot.style.removeProperty('will-change')
+    }
+  }, [editingUserMessage, isMobile])
+
   useEffect(() => {
     if (!editingUserMessage) {
       return
@@ -209,6 +264,7 @@ export const MessageList = ({
     } else {
       el.scrollTop = scrollTopRef.current
     }
+    syncTopFrostScrolled(el)
     const onScroll = () => {
       const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < STICKY_THRESHOLD
       // 仅在用户向上滚动时停止跟随底部，布局或内容增高时保持跟随状态。
@@ -218,11 +274,12 @@ export const MessageList = ({
         stickyRef.current = false
       }
       scrollTopRef.current = el.scrollTop
+      syncTopFrostScrolled(el)
       setShowScrollButton(!stickyRef.current && !nearBottom)
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
-  }, [isMobile, scrollToBottom])
+  }, [isMobile, scrollToBottom, syncTopFrostScrolled])
 
   // Android 原生键盘动效：动画期间以纯 GPU transform 同步托起输入区与底部消息，静止后无缝移交真实底距以保留原生滚动
   useLayoutEffect(() => {
@@ -334,7 +391,9 @@ export const MessageList = ({
       clearSmoothTransition()
       imeTransitioningRef.current = true
       mode = 'opening'
-      openSticky = stickyRef.current
+      // 编辑态下 .editMask (position: fixed) 挂在 .column 内：禁止给 .column 挂 transform，
+      // 既避免 fixed 遮罩被 transform 劫持错位重建合成层，也保持正在编辑的气泡稳稳停在原位。
+      openSticky = !editingUserMessageRef.current && stickyRef.current
       openGapBelow = Math.max(0, scroll.clientHeight - (scroll.scrollHeight - scroll.scrollTop))
       if (footerSlotRef.current) {
         footerSlotRef.current.style.willChange = 'transform'
@@ -417,7 +476,7 @@ export const MessageList = ({
       if (shift > 0.5) {
         container.style.paddingBottom = `${shift.toFixed(2)}px`
         clearTransforms()
-        if (keepSticky) {
+        if (keepSticky && !editingUserMessageRef.current) {
           scroll.scrollTop = scroll.scrollHeight
           scrollTopRef.current = scroll.scrollTop
         }
@@ -489,80 +548,87 @@ export const MessageList = ({
   const uploadRetryId = readOnly ? null : getUploadRetryId(messages, streaming)
   return (
     <ScrollToBottomContext.Provider value={scrollToBottom}>
-      <div ref={isMobile ? containerRef : scrollRef} className={styles.container}>
-        <div className={styles.scrollArea}>
-          <div ref={isMobile ? scrollRef : undefined} className={styles.scroll}>
-            <div
-              ref={contentRef}
-              className={styles.column}
-              data-long={messages.length > LONG_LIST_THRESHOLD ? 'true' : undefined}
-            >
-              {editingUserMessage ? (
-                <div data-open="true" className={styles.editMask} onClick={cancelUserEdit} />
-              ) : null}
-              {messages.map((message, index) =>
-                message.role === 'user' ? (
-                  <UserMessage
-                    key={message.id}
-                    sessionId={session.id}
-                    message={message}
-                    retryUploadId={uploadRetryId}
-                    isFirst={index === 0}
-                    isLast={index === lastIndex || index === lastIndex - 1}
-                    busy={streaming}
-                    readOnly={readOnly}
-                    versions={versions.get(message.id) ?? EMPTY_VERSIONS}
-                    onSelectVersion={selectVersion}
-                  />
-                ) : index === lastIndex ? (
-                  <LiveAssistantMessage
-                    key={message.id}
-                    sessionId={session.id}
-                    message={message}
-                    isLast
-                    streaming={streaming}
-                    busy={streaming}
-                    readOnly={readOnly}
-                    versions={versions.get(message.id) ?? EMPTY_VERSIONS}
-                    onSelectVersion={selectVersion}
-                  />
-                ) : (
-                  <AssistantMessage
-                    key={message.id}
-                    sessionId={session.id}
-                    message={message}
-                    isLast={false}
-                    streaming={false}
-                    busy={streaming}
-                    readOnly={readOnly}
-                    versions={versions.get(message.id) ?? EMPTY_VERSIONS}
-                    onSelectVersion={selectVersion}
-                  />
-                )
-              )}
+      <ThinkStuckContext.Provider value={reportThinkStuck}>
+        <div ref={isMobile ? containerRef : scrollRef} className={styles.container}>
+          <div className={styles.scrollArea}>
+            <div ref={isMobile ? scrollRef : undefined} className={styles.scroll}>
+              <div
+                ref={topFrostRef}
+                className={clsx(styles.topFrost, editingUserMessage && styles.topFrostHidden)}
+                aria-hidden="true"
+              />
+              <div
+                ref={contentRef}
+                className={styles.column}
+                data-long={messages.length > LONG_LIST_THRESHOLD ? 'true' : undefined}
+              >
+                {editingUserMessage ? (
+                  <div data-open="true" className={styles.editMask} onClick={cancelUserEdit} />
+                ) : null}
+                {messages.map((message, index) =>
+                  message.role === 'user' ? (
+                    <UserMessage
+                      key={message.id}
+                      sessionId={session.id}
+                      message={message}
+                      retryUploadId={uploadRetryId}
+                      isFirst={index === 0}
+                      isLast={index === lastIndex || index === lastIndex - 1}
+                      busy={streaming}
+                      readOnly={readOnly}
+                      versions={versions.get(message.id) ?? EMPTY_VERSIONS}
+                      onSelectVersion={selectVersion}
+                    />
+                  ) : index === lastIndex ? (
+                    <LiveAssistantMessage
+                      key={message.id}
+                      sessionId={session.id}
+                      message={message}
+                      isLast
+                      streaming={streaming}
+                      busy={streaming}
+                      readOnly={readOnly}
+                      versions={versions.get(message.id) ?? EMPTY_VERSIONS}
+                      onSelectVersion={selectVersion}
+                    />
+                  ) : (
+                    <AssistantMessage
+                      key={message.id}
+                      sessionId={session.id}
+                      message={message}
+                      isLast={false}
+                      streaming={false}
+                      busy={streaming}
+                      readOnly={readOnly}
+                      versions={versions.get(message.id) ?? EMPTY_VERSIONS}
+                      onSelectVersion={selectVersion}
+                    />
+                  )
+                )}
+              </div>
             </div>
+            {isMobile && showScrollButton && !editingUserMessage ? (
+              <button
+                ref={scrollButtonRef}
+                type="button"
+                className={styles.scrollBottomButton}
+                aria-label="Scroll to bottom"
+                onClick={() => {
+                  stickyRef.current = true
+                  scrollToBottom()
+                }}
+              >
+                <IconChevronDownOutline14 />
+              </button>
+            ) : null}
           </div>
-          {isMobile && showScrollButton && !editingUserMessage ? (
-            <button
-              ref={scrollButtonRef}
-              type="button"
-              className={styles.scrollBottomButton}
-              aria-label="Scroll to bottom"
-              onClick={() => {
-                stickyRef.current = true
-                scrollToBottom()
-              }}
-            >
-              <IconChevronDownOutline14 />
-            </button>
+          {footer ? (
+            <div ref={footerSlotRef} className={styles.footerSlot}>
+              {footer}
+            </div>
           ) : null}
         </div>
-        {footer ? (
-          <div ref={footerSlotRef} className={styles.footerSlot}>
-            {footer}
-          </div>
-        ) : null}
-      </div>
+      </ThinkStuckContext.Provider>
     </ScrollToBottomContext.Provider>
   )
 }

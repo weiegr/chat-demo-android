@@ -2,6 +2,7 @@ import { useTranslate } from '../../i18n/index.js'
 import clsx from 'clsx'
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
+import { useActiveChatBackgroundUrl } from '../../services/chatBackground.js'
 import {
   IconBrowseOutline16,
   IconBrowseWarningOutline16,
@@ -37,6 +38,7 @@ import { Tooltip } from '../base/Tooltip.js'
 import { Markdown } from '../markdown/Markdown.js'
 import { SiteThumbnails } from '../search/SiteLogo.js'
 import { toggleSearchPanel, useSearchPanel } from '../search/searchPanelState.js'
+import { useReportThinkStuck } from './scrollContext.js'
 import styles from './ReplyArea.module.css'
 import './thinking.markdown.css'
 
@@ -83,6 +85,8 @@ export const ReplyArea = memo(function ReplyArea({
 }) {
   useTranslate()
   const isMobile = useIsMobile()
+  const hasChatBg = useActiveChatBackgroundUrl() !== null
+  const reportThinkStuck = useReportThinkStuck()
   const [open, setOpen] = useState(true)
   const [stuck, setStuck] = useState(false)
   const areaRef = useRef<HTMLDivElement>(null)
@@ -123,7 +127,18 @@ export const ReplyArea = memo(function ReplyArea({
     )
     observer.observe(sentinel)
     return () => observer.disconnect()
-  }, [activeSticky, isMobile])
+  }, [activeSticky, isMobile, hasChatBg])
+
+  // 同步当前思考区吸顶态给列表顶部连续渐进模糊层，卸载时自动清理
+  useEffect(() => {
+    const active = activeSticky && stuck
+    reportThinkStuck(message.id, active)
+    return () => {
+      if (active) {
+        reportThinkStuck(message.id, false)
+      }
+    }
+  }, [activeSticky, stuck, message.id, reportThinkStuck])
 
   if (!hasContent) {
     return null
@@ -134,10 +149,13 @@ export const ReplyArea = memo(function ReplyArea({
     if (open && areaRef.current) {
       const scroller = findScrollContainer(areaRef.current)
       if (scroller) {
+        const inset = titleRef.current
+          ? Number.parseFloat(getComputedStyle(titleRef.current).top) || 0
+          : 0
         const areaTop = areaRef.current.getBoundingClientRect().top
         const scrollerTop = scroller.getBoundingClientRect().top
-        if (areaTop < scrollerTop + 8) {
-          scroller.scrollTop += areaTop - scrollerTop - 8
+        if (areaTop < scrollerTop + inset + 8) {
+          scroller.scrollTop += areaTop - scrollerTop - inset - 8
         }
       }
     }

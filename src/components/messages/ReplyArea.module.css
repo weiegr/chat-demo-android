@@ -38,6 +38,14 @@
   &:hover {
     color: var(--dsw-alias-label-primary);
   }
+
+  [data-chat-bg='true'] & {
+    color: rgba(15, 17, 21, 0.9);
+  }
+
+  [data-ds-dark-theme] [data-chat-bg='true'] & {
+    color: rgba(249, 250, 251, 0.92);
+  }
 }
 
 .stickySentinel {
@@ -58,18 +66,6 @@
   [data-ds-dark-theme] & {
     --think-fade-mid: rgba(0, 0, 0, 0.65);
     --think-fade-end: rgba(0, 0, 0, 0);
-  }
-
-  /* 自定义背景时思考标题直接贴合背景，不铺纯色底条、不吸顶叠字 */
-  [data-chat-bg='true'] & {
-    position: static;
-    background-color: transparent;
-    box-shadow: none;
-
-    &::before,
-    &::after {
-      display: none;
-    }
   }
 
   &::after {
@@ -106,6 +102,17 @@
   &::after {
     opacity: 1;
   }
+}
+
+/* 自定义背景时保留吸顶常驻；背景延伸与渐进模糊由 MessageList 顶部的单一连续层统一承载，避免孤立白条 */
+[data-chat-bg='true'] .titleSticky {
+  background-color: transparent;
+  box-shadow: none;
+}
+
+[data-chat-bg='true'] .titleSticky::before,
+[data-chat-bg='true'] .titleSticky::after {
+  display: none;
 }
 
 .titleIcon {
@@ -404,4 +411,77 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 自定义背景时增强思考标题、时间线、过程步骤与工具芯片的可读性 */
+[data-chat-bg='true'] .titleText {
+  font-weight: 500;
+}
+
+[data-chat-bg='true'] .stoppedIcon {
+  color: rgba(15, 17, 21, 0.66);
+}
+
+[data-ds-dark-theme] [data-chat-bg='true'] .stoppedIcon {
+  color: rgba(249, 250, 251, 0.72);
+}
+
+[data-chat-bg='true'] .withLine::after,
+[data-chat-bg='true'] .content::after {
+  background-color: rgba(15, 23, 42, 0.3);
+}
+
+[data-ds-dark-theme] [data-chat-bg='true'] .withLine::after,
+[data-ds-dark-theme] [data-chat-bg='true'] .content::after {
+  background-color: rgba(255, 255, 255, 0.34);
+}
+
+[data-chat-bg='true'] .dotInner.inactive {
+  background-color: rgba(15, 23, 42, 0.56);
+}
+
+[data-ds-dark-theme] [data-chat-bg='true'] .dotInner.inactive {
+  background-color: rgba(255, 255, 255, 0.64);
+}
+
+[data-chat-bg='true'] .row,
+[data-chat-bg='true'] .tool,
+[data-chat-bg='true'] .pageDone .pageText {
+  color: rgba(15, 17, 21, 0.86);
+  font-weight: 500;
+}
+
+[data-ds-dark-theme] [data-chat-bg='true'] .row,
+[data-ds-dark-theme] [data-chat-bg='true'] .tool,
+[data-ds-dark-theme] [data-chat-bg='true'] .pageDone .pageText {
+  color: rgba(249, 250, 251, 0.88);
+}
+
+[data-chat-bg='true'] .pageText {
+  text-decoration-color: rgba(15, 23, 42, 0.42);
+}
+
+[data-ds-dark-theme] [data-chat-bg='true'] .pageText {
+  text-decoration-color: rgba(255, 255, 255, 0.46);
+}
+
+[data-chat-bg='true'] .chip {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.54);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.12);
+}
+
+[data-ds-dark-theme] [data-chat-bg='true'] .chip {
+  color: var(--dsw-alias-label-primary);
+  background: rgba(24, 26, 34, 0.58);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+[data-chat-bg='true'] .chipFailed {
+  color: rgba(15, 17, 21, 0.56);
+}
+
+[data-ds-dark-theme] [data-chat-bg='true'] .chipFailed {
+  color: rgba(249, 250, 251, 0.58);
 }
