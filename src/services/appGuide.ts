@@ -206,14 +206,14 @@ const ENTRIES: AppGuideEntry[] = [
     id: 'search',
     title: '智能搜索',
     summary:
-      '让 AI 回答前先上网查资料，适合新闻、最新信息、人物、地点等需要核实的提问。',
+      '让 AI 回答前先上网查资料，适合新闻、最新信息、人物、地点等需要核实的提问；快速和专家模式可用，RP 模式不启用。',
     steps: '输入框下方的「智能搜索」开关',
     keywords: ['智能搜索', '联网', '搜索', '最新', '新闻', '查资料', 'search', 'web'],
   },
   {
     id: 'read-link',
     title: '阅读链接',
-    summary: '消息里带网页链接时，AI 可以打开链接读内容再回答，不需要额外开开关。',
+    summary: '消息里带网页链接时，AI 可以打开链接读内容再回答，不需要额外开开关；仅快速模式可用。',
     steps: '直接在消息里粘贴 http(s) 链接',
     keywords: ['链接', '阅读链接', '网页', 'url', 'link'],
   },
@@ -228,15 +228,15 @@ const ENTRIES: AppGuideEntry[] = [
     id: 'live-call',
     title: '实时通话',
     summary:
-      '像打电话一样和 AI 连续对话，适合边走边聊、练习口语或不想打字时使用。',
-    steps: '输入框右侧「+」菜单 → 通话（快速模式，Beta）',
+      '像打电话一样和 AI 连续对话，适合边走边聊、练习口语或不想打字时使用；需要快速模式和麦克风权限。',
+    steps: '输入框右侧「+」菜单 → 通话（快速模式）',
     keywords: ['通话', '打电话', '实时通话', '语音通话', 'live', 'call'],
   },
   {
     id: 'auto-read',
     title: '自动朗读',
     summary:
-      '回答完成后自动把回复读出来，也可以手动点朗读；可以选女声或男声。',
+      '回答完成后自动把回复读出来，也可以手动点朗读；需要先在设置里选择女声或男声。',
     steps: '设置 → 对话设置 → 语音播报',
     page: 'voiceBroadcast',
     keywords: [
@@ -255,8 +255,8 @@ const ENTRIES: AppGuideEntry[] = [
     id: 'video',
     title: '视频输入',
     summary:
-      '发送视频让 AI 结合画面回答；开启对白转写后，还能结合视频里人物说的话。',
-    steps: '设置 → 对话设置 → 上传视频',
+      '发送视频让 AI 结合画面回答；开启对白转写后，还能结合视频里人物说的话。仅快速模式可用。',
+    steps: '设置 → 对话设置 → 上传视频（开启后仅快速模式可用）',
     page: 'videoUpload',
     keywords: ['视频', '上传视频', '视频理解', '对白', '转写', 'video'],
   },
@@ -272,8 +272,8 @@ const ENTRIES: AppGuideEntry[] = [
     id: 'location',
     title: '位置',
     summary:
-      '手动设置所在地区，或允许 AI 在需要天气、附近地点时获取真实位置。',
-    steps: '设置 → 应用设置 → 位置',
+      '手动设置所在地区，或允许 AI 在需要天气、附近地点时获取真实位置；需要快速模式，并同时开启深度思考和智能搜索。',
+    steps: '设置 → 应用设置 → 位置（打开「允许 AI 定位」）；系统需授予定位权限',
     page: 'location',
     keywords: ['位置', '定位', '地区', '天气', '附近', '设置位置', 'location'],
   },
@@ -281,16 +281,17 @@ const ENTRIES: AppGuideEntry[] = [
     id: 'global-memory',
     title: '全局记忆',
     summary:
-      '让 AI 记住跨会话的长期偏好和重要信息，之后聊天会自动参考；可以查看、编辑或关闭。',
-    steps: '设置 → 数据管理 → 全局记忆（Beta）',
+      '让 AI 记住跨会话的长期偏好和重要信息，之后聊天会自动参考；需要快速模式并使用 DeepSeek Flash，开启后会在合适轮次自动归纳。',
+    steps: '设置 → 数据管理 → 全局记忆',
     page: 'globalMemory',
     keywords: ['全局记忆', '记忆', '记住', '偏好', 'memory'],
   },
   {
     id: 'session-memory',
     title: '会话记忆',
-    summary: '只让 AI 记住当前会话里的设定和细节，不影响其他会话。',
-    steps: '会话页顶部的记忆按钮（Beta）',
+    summary:
+      '只让 AI 记住当前会话里的设定和细节，不影响其他会话；需要先开启全局记忆，并在快速模式下使用 DeepSeek Flash。',
+    steps: '会话页顶部的记忆按钮',
     keywords: ['会话记忆', '这次对话', '记住这个会话'],
   },
   {
@@ -315,8 +316,8 @@ const ENTRIES: AppGuideEntry[] = [
     id: 'personal-center',
     title: '个人中心',
     summary:
-      '控制设置页顶部是否显示背景图、头像和昵称，以及侧边栏的账号入口。',
-    steps: '设置 → 个性化 → 个人中心（Beta）',
+      '控制设置页顶部是否显示背景图、头像和昵称，以及侧边栏的账号入口；默认关闭，需要手动开启。',
+    steps: '设置 → 个性化 → 个人中心',
     page: 'personalCenter',
     keywords: ['个人中心', '头像', '昵称', '背景图', '账号', 'profile'],
   },
@@ -350,7 +351,7 @@ const ENTRIES: AppGuideEntry[] = [
     id: 'balance',
     title: '余额查询',
     summary:
-      '直接问 AI「我还有多少余额」，它会查询当前 API Key 的账户余额；需要快速模式并开启深度思考和智能搜索。',
+      '直接问 AI「我还有多少余额」，它会查询当前 API Key 的账户余额；需要先配置 API Key，并在快速模式下同时开启深度思考和智能搜索。',
     steps: '快速模式 + 深度思考 + 智能搜索',
     keywords: ['余额', '额度', '欠费', '还能用多久', '充值', 'balance', 'credit'],
   },
@@ -388,7 +389,7 @@ const ENTRIES: AppGuideEntry[] = [
   {
     id: 'audio',
     title: '音频附件',
-    summary: '发送音频文件后，AI 可以结合转写文字和声音特征来回答。',
+    summary: '发送音频文件后，AI 可以结合转写文字和声音特征来回答；仅快速模式可用，单个文件不超过 32 MB、120 秒。',
     steps: '输入框右侧「+」按钮 → 选择音频',
     keywords: ['音频', '录音文件', '频谱', 'audio'],
   },
