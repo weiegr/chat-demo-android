@@ -35,7 +35,8 @@ export class ApiError extends Error {
   constructor(
     readonly kind: ApiErrorKind,
     message: string | TranslationMessage,
-    readonly status?: number
+    readonly status?: number,
+    readonly code?: string
   ) {
     super(typeof message === 'string' ? message : translate(message.key, message.params))
     this.name = 'ApiError'
@@ -49,6 +50,13 @@ const isErrorBody = (value: unknown): value is ApiErrorBody =>
   'error' in value &&
   typeof (value as ApiErrorBody).error?.message === 'string'
 
+const errorCode = ({ error }: ApiErrorBody) =>
+  typeof error.code === 'string'
+    ? error.code
+    : typeof error.type === 'string'
+      ? error.type
+      : undefined
+
 const readErrorResponse = async (
   response: Response,
   kind: 'http' | 'protocol' = 'http',
@@ -56,15 +64,17 @@ const readErrorResponse = async (
 ): Promise<ApiError> => {
   const text = await response.text().catch(() => '')
   let message = text || fallback
+  let code: string | undefined
   try {
     const body: unknown = JSON.parse(text)
     if (isErrorBody(body)) {
       message = body.error.message
+      code = errorCode(body)
     }
   } catch {
     // 非 JSON 响应体直接展示原文
   }
-  return new ApiError(kind, message, response.status)
+  return new ApiError(kind, message, response.status, code)
 }
 
 export const request = async (url: string, init: RequestInit): Promise<Response> => {
@@ -172,7 +182,7 @@ export async function* streamMessage(
       }
     }
     if (isErrorBody(payload)) {
-      throw new ApiError('stream', payload.error.message)
+      throw new ApiError('stream', payload.error.message, undefined, errorCode(payload))
     }
     if (eventName === 'error') {
       throw new ApiError('stream', data)

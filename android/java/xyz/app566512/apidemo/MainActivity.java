@@ -16,6 +16,10 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Insets;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.location.Address;
 import android.location.Geocoder;
 import android.location.Location;
@@ -34,6 +38,8 @@ import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
 import android.util.Size;
+import android.view.Display;
+import android.view.Surface;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
@@ -57,6 +63,7 @@ import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -99,6 +106,8 @@ public class MainActivity extends Activity {
     /** 非动画 Insets 确认延迟（ms），避免 120Hz 下 onApplyWindowInsets 早于 onPrepare 1~3 帧到达时提前闪现回原位 */
     private static final long NON_ANIM_INSETS_DELAY_MS = 56L;
     private static final long IME_ANIM_WATCHDOG_MS = 800L;
+    /** 陀螺仪/重力融合姿态推送最小间隔（ns），约 60Hz 节流以兼顾顺滑与功耗 */
+    private static final long TILT_DISPATCH_INTERVAL_NS = 16_000_000L;
     private static final int REQ_FILE_CHOOSER = 1001;
     private static final int REQ_AUDIO_PERMISSION = 1002;
     private static final int REQ_GALLERY_PERMISSION = 1003;
@@ -110,11 +119,104 @@ public class MainActivity extends Activity {
     private final ExecutorService mediaExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<String, Uri> recentMediaUris = new ConcurrentHashMap<>();
+    private final Map<Integer, ActiveExportSession> activeExports = new ConcurrentHashMap<>();
     private final VideoAudio videoAudio = new VideoAudio();
+
+    private static final class ActiveExportSession {
+        final int requestId;
+        final String safeName;
+        final Uri mediaUri;
+        final File targetFile;
+        final OutputStream outputStream;
+
+        ActiveExportSession(int requestId, String safeName, Uri mediaUri, File targetFile, OutputStream outputStream) {
+            this.requestId = requestId;
+            this.safeName = safeName;
+            this.mediaUri = mediaUri;
+            this.targetFile = targetFile;
+            this.outputStream = outputStream;
+        }
+    }
 
     private FrameLayout rootContainer;
     private WebView webView;
     private ApiKeyStorage apiKeyStorage;
+    private SensorManager sensorManager;
+    private Sensor tiltSensor;
+    private boolean tiltSensorRequested = false;
+    private boolean tiltSensorRegistered = false;
+    private long lastTiltDispatchNs = 0L;
+    private final float[] tiltRotationMatrix = new float[9];
+    private final SensorEventListener tiltSensorListener = new SensorEventListener() {
+        @Override
+        public void onSensorChanged(SensorEvent event) {
+            if (event == null || event.values == null || event.values.length < 3 || webView == null) {
+                return;
+            }
+            long nowNs = System.nanoTime();
+            if (lastTiltDispatchNs != 0L && nowNs - lastTiltDispatchNs < TILT_DISPATCH_INTERVAL_NS) {
+                return;
+            }
+            lastTiltDispatchNs = nowNs;
+
+            float ux;
+            float uy;
+            float uz;
+            int type = event.sensor.getType();
+            if (type == Sensor.TYPE_GAME_ROTATION_VECTOR || type == Sensor.TYPE_ROTATION_VECTOR) {
+                SensorManager.getRotationMatrixFromVector(tiltRotationMatrix, event.values);
+                ux = tiltRotationMatrix[6];
+                uy = tiltRotationMatrix[7];
+                uz = tiltRotationMatrix[8];
+            } else {
+                float vx = event.values[0];
+                float vy = event.values[1];
+                float vz = event.values[2];
+                float len = (float) Math.sqrt(vx * vx + vy * vy + vz * vz);
+                if (len < 0.01f) {
+                    return;
+                }
+                ux = vx / len;
+                uy = vy / len;
+                uz = vz / len;
+            }
+
+            float sx;
+            float sy;
+            int rotation = getCurrentDisplayRotation();
+            if (rotation == Surface.ROTATION_90) {
+                sx = -uy;
+                sy = ux;
+            } else if (rotation == Surface.ROTATION_180) {
+                sx = -ux;
+                sy = -uy;
+            } else if (rotation == Surface.ROTATION_270) {
+                sx = uy;
+                sy = -ux;
+            } else {
+                sx = ux;
+                sy = uy;
+            }
+            float sz = uz;
+
+            double roll = -Math.atan2(sx, Math.hypot(sy, sz));
+            double pitch = Math.atan2(sz, sy);
+            if (!Double.isFinite(roll) || !Double.isFinite(pitch)) {
+                return;
+            }
+            String js = String.format(
+                    Locale.US,
+                    "window.__tiltBridge&&window.__tiltBridge(%.4f,%.4f);",
+                    roll,
+                    pitch
+            );
+            webView.evaluateJavascript(js, null);
+        }
+
+        @Override
+        public void onAccuracyChanged(Sensor sensor, int accuracy) {
+        }
+    };
     private ValueCallback<Uri[]> filePathCallback;
     private PermissionRequest pendingPermissionRequest;
     private GeolocationPermissions.Callback pendingGeolocationCallback;
@@ -405,6 +507,12 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (rootContainer != null) {
+            rootContainer.requestApplyInsets();
+        }
+        if (tiltSensorRequested) {
+            startTiltSensorIfNeeded();
+        }
         // 从系统设置修改权限切回应用时，主动同步最新定位授权级别给设置页
         if (webView != null) {
             dispatchLocationPermissionState(false);
@@ -412,15 +520,124 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        stopTiltSensor();
+        super.onPause();
+    }
+
+    @Override
     protected void onDestroy() {
+        tiltSensorRequested = false;
+        stopTiltSensor();
         if (cancelActiveLocation != null) {
             cancelActiveLocation.run();
             cancelActiveLocation = null;
         }
         mainHandler.removeCallbacksAndMessages(null);
+        abortAllActiveExports();
         videoAudio.clear();
         mediaExecutor.shutdownNow();
         super.onDestroy();
+    }
+
+    private void closeQuietly(OutputStream out) {
+        if (out == null) {
+            return;
+        }
+        try {
+            out.close();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void cleanupExportSession(ActiveExportSession session, boolean deleteIncomplete) {
+        if (session == null) {
+            return;
+        }
+        closeQuietly(session.outputStream);
+        if (!deleteIncomplete) {
+            return;
+        }
+        if (session.mediaUri != null) {
+            try {
+                getContentResolver().delete(session.mediaUri, null, null);
+            } catch (Throwable ignored) {
+            }
+        }
+        if (session.targetFile != null && session.targetFile.exists()) {
+            try {
+                //noinspection ResultOfMethodCallIgnored
+                session.targetFile.delete();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private void abortAllActiveExports() {
+        for (Integer key : new ArrayList<>(activeExports.keySet())) {
+            ActiveExportSession session = activeExports.remove(key);
+            cleanupExportSession(session, true);
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private int getCurrentDisplayRotation() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Display display = getDisplay();
+            return display != null ? display.getRotation() : Surface.ROTATION_0;
+        }
+        Display display = getWindowManager() != null ? getWindowManager().getDefaultDisplay() : null;
+        return display != null ? display.getRotation() : Surface.ROTATION_0;
+    }
+
+    private Sensor resolveTiltSensor() {
+        if (sensorManager == null) {
+            sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+        }
+        if (sensorManager == null) {
+            return null;
+        }
+        if (tiltSensor != null) {
+            return tiltSensor;
+        }
+        int[] candidates = {
+                Sensor.TYPE_GAME_ROTATION_VECTOR,
+                Sensor.TYPE_ROTATION_VECTOR,
+                Sensor.TYPE_GRAVITY,
+                Sensor.TYPE_ACCELEROMETER
+        };
+        for (int type : candidates) {
+            Sensor candidate = sensorManager.getDefaultSensor(type);
+            if (candidate != null) {
+                tiltSensor = candidate;
+                return tiltSensor;
+            }
+        }
+        return null;
+    }
+
+    private void startTiltSensorIfNeeded() {
+        if (tiltSensorRegistered || isFinishing() || isDestroyed()) {
+            return;
+        }
+        Sensor sensor = resolveTiltSensor();
+        if (sensor == null || sensorManager == null) {
+            return;
+        }
+        lastTiltDispatchNs = 0L;
+        tiltSensorRegistered = sensorManager.registerListener(
+                tiltSensorListener,
+                sensor,
+                SensorManager.SENSOR_DELAY_GAME
+        );
+    }
+
+    private void stopTiltSensor() {
+        if (tiltSensorRegistered && sensorManager != null) {
+            sensorManager.unregisterListener(tiltSensorListener);
+        }
+        tiltSensorRegistered = false;
+        lastTiltDispatchNs = 0L;
     }
 
     private WebResourceResponse errorTextResponse(int statusCode, String reason, String body) {
@@ -829,7 +1046,7 @@ public class MainActivity extends Activity {
         rootContainer.setOnApplyWindowInsetsListener((v, insets) -> {
             if (waitingForAnimTarget) {
                 // Android 规范保证：onPrepare() 与 onStart() 之间派发的 onApplyWindowInsets 即为本次动画的终态目标 Insets。
-                syncTopSafeAreaFromInsets(insets);
+                syncSafeAreasFromInsets(insets);
                 float density = getDisplayDensity();
                 int navBottomPx = extractNavBottomPx(insets);
                 int imeBottomPx = extractImeBottomPx(insets);
@@ -840,12 +1057,12 @@ public class MainActivity extends Activity {
                 hasAnimTarget = true;
                 waitingForAnimTarget = false;
             } else if (imeAnimating) {
-                syncTopSafeAreaFromInsets(insets);
+                syncSafeAreasFromInsets(insets);
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
                     && (extractImeBottomPx(insets) > extractNavBottomPx(insets)) != isImeVisible) {
                 // 延迟确认是否进入 WindowInsetsAnimation，彻底避免 120Hz 下 onApplyWindowInsets 比 onPrepare 早到 1~3 帧时
                 // 提前发 dispatchImeEnd(0, false) 闪现回原位，以及把 isImeVisible 改错引发后续动画方向反判。
-                syncTopSafeAreaFromInsets(insets);
+                syncSafeAreasFromInsets(insets);
                 pendingNonAnimInsets = insets;
                 mainHandler.removeCallbacks(applyPendingNonAnimInsets);
                 mainHandler.postDelayed(applyPendingNonAnimInsets, NON_ANIM_INSETS_DELAY_MS);
@@ -983,7 +1200,9 @@ public class MainActivity extends Activity {
     @SuppressWarnings("deprecation")
     private int extractNavBottomPx(WindowInsets insets) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            return insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
+            int navBottom = insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
+            int tappableBottom = insets.getInsets(WindowInsets.Type.tappableElement()).bottom;
+            return Math.max(navBottom, tappableBottom);
         }
         return Math.min(insets.getSystemWindowInsetBottom(), insets.getStableInsetBottom());
     }
@@ -1003,11 +1222,15 @@ public class MainActivity extends Activity {
         return density > 0f ? density : 1f;
     }
 
-    private void syncTopSafeAreaFromInsets(WindowInsets insets) {
+    private void syncSafeAreasFromInsets(WindowInsets insets) {
         float density = getDisplayDensity();
+        int navBottomPx = extractNavBottomPx(insets);
+        lastNavBottomPx = navBottomPx;
         int nextSafeTop = Math.round(extractStatusTopPx(insets) / density);
-        if (nextSafeTop != safeTopCss) {
+        int nextSafeBottom = Math.round(navBottomPx / density);
+        if (nextSafeTop != safeTopCss || nextSafeBottom != safeBottomCss) {
             safeTopCss = nextSafeTop;
+            safeBottomCss = nextSafeBottom;
             syncSafeAreaToWeb();
         }
     }
@@ -1246,7 +1469,7 @@ public class MainActivity extends Activity {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(intent);
             return true;
-        } catch (Exception ignored) {
+        } catch (Throwable ignored) {
             return false;
         }
     }
@@ -1720,6 +1943,23 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public boolean supportsTiltSensor() {
+            return resolveTiltSensor() != null;
+        }
+
+        @JavascriptInterface
+        public void setTiltSensorEnabled(final boolean enabled) {
+            runOnUiThread(() -> {
+                tiltSensorRequested = enabled;
+                if (enabled) {
+                    startTiltSensorIfNeeded();
+                } else {
+                    stopTiltSensor();
+                }
+            });
+        }
+
+        @JavascriptInterface
         public boolean isKeyboardVisible() {
             return isImeVisible;
         }
@@ -1941,7 +2181,7 @@ public class MainActivity extends Activity {
     }
 
     @SuppressWarnings("deprecation")
-    private String[] writeBytesToDownloads(byte[] bytes, String rawFileName, String rawMimeType) throws IOException {
+    private ActiveExportSession openExportSession(int requestId, String rawFileName, String rawMimeType) throws IOException {
         String safeName = sanitizeDownloadName(rawFileName);
         String safeMime = (rawMimeType == null || rawMimeType.trim().isEmpty())
                 ? "application/zip"
@@ -1959,35 +2199,89 @@ public class MainActivity extends Activity {
                 throw new IOException("无法创建下载目录文件");
             }
             try {
-                try (OutputStream out = getContentResolver().openOutputStream(uri)) {
-                    if (out == null) {
-                        throw new IOException("无法打开下载输出流");
-                    }
-                    out.write(bytes);
-                    out.flush();
+                OutputStream rawOut = getContentResolver().openOutputStream(uri, "w");
+                if (rawOut == null) {
+                    throw new IOException("无法打开下载输出流");
                 }
-                ContentValues ready = new ContentValues();
-                ready.put(MediaStore.Downloads.IS_PENDING, 0);
-                getContentResolver().update(uri, ready, null, null);
-            } catch (Exception e) {
+                return new ActiveExportSession(
+                        requestId,
+                        safeName,
+                        uri,
+                        null,
+                        new BufferedOutputStream(rawOut, 65536)
+                );
+            } catch (Throwable t) {
                 try {
                     getContentResolver().delete(uri, null, null);
-                } catch (Exception ignored) {
+                } catch (Throwable ignored) {
                 }
-                if (e instanceof IOException) {
-                    throw (IOException) e;
+                if (t instanceof IOException) {
+                    throw (IOException) t;
                 }
-                throw new IOException(e.getMessage(), e);
+                throw new IOException(t.getMessage() != null ? t.getMessage() : "无法打开下载输出流", t);
+            }
+        }
+
+        File targetDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        if (!targetDir.exists() && !targetDir.mkdirs()) {
+            targetDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        }
+        if (targetDir == null) {
+            throw new IOException("下载目录不可用");
+        }
+        File targetFile;
+        OutputStream rawOut;
+        try {
+            targetFile = resolveUniqueDownloadFile(targetDir, safeName);
+            rawOut = new FileOutputStream(targetFile);
+        } catch (SecurityException se) {
+            File appDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+            if (appDir == null || (!appDir.exists() && !appDir.mkdirs())) {
+                throw new IOException("没有下载目录写入权限", se);
+            }
+            targetFile = resolveUniqueDownloadFile(appDir, safeName);
+            rawOut = new FileOutputStream(targetFile);
+        }
+        return new ActiveExportSession(
+                requestId,
+                targetFile.getName(),
+                null,
+                targetFile,
+                new BufferedOutputStream(rawOut, 65536)
+        );
+    }
+
+    @SuppressWarnings("deprecation")
+    private String[] finalizeExportSession(ActiveExportSession session) throws IOException {
+        try {
+            session.outputStream.flush();
+            session.outputStream.close();
+        } catch (Throwable t) {
+            cleanupExportSession(session, true);
+            if (t instanceof IOException) {
+                throw (IOException) t;
+            }
+            throw new IOException(t.getMessage() != null ? t.getMessage() : "写入文件失败", t);
+        }
+
+        if (session.mediaUri != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                ContentValues ready = new ContentValues();
+                ready.put(MediaStore.Downloads.IS_PENDING, 0);
+                getContentResolver().update(session.mediaUri, ready, null, null);
+            } catch (Throwable t) {
+                cleanupExportSession(session, true);
+                throw new IOException(t.getMessage() != null ? t.getMessage() : "提交下载文件失败", t);
             }
 
-            String actualName = safeName;
-            String actualPath = Environment.DIRECTORY_DOWNLOADS + "/" + safeName;
+            String actualName = session.safeName;
+            String actualPath = Environment.DIRECTORY_DOWNLOADS + "/" + session.safeName;
             String[] projection = {
                     MediaStore.Downloads.DISPLAY_NAME,
                     MediaStore.Downloads.RELATIVE_PATH,
                     MediaStore.MediaColumns.DATA
             };
-            try (Cursor cursor = getContentResolver().query(uri, projection, null, null, null)) {
+            try (Cursor cursor = getContentResolver().query(session.mediaUri, projection, null, null, null)) {
                 if (cursor != null && cursor.moveToFirst()) {
                     int nameIdx = cursor.getColumnIndex(MediaStore.Downloads.DISPLAY_NAME);
                     int relIdx = cursor.getColumnIndex(MediaStore.Downloads.RELATIVE_PATH);
@@ -2009,73 +2303,247 @@ public class MainActivity extends Activity {
                         actualPath = relPath + actualName;
                     }
                 }
-            } catch (Exception ignored) {
+            } catch (Throwable ignored) {
             }
             return new String[]{actualName, actualPath};
         }
 
-        File targetDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-        if (!targetDir.exists() && !targetDir.mkdirs()) {
-            targetDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        if (session.targetFile != null) {
+            return new String[]{session.targetFile.getName(), session.targetFile.getAbsolutePath()};
         }
-        if (targetDir == null) {
-            throw new IOException("下载目录不可用");
-        }
-        File targetFile;
+        return new String[]{session.safeName, Environment.DIRECTORY_DOWNLOADS + "/" + session.safeName};
+    }
+
+    private String[] writeBytesToDownloads(byte[] bytes, String rawFileName, String rawMimeType) throws IOException {
+        ActiveExportSession session = openExportSession(-1, rawFileName, rawMimeType);
         try {
-            targetFile = resolveUniqueDownloadFile(targetDir, safeName);
-            try (FileOutputStream out = new FileOutputStream(targetFile)) {
-                out.write(bytes);
-                out.flush();
+            session.outputStream.write(bytes);
+        } catch (Throwable t) {
+            cleanupExportSession(session, true);
+            if (t instanceof IOException) {
+                throw (IOException) t;
             }
-        } catch (SecurityException se) {
-            File appDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
-            if (appDir == null || (!appDir.exists() && !appDir.mkdirs())) {
-                throw new IOException("没有下载目录写入权限", se);
-            }
-            targetFile = resolveUniqueDownloadFile(appDir, safeName);
-            try (FileOutputStream out = new FileOutputStream(targetFile)) {
-                out.write(bytes);
-                out.flush();
-            }
+            throw new IOException(t.getMessage() != null ? t.getMessage() : "写入文件失败", t);
         }
-        return new String[]{targetFile.getName(), targetFile.getAbsolutePath()};
+        return finalizeExportSession(session);
+    }
+
+    private String formatThrowableMessage(Throwable t, String fallback) {
+        if (t instanceof OutOfMemoryError) {
+            return "内存不足，无法完成导出";
+        }
+        String msg = t != null ? t.getMessage() : null;
+        return (msg != null && !msg.trim().isEmpty()) ? msg : fallback;
+    }
+
+    private void dispatchCustomEventJson(final String eventName, final JSONObject payload) {
+        final String json = payload.toString()
+                .replace("\u2028", "\\u2028")
+                .replace("\u2029", "\\u2029");
+        runOnUiThread(() -> {
+            if (webView != null) {
+                try {
+                    webView.evaluateJavascript(
+                            "window.dispatchEvent(new CustomEvent('" + eventName + "',{detail:" + json + "}));",
+                            null
+                    );
+                } catch (Throwable ignored) {
+                }
+            }
+        });
     }
 
     private void dispatchExportJson(final JSONObject payload) {
-        final String json = payload.toString();
-        runOnUiThread(() -> {
-            if (webView != null) {
-                webView.evaluateJavascript(
-                        "window.dispatchEvent(new CustomEvent('android-export-result',{detail:" + json + "}));",
-                        null
-                );
+        dispatchCustomEventJson("android-export-result", payload);
+    }
+
+    private void dispatchExportStep(int requestId, int seq, boolean ok, String message) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("requestId", requestId);
+            payload.put("seq", seq);
+            payload.put("ok", ok);
+            if (message != null) {
+                payload.put("message", message);
             }
-        });
+        } catch (Throwable ignored) {
+        }
+        dispatchCustomEventJson("android-export-step", payload);
     }
 
     private void performSaveExportFile(int requestId, String base64, String fileName, String mimeType) {
         JSONObject payload = new JSONObject();
         try {
             payload.put("requestId", requestId);
+            if (base64 == null) {
+                throw new IOException("导出内容为空");
+            }
             byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
             String[] saved = writeBytesToDownloads(bytes, fileName, mimeType);
             payload.put("ok", true);
             payload.put("fileName", saved[0]);
             payload.put("path", saved[1]);
-        } catch (Exception e) {
+        } catch (Throwable t) {
             try {
                 payload.put("ok", false);
-                payload.put("message", e.getMessage() != null ? e.getMessage() : "写入文件失败");
-            } catch (Exception ignored) {
+                payload.put("message", formatThrowableMessage(t, "写入文件失败"));
+            } catch (Throwable ignored) {
             }
         }
         dispatchExportJson(payload);
     }
 
         @JavascriptInterface
+        public boolean supportsChunkedExport() {
+            return true;
+        }
+
+        @JavascriptInterface
+        public void beginExportFile(final int requestId, final String fileName, final String mimeType) {
+            if (mediaExecutor.isShutdown()) {
+                dispatchExportStep(requestId, 0, false, "应用正在退出");
+                return;
+            }
+            try {
+                mediaExecutor.execute(() -> {
+                    ActiveExportSession previous = activeExports.remove(requestId);
+                    cleanupExportSession(previous, true);
+                    try {
+                        ActiveExportSession session = openExportSession(requestId, fileName, mimeType);
+                        activeExports.put(requestId, session);
+                        dispatchExportStep(requestId, 0, true, null);
+                    } catch (Throwable t) {
+                        dispatchExportStep(requestId, 0, false, formatThrowableMessage(t, "无法创建导出文件"));
+                    }
+                });
+            } catch (Throwable t) {
+                dispatchExportStep(requestId, 0, false, formatThrowableMessage(t, "无法启动导出任务"));
+            }
+        }
+
+        @JavascriptInterface
+        public void writeExportChunk(final int requestId, final int seq, final String base64Chunk) {
+            if (mediaExecutor.isShutdown()) {
+                dispatchExportStep(requestId, seq, false, "应用正在退出");
+                return;
+            }
+            try {
+                mediaExecutor.execute(() -> {
+                    ActiveExportSession session = activeExports.get(requestId);
+                    if (session == null) {
+                        dispatchExportStep(requestId, seq, false, "导出会话已失效");
+                        return;
+                    }
+                    try {
+                        if (base64Chunk != null && !base64Chunk.isEmpty()) {
+                            byte[] bytes = Base64.decode(base64Chunk, Base64.DEFAULT);
+                            if (bytes.length > 0) {
+                                session.outputStream.write(bytes);
+                            }
+                        }
+                        dispatchExportStep(requestId, seq, true, null);
+                    } catch (Throwable t) {
+                        activeExports.remove(requestId);
+                        cleanupExportSession(session, true);
+                        dispatchExportStep(requestId, seq, false, formatThrowableMessage(t, "写入导出分片失败"));
+                    }
+                });
+            } catch (Throwable t) {
+                dispatchExportStep(requestId, seq, false, formatThrowableMessage(t, "提交导出分片失败"));
+            }
+        }
+
+        @JavascriptInterface
+        public void finishExportFile(final int requestId) {
+            if (mediaExecutor.isShutdown()) {
+                JSONObject payload = new JSONObject();
+                try {
+                    payload.put("requestId", requestId);
+                    payload.put("ok", false);
+                    payload.put("message", "应用正在退出");
+                } catch (Throwable ignored) {
+                }
+                dispatchExportJson(payload);
+                return;
+            }
+            try {
+                mediaExecutor.execute(() -> {
+                    JSONObject payload = new JSONObject();
+                    ActiveExportSession session = activeExports.remove(requestId);
+                    try {
+                        payload.put("requestId", requestId);
+                        if (session == null) {
+                            throw new IOException("导出会话已失效");
+                        }
+                        String[] saved = finalizeExportSession(session);
+                        payload.put("ok", true);
+                        payload.put("fileName", saved[0]);
+                        payload.put("path", saved[1]);
+                    } catch (Throwable t) {
+                        cleanupExportSession(session, true);
+                        try {
+                            payload.put("ok", false);
+                            payload.put("message", formatThrowableMessage(t, "保存导出文件失败"));
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                    dispatchExportJson(payload);
+                });
+            } catch (Throwable t) {
+                JSONObject payload = new JSONObject();
+                try {
+                    payload.put("requestId", requestId);
+                    payload.put("ok", false);
+                    payload.put("message", formatThrowableMessage(t, "提交导出任务失败"));
+                } catch (Throwable ignored) {
+                }
+                dispatchExportJson(payload);
+            }
+        }
+
+        @JavascriptInterface
+        public void abortExportFile(final int requestId) {
+            if (mediaExecutor.isShutdown()) {
+                ActiveExportSession session = activeExports.remove(requestId);
+                cleanupExportSession(session, true);
+                return;
+            }
+            try {
+                mediaExecutor.execute(() -> {
+                    ActiveExportSession session = activeExports.remove(requestId);
+                    cleanupExportSession(session, true);
+                });
+            } catch (Throwable ignored) {
+                ActiveExportSession session = activeExports.remove(requestId);
+                cleanupExportSession(session, true);
+            }
+        }
+
+        @JavascriptInterface
         public void saveExportFile(final int requestId, final String base64, final String fileName, final String mimeType) {
-            mediaExecutor.execute(() -> performSaveExportFile(requestId, base64, fileName, mimeType));
+            if (mediaExecutor.isShutdown()) {
+                JSONObject payload = new JSONObject();
+                try {
+                    payload.put("requestId", requestId);
+                    payload.put("ok", false);
+                    payload.put("message", "应用正在退出");
+                } catch (Throwable ignored) {
+                }
+                dispatchExportJson(payload);
+                return;
+            }
+            try {
+                mediaExecutor.execute(() -> performSaveExportFile(requestId, base64, fileName, mimeType));
+            } catch (Throwable t) {
+                JSONObject payload = new JSONObject();
+                try {
+                    payload.put("requestId", requestId);
+                    payload.put("ok", false);
+                    payload.put("message", formatThrowableMessage(t, "无法启动导出任务"));
+                } catch (Throwable ignored) {
+                }
+                dispatchExportJson(payload);
+            }
         }
 
         @JavascriptInterface
@@ -2105,23 +2573,30 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void saveBlobBase64(final String base64, final String fileName, final String mimeType) {
-            mediaExecutor.execute(() -> {
-                try {
-                    byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
-                    String[] saved = writeBytesToDownloads(bytes, fileName, mimeType);
-                    runOnUiThread(() -> Toast.makeText(
-                            MainActivity.this,
-                            "已导出至: " + saved[1],
-                            Toast.LENGTH_SHORT
-                    ).show());
-                } catch (Exception e) {
-                    runOnUiThread(() -> Toast.makeText(
-                            MainActivity.this,
-                            "导出失败: " + e.getMessage(),
-                            Toast.LENGTH_SHORT
-                    ).show());
-                }
-            });
+            if (mediaExecutor.isShutdown()) {
+                return;
+            }
+            try {
+                mediaExecutor.execute(() -> {
+                    try {
+                        byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
+                        String[] saved = writeBytesToDownloads(bytes, fileName, mimeType);
+                        runOnUiThread(() -> Toast.makeText(
+                                MainActivity.this,
+                                "已导出至: " + saved[1],
+                                Toast.LENGTH_SHORT
+                        ).show());
+                    } catch (Throwable t) {
+                        final String message = formatThrowableMessage(t, "写入文件失败");
+                        runOnUiThread(() -> Toast.makeText(
+                                MainActivity.this,
+                                "导出失败: " + message,
+                                Toast.LENGTH_SHORT
+                        ).show());
+                    }
+                });
+            } catch (Throwable ignored) {
+            }
         }
     }
 }

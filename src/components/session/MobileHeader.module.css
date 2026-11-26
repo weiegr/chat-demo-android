@@ -8,6 +8,21 @@
   min-height: calc(52px + var(--safe-top));
   padding: calc(4px + var(--safe-top)) 8px 4px;
   background: var(--dsw-alias-bg-base);
+
+  [data-chat-bg='true'] & {
+    background: transparent;
+  }
+
+  [data-ds-dark-theme] [data-chat-bg='true'] & {
+    background: transparent;
+  }
+}
+
+.headerInner {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
 }
 
 .titleGroup {

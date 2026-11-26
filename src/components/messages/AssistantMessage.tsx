@@ -53,6 +53,9 @@ export const AssistantMessage = memo(function AssistantMessage({
 }) {
   const t = useTranslate()
   const sessionMode = useChatStore((state) => state.sessionCache[sessionId]?.mode ?? 'fast')
+  const compacting = useChatStore(
+    (state) => __BETA__ && streaming && state.rpCompacting[sessionId] === message.id
+  )
   const view = useReplyView(message, streaming)
   const panelEntry = useSearchPanel((state) => state.entry)
   const notice = streaming ? null : describeReply(message, sessionMode)
@@ -67,7 +70,11 @@ export const AssistantMessage = memo(function AssistantMessage({
   const summaryEntry = `${message.id}-summary`
   return (
     <div className={styles.message} data-message-id={message.id}>
-      {refused ? null : (
+      {compacting ? (
+        <div className={styles.waiting} role="status">
+          {t('rpCompacting')}
+        </div>
+      ) : refused ? null : (
         <ReplyArea
           message={message}
           view={view}
@@ -85,7 +92,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           sources={view.sources}
         />
       ) : null}
-      {waiting ? (
+      {waiting && !compacting ? (
         <div className={styles.waiting}>
           {[0, 1, 2].map((index) => (
             <span key={index} className={styles.waitingDot} />

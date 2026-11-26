@@ -23,6 +23,7 @@ export type ImeMotionListener = (phase: ImeMotionPhase, state: ImeMotionState) =
 
 interface AndroidImeHost {
   getCurrentImeRaiseCss?: () => number
+  getKeyboardHeightCss?: () => number
   isKeyboardVisible?: () => boolean
 }
 
@@ -159,6 +160,14 @@ const ensureBridgeInstalled = () => {
 
 export const hasNativeImeMotion = (): boolean =>
   typeof window !== 'undefined' && Boolean(window.AndroidHost)
+
+export const getLastKnownImeRaiseCss = (): number => {
+  if (typeof window === 'undefined') {
+    return 0
+  }
+  const height = Number(window.AndroidHost?.getKeyboardHeightCss?.()) || 0
+  return height > 0 ? height : 0
+}
 
 export const getImeMotionState = (): Readonly<ImeMotionState> => {
   ensureBridgeInstalled()

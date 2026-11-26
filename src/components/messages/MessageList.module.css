@@ -33,6 +33,26 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   cursor: pointer;
 
+  [data-chat-bg='true'] & {
+    border-color: transparent;
+    background-color: rgba(255, 255, 255, 0.42);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.58),
+      0 4px 14px rgba(15, 23, 42, 0.08);
+    -webkit-backdrop-filter: blur(14px) saturate(1.45);
+    backdrop-filter: blur(14px) saturate(1.45);
+  }
+
+  [data-ds-dark-theme] [data-chat-bg='true'] & {
+    border-color: transparent;
+    background-color: rgba(24, 26, 34, 0.44);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+      0 4px 16px rgba(0, 0, 0, 0.34);
+    -webkit-backdrop-filter: blur(14px) saturate(1.4);
+    backdrop-filter: blur(14px) saturate(1.4);
+  }
+
   svg {
     width: 16px;
     height: 16px;
@@ -41,6 +61,75 @@
 
 .scroll {
   display: contents;
+}
+
+.topFrost {
+  display: none;
+}
+
+.topFrostHidden {
+  visibility: hidden;
+}
+
+/*
+ * 自定义背景下的单一连续顶部渐进模糊层：
+ * 从屏幕最顶 0px 一气呵成覆盖状态栏与顶栏；思考区吸顶时向下平滑延展包住「已思考/思考中」标题，
+ * 底沿柔和羽化融入背景图，彻底消除中间孤立白条与拼接缝。
+ */
+[data-chat-bg='true'] .topFrost {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: block;
+  flex-shrink: 0;
+  width: 100%;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+[data-chat-bg='true'] .topFrost::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: calc(var(--message-list-inset-top, 0px) + 16px);
+  background-image: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.42) 0%,
+    rgba(255, 255, 255, 0.32) 72%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  -webkit-backdrop-filter: blur(20px) saturate(1.45);
+  backdrop-filter: blur(20px) saturate(1.45);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 72%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 72%, transparent 100%);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.16s ease-out,
+    height 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-ds-dark-theme] [data-chat-bg='true'] .topFrost::before {
+  background-image: linear-gradient(
+    to bottom,
+    rgba(16, 18, 26, 0.54) 0%,
+    rgba(16, 18, 26, 0.42) 72%,
+    rgba(16, 18, 26, 0) 100%
+  );
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  backdrop-filter: blur(20px) saturate(1.4);
+}
+
+[data-chat-bg='true'] .topFrost[data-scrolled='true']:not([data-read-only='true'])::before,
+[data-chat-bg='true'] .topFrost[data-think-stuck='true']::before {
+  opacity: 1;
+}
+
+[data-chat-bg='true'] .topFrost[data-think-stuck='true']::before {
+  height: calc(var(--message-list-inset-top, 0px) + 56px);
 }
 
 .footerSlot {
@@ -96,6 +185,10 @@
   padding-bottom: 24px;
 }
 
+[data-chat-bg='true'] .column[data-inset-header='true'] {
+  padding-top: var(--message-list-inset-top, 0px);
+}
+
 .editMask {
   position: fixed;
   inset: 0;
@@ -103,9 +196,62 @@
   background-color: rgba(255, 255, 255, 0.82);
   -webkit-backdrop-filter: blur(3px);
   backdrop-filter: blur(3px);
+  animation: editMaskFadeIn 0.14s ease-out;
 
   [data-ds-dark-theme] & {
     background-color: rgba(0, 0, 0, 0.76);
+  }
+
+  /* 自定义背景编辑消息时不用惨白遮罩，改为柔和暗色景深虚化，突出正在编辑的气泡与输入框 */
+  [data-chat-bg='true'] & {
+    background-color: rgba(15, 23, 42, 0.34);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+  }
+
+  [data-ds-dark-theme] [data-chat-bg='true'] & {
+    background-color: rgba(0, 0, 0, 0.56);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+  }
+}
+
+@keyframes editMaskFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/*
+ * 移动端禁止对全屏编辑遮罩使用 backdrop-filter：
+ * 编辑态弹出软键盘时，底部的磨砂输入框会逐帧位移动画，全屏 blur 会与输入框 blur 形成嵌套
+ * 重采样并触发整屏离屏纹理冷上传，造成明显掉帧卡顿；移动端改用纯 GPU 合成的柔和暗色遮罩。
+ */
+@media not all and (min-width: 768px) {
+  .editMask {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+
+    [data-chat-bg='true'] & {
+      background-color: rgba(15, 23, 42, 0.44);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+
+    [data-ds-dark-theme] [data-chat-bg='true'] & {
+      background-color: rgba(0, 0, 0, 0.62);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editMask {
+    animation: none;
   }
 }
 

@@ -1,6 +1,7 @@
 import { formatDate } from '../../utils/format.js'
 import * as db from './db.js'
 import { BackupError } from './history/errors.js'
+import { listSessionMemoryStates } from './memoryStorage.js'
 import { commitDraftReplies, replaceHistory, useChatStore } from './store.js'
 import type { Session } from './types.js'
 
@@ -17,28 +18,33 @@ const enqueueBackup = <T>(run: () => Promise<T>): Promise<T> => {
 
 const backupFileName = (date: Date) => `deepseek_data-${formatDate(date)}.zip`
 
+const createSessionSnapshotReader = () => {
+  // 正在生成的回复还只在草稿槽里，先并入会话，导出的才是当前看到的内容。
+  commitDraftReplies()
+  // 列表和已加载内容保留导出开始时的快照；未打开的会话逐条读取，不填满详情缓存。
+  const { sessions, sessionCache } = useChatStore.getState()
+  return async function* readSessions(): AsyncGenerator<Session> {
+    for (const summary of sessions) {
+      const session = Object.hasOwn(sessionCache, summary.id)
+        ? sessionCache[summary.id]
+        : await db.loadSession(summary.id)
+      if (!session) {
+        throw new Error(`History session disappeared during export: ${summary.id}`)
+      }
+      // 详情读取期间可能重命名，归档标题与开始时的列表保持一致。
+      yield { ...session, ...summary }
+    }
+  }
+}
+
 /** 导出为历史会话导出格式的 ZIP，可再次导入。 */
 export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
   enqueueBackup(async () => {
-    // 正在生成的回复还只在草稿槽里，先并入会话，导出的才是当前看到的内容。
-    commitDraftReplies()
-    // 列表和已加载内容保留导出开始时的快照；未打开的会话逐条读取，不填满详情缓存。
-    const { sessions, sessionCache } = useChatStore.getState()
-    async function* readSessions(): AsyncGenerator<Session> {
-      for (const summary of sessions) {
-        const session = Object.hasOwn(sessionCache, summary.id)
-          ? sessionCache[summary.id]
-          : await db.loadSession(summary.id)
-        if (!session) {
-          throw new Error(`History session disappeared during export: ${summary.id}`)
-        }
-        // 详情读取期间可能重命名，归档标题与开始时的列表保持一致。
-        yield { ...session, ...summary }
-      }
-    }
+    const readSessions = createSessionSnapshotReader()
     const { exportArchive } = await import('./history/exportArchive.js')
+    const memoryStates = __BETA__ ? await listSessionMemoryStates() : undefined
     const now = new Date()
-    const blob = await exportArchive(readSessions())
+    const blob = await exportArchive(readSessions(), memoryStates)
     return { name: backupFileName(now), blob }
   })
 
@@ -89,9 +95,21 @@ const saveLastExportRecord = (record: ExportRecord) => {
 }
 
 interface AndroidExportBridge {
+  supportsChunkedExport?: () => boolean
+  beginExportFile?: (requestId: number, fileName: string, mimeType: string) => void
+  writeExportChunk?: (requestId: number, seq: number, base64Chunk: string) => void
+  finishExportFile?: (requestId: number) => void
+  abortExportFile?: (requestId: number) => void
   saveExportFile?: (requestId: number, base64: string, fileName: string, mimeType: string) => void
   openDownloadsFolder?: () => boolean
 }
+
+type AndroidChunkedExportBridge = Required<
+  Pick<
+    AndroidExportBridge,
+    'beginExportFile' | 'writeExportChunk' | 'finishExportFile' | 'abortExportFile'
+  >
+>
 
 interface AndroidExportEventDetail {
   requestId?: number
@@ -101,8 +119,155 @@ interface AndroidExportEventDetail {
   message?: string
 }
 
+interface AndroidExportStepDetail {
+  requestId?: number
+  seq?: number
+  ok?: boolean
+  message?: string
+}
+
 const getAndroidExportBridge = (): AndroidExportBridge | undefined =>
   (window as Window & { AndroidHost?: AndroidExportBridge }).AndroidHost
+
+const hasChunkedAndroidExport = (
+  bridge: AndroidExportBridge | undefined
+): bridge is AndroidChunkedExportBridge =>
+  Boolean(
+    bridge?.supportsChunkedExport?.() &&
+    bridge.beginExportFile &&
+    bridge.writeExportChunk &&
+    bridge.finishExportFile &&
+    bridge.abortExportFile
+  )
+
+const bytesToBase64 = (bytes: Uint8Array): string => {
+  const step = 0x8000
+  let binary = ''
+  for (let offset = 0; offset < bytes.byteLength; offset += step) {
+    const end = Math.min(bytes.byteLength, offset + step)
+    const slice = bytes.subarray(offset, end)
+    let part = ''
+    for (let i = 0; i < slice.length; i++) {
+      part += String.fromCharCode(slice[i])
+    }
+    binary += part
+  }
+  return btoa(binary)
+}
+
+const waitExportStep = (requestId: number, seq: number, trigger: () => void): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer)
+      window.removeEventListener('android-export-step', onStep)
+    }
+    const onStep = (event: Event) => {
+      const detail = (event as CustomEvent<AndroidExportStepDetail | undefined>).detail
+      if (!detail || detail.requestId !== requestId || detail.seq !== seq) {
+        return
+      }
+      cleanup()
+      if (detail.ok) {
+        resolve()
+      } else {
+        reject(new Error(detail.message || 'Failed to write export chunk'))
+      }
+    }
+    const timer = setTimeout(() => {
+      cleanup()
+      reject(new Error('Export timed out'))
+    }, 60_000)
+
+    window.addEventListener('android-export-step', onStep)
+    try {
+      trigger()
+    } catch (error) {
+      cleanup()
+      reject(error instanceof Error ? error : new Error('Failed to write export chunk'))
+    }
+  })
+
+const waitExportFinish = (
+  requestId: number,
+  name: string,
+  trigger: () => void
+): Promise<{ fileName: string; path: string }> =>
+  new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer)
+      window.removeEventListener('android-export-result', onResult)
+    }
+    const onResult = (event: Event) => {
+      const detail = (event as CustomEvent<AndroidExportEventDetail | undefined>).detail
+      if (!detail || detail.requestId !== requestId) {
+        return
+      }
+      cleanup()
+      if (detail.ok && detail.path) {
+        resolve({ fileName: detail.fileName || name, path: detail.path })
+      } else {
+        reject(new Error(detail.message || 'Failed to save archive'))
+      }
+    }
+    const timer = setTimeout(() => {
+      cleanup()
+      reject(new Error('Export timed out'))
+    }, 60_000)
+
+    window.addEventListener('android-export-result', onResult)
+    try {
+      trigger()
+    } catch (error) {
+      cleanup()
+      reject(error instanceof Error ? error : new Error('Failed to save archive'))
+    }
+  })
+
+const exportStreamToAndroid = (
+  bridge: AndroidChunkedExportBridge
+): Promise<{ fileName: string; path: string }> =>
+  enqueueBackup(async () => {
+    const readSessions = createSessionSnapshotReader()
+    const { exportArchiveStream } = await import('./history/exportArchive.js')
+    const memoryStates = __BETA__ ? await listSessionMemoryStates() : undefined
+    const name = backupFileName(new Date())
+    const requestId = nextExportRequestId++
+    let opened = false
+    let seq = 1
+    try {
+      await waitExportStep(requestId, 0, () => {
+        bridge.beginExportFile(requestId, name, 'application/zip')
+      })
+      opened = true
+      await exportArchiveStream(
+        readSessions(),
+        async (chunk) => {
+          if (chunk.byteLength === 0) {
+            return
+          }
+          const currentSeq = seq++
+          const base64Chunk = bytesToBase64(chunk)
+          await waitExportStep(requestId, currentSeq, () => {
+            bridge.writeExportChunk(requestId, currentSeq, base64Chunk)
+          })
+        },
+        memoryStates
+      )
+      opened = false
+      return await waitExportFinish(requestId, name, () => {
+        bridge.finishExportFile(requestId)
+      })
+    } catch (error) {
+      if (opened) {
+        try {
+          bridge.abortExportFile(requestId)
+        } catch {
+          // 忽略清理异常，保留原始导出错误
+        }
+      }
+      throw error
+    }
+  })
 
 const blobToBase64 = (blob: Blob): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -166,10 +331,21 @@ const triggerBrowserDownload = (name: string, blob: Blob) => {
   setTimeout(() => URL.revokeObjectURL(url), 10_000)
 }
 
-/** 导出全部历史会话并保存到设备（Android 写入系统下载目录并返回真实路径，Web 触发浏览器下载） */
+/** 导出全部历史会话并保存到设备（Android 流式分片直写系统下载目录并返回真实路径，Web 触发浏览器下载） */
 export const exportAndSaveHistory = async (): Promise<ExportRecord> => {
-  const { name, blob } = await exportHistory()
   const bridge = getAndroidExportBridge()
+  if (hasChunkedAndroidExport(bridge)) {
+    const saved = await exportStreamToAndroid(bridge)
+    const record: ExportRecord = {
+      exportedAt: Date.now(),
+      fileName: saved.fileName,
+      path: saved.path,
+      isAndroid: true,
+    }
+    saveLastExportRecord(record)
+    return record
+  }
+  const { name, blob } = await exportHistory()
   if (bridge?.saveExportFile) {
     const saved = await saveBlobInAndroid(
       bridge as Required<Pick<AndroidExportBridge, 'saveExportFile'>>,

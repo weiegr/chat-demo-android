@@ -22,6 +22,8 @@ export const Menu = ({
   offset = 4,
   variant = 'default',
   withBackdrop = false,
+  zIndex,
+  captureEscape = false,
   onOpenChange,
   children,
 }: {
@@ -33,6 +35,10 @@ export const Menu = ({
   offset?: number
   variant?: 'default' | 'context'
   withBackdrop?: boolean
+  /** 在弹层（z-index: 1000）内使用时可显式指定更高层级 */
+  zIndex?: number
+  /** 在弹层内打开时于捕获阶段拦截 Escape，优先关闭菜单而不连带关闭底层弹层 */
+  captureEscape?: boolean
   /** 打开状态变化时通知调用方，用于让触发元素在菜单打开期间保持可见 */
   onOpenChange?: (open: boolean) => void
   children: (props: { open: boolean; toggle: () => void }) => ReactNode
@@ -58,7 +64,8 @@ export const Menu = ({
   useDismiss(
     open,
     withBackdrop ? [anchorRef, floatingRef, backdropRef] : [anchorRef, floatingRef],
-    close
+    close,
+    { captureEscape }
   )
 
   return (
@@ -73,6 +80,7 @@ export const Menu = ({
                 <div
                   ref={backdropRef}
                   className={styles.backdrop}
+                  style={zIndex !== undefined ? { zIndex: zIndex - 1 } : undefined}
                   onPointerDown={(event) => {
                     event.stopPropagation()
                     backdropArmedRef.current = true
@@ -91,7 +99,10 @@ export const Menu = ({
               <div
                 ref={floatingRef}
                 className={clsx(styles.menu, variant === 'context' && styles.menuContext)}
-                style={position ?? undefined}
+                style={{
+                  ...(position ?? { visibility: 'hidden' }),
+                  ...(zIndex !== undefined ? { zIndex } : undefined),
+                }}
                 role="menu"
               >
                 {options.map((option) => (

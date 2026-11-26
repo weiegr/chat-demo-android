@@ -1,6 +1,6 @@
 import '../../app/compat.js'
 import { hasPersistentStorage } from './db.js'
-import { querySearchIndex, type SearchRequest, type SearchResponse } from './searchIndex.js'
+import { runSearchIndex, type SearchRequest, type SearchResponse } from './searchIndex.js'
 
 self.addEventListener('message', async ({ data }: MessageEvent<SearchRequest>) => {
   let response: SearchResponse
@@ -8,7 +8,7 @@ self.addEventListener('message', async ({ data }: MessageEvent<SearchRequest>) =
     if (!(await hasPersistentStorage())) {
       throw new Error('Search Worker cannot access the chat database')
     }
-    response = { hits: await querySearchIndex(data) }
+    response = await runSearchIndex(data)
   } catch (error) {
     response = { error: String(error) }
   }

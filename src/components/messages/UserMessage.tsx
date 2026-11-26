@@ -1,10 +1,12 @@
 import clsx from 'clsx'
 import { memo } from 'react'
 import { useTranslate } from '../../i18n/index.js'
+import { getAudioSpectrogramIds } from '../../services/audio/metadata.js'
 import { retryUpload } from '../../services/chat/store.js'
 import type { UserMessage as UserMessageType } from '../../services/chat/types.js'
 import { IconButton } from '../base/IconButton.js'
 import { IconEditOutline16 } from '../base/icons.js'
+import { AudioFileCard } from '../files/AudioFileCard.js'
 import { StoredVideoTile } from '../files/VideoTile.js'
 import {
   BranchSwitcher,
@@ -43,9 +45,10 @@ export const UserMessage = memo(function UserMessage({
   )
   const editable = !readOnly && !busy
   const video = message.video
-  const files = video
-    ? message.files.filter((file) => !video.frameIds.includes(file.id))
-    : message.files
+  const spectrogramIds = getAudioSpectrogramIds(message.files)
+  const files = message.files.filter(
+    (file) => !video?.frameIds.includes(file.id) && !spectrogramIds.has(file.id)
+  )
   const attachmentOnly = !message.content && (files.length > 0 || video !== undefined)
 
   return (
@@ -63,13 +66,22 @@ export const UserMessage = memo(function UserMessage({
           )}
         >
           {video ? <StoredVideoTile video={video} sessionId={sessionId} /> : null}
-          {files.map((file) => (
-            <MessageFile
-              key={file.id}
-              file={file}
-              onRetry={retryUploadId ? () => retryUpload(sessionId, retryUploadId) : null}
-            />
-          ))}
+          {files.map((file) =>
+            file.audio ? (
+              <AudioFileCard
+                key={file.id}
+                name={file.name}
+                size={file.size}
+                source={{ id: file.id, sessionId }}
+              />
+            ) : (
+              <MessageFile
+                key={file.id}
+                file={file}
+                onRetry={retryUploadId ? () => retryUpload(sessionId, retryUploadId) : null}
+              />
+            )
+          )}
         </div>
       ) : null}
       {message.content ? (

@@ -5,19 +5,9 @@ import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import {
   DEFAULT_EXPERT_SYSTEM_PROMPT,
   DEFAULT_FAST_SYSTEM_PROMPT,
-  DEFAULT_FAST_LIVE_PROMPT,
-  DEFAULT_FAST_VIDEO_PROMPT,
-  DEFAULT_LOCATION_TOOL_PROMPT,
-  DEFAULT_READ_LINK_TOOL_PROMPT,
   DEFAULT_RP_SYSTEM_PROMPT,
-  DEFAULT_SEARCH_TOOL_PROMPT,
   setExpertSystemPrompt,
-  setFastLocationToolPrompt,
-  setFastLivePrompt,
-  setFastReadLinkToolPrompt,
-  setFastSearchToolPrompt,
   setFastSystemPrompt,
-  setFastVideoPrompt,
   setRpSystemPrompt,
   useSettings,
 } from '../../services/settings.js'
@@ -29,20 +19,11 @@ import { InfoModalButton } from './InfoModalButton.js'
 import { MobileActionCard } from './MobileActionCard.js'
 import styles from './Settings.module.css'
 
-export type PromptTarget =
-  | 'fastSystem'
-  | 'fastVideo'
-  | 'fastLive'
-  | 'fastSearchTool'
-  | 'fastReadLinkTool'
-  | 'fastLocationTool'
-  | 'expertSystem'
-  | 'rpSystem'
+export type PromptTarget = 'fastSystem' | 'expertSystem' | 'rpSystem'
 
 type PromptConfig = {
   titleKey: TranslationKey
   descKey: TranslationKey
-  placeholderKey: TranslationKey
   defaultValue: string
   read: () => string
   save: (value: string) => void
@@ -52,55 +33,13 @@ const PROMPT_TARGET_CONFIG: Record<PromptTarget, PromptConfig> = {
   fastSystem: {
     titleKey: 'settingsFastSystemPrompt',
     descKey: 'settingsFastSystemPromptDesc',
-    placeholderKey: 'settingsSystemPromptPlaceholder',
     defaultValue: DEFAULT_FAST_SYSTEM_PROMPT,
     read: () => useSettings.getState().fastSystemPrompt,
     save: setFastSystemPrompt,
   },
-  fastLive: {
-    titleKey: 'settingsFastLivePrompt',
-    descKey: 'settingsFastLivePromptDesc',
-    placeholderKey: 'settingsSystemPromptPlaceholder',
-    defaultValue: DEFAULT_FAST_LIVE_PROMPT,
-    read: () => useSettings.getState().fastLivePrompt,
-    save: setFastLivePrompt,
-  },
-  fastVideo: {
-    titleKey: 'settingsFastVideoPrompt',
-    descKey: 'settingsFastVideoPromptDesc',
-    placeholderKey: 'settingsSystemPromptPlaceholder',
-    defaultValue: DEFAULT_FAST_VIDEO_PROMPT,
-    read: () => useSettings.getState().fastVideoPrompt,
-    save: setFastVideoPrompt,
-  },
-  fastSearchTool: {
-    titleKey: 'settingsFastSearchToolPrompt',
-    descKey: 'settingsFastSearchToolPromptDesc',
-    placeholderKey: 'settingsToolPromptPlaceholder',
-    defaultValue: DEFAULT_SEARCH_TOOL_PROMPT,
-    read: () => useSettings.getState().fastSearchToolPrompt,
-    save: setFastSearchToolPrompt,
-  },
-  fastReadLinkTool: {
-    titleKey: 'settingsFastReadLinkToolPrompt',
-    descKey: 'settingsFastReadLinkToolPromptDesc',
-    placeholderKey: 'settingsToolPromptPlaceholder',
-    defaultValue: DEFAULT_READ_LINK_TOOL_PROMPT,
-    read: () => useSettings.getState().fastReadLinkToolPrompt,
-    save: setFastReadLinkToolPrompt,
-  },
-  fastLocationTool: {
-    titleKey: 'settingsFastLocationToolPrompt',
-    descKey: 'settingsFastLocationToolPromptDesc',
-    placeholderKey: 'settingsToolPromptPlaceholder',
-    defaultValue: DEFAULT_LOCATION_TOOL_PROMPT,
-    read: () => useSettings.getState().fastLocationToolPrompt,
-    save: setFastLocationToolPrompt,
-  },
   expertSystem: {
     titleKey: 'settingsExpertSystemPrompt',
     descKey: 'settingsExpertSystemPromptDesc',
-    placeholderKey: 'settingsSystemPromptPlaceholder',
     defaultValue: DEFAULT_EXPERT_SYSTEM_PROMPT,
     read: () => useSettings.getState().expertSystemPrompt,
     save: setExpertSystemPrompt,
@@ -108,33 +47,16 @@ const PROMPT_TARGET_CONFIG: Record<PromptTarget, PromptConfig> = {
   rpSystem: {
     titleKey: 'settingsRpSystemPrompt',
     descKey: 'settingsRpSystemPromptDesc',
-    placeholderKey: 'settingsSystemPromptPlaceholder',
     defaultValue: DEFAULT_RP_SYSTEM_PROMPT,
     read: () => useSettings.getState().rpSystemPrompt,
     save: setRpSystemPrompt,
   },
 }
 
-/** 系统提示词页面的两个模式分组：快速模式维护基础与工具提示词，专家模式只有基础提示词 */
-const MODE_PROMPT_GROUPS: { main: PromptTarget; tools: PromptTarget[] }[] = [
-  {
-    main: 'fastSystem',
-    tools: [
-      'fastSearchTool',
-      'fastReadLinkTool',
-      'fastLocationTool',
-      'fastVideo',
-      'fastLive',
-    ],
-  },
-  {
-    main: 'expertSystem',
-    // v4-pro 不声明任何服务端/客户端工具，工具提示词无请求侧用途
-    tools: [],
-  },
-]
+/** 系统提示词页面维护的模式基础提示词（含快速、专家与 RP 模式） */
+const MODE_PROMPT_TARGETS: PromptTarget[] = ['fastSystem', 'expertSystem', 'rpSystem']
 
-/** 二级提示词编辑弹窗/底部抽屉：供快速模式、专家模式、各工具及 RP 模式提示词共用 */
+/** 二级提示词编辑弹窗/底部抽屉：供快速模式、专家模式与 RP 模式提示词共用 */
 export const PromptEditorModal = ({
   target,
   onClose,
@@ -160,6 +82,7 @@ export const PromptEditorModal = ({
   }, [target])
 
   const sheetPresence = usePresence(target !== null && isMobile, 280)
+  const modalPresence = usePresence(target !== null && !isMobile, 220)
   const isDefault = draft === config.defaultValue
 
   const saveAndClose = () => {
@@ -172,7 +95,7 @@ export const PromptEditorModal = ({
       <textarea
         aria-label={t(config.titleKey)}
         className={clsx(styles.urlInput, styles.promptTextarea)}
-        placeholder={t(config.placeholderKey)}
+        placeholder={t('settingsSystemPromptPlaceholder')}
         rows={6}
         spellCheck={false}
         // 移动端不自动聚焦：抽屉滑入与软键盘同时进行会整段掉帧，交给用户点
@@ -214,13 +137,14 @@ export const PromptEditorModal = ({
     )
   }
 
-  if (!target) {
+  if (!modalPresence.mounted) {
     return null
   }
 
   return (
     <Modal
       title={t(config.titleKey)}
+      visible={modalPresence.visible}
       className={styles.promptModal}
       onClose={onClose}
       footer={
@@ -228,7 +152,7 @@ export const PromptEditorModal = ({
           <Button variant="outlined" size="m" onClick={onClose}>
             {t('cancel')}
           </Button>
-          <Button variant="primary" size="m" onClick={saveAndClose}>
+          <Button variant="primary" size="m" disabled={target === null} onClick={saveAndClose}>
             {t('confirm')}
           </Button>
         </>
@@ -252,7 +176,7 @@ export const MobileSystemPromptNavRow = ({ onOpen }: { onOpen: () => void }) => 
   )
 }
 
-/** 移动端独立的「系统提示词」子页面：按快速模式、专家模式拆分为两张卡片，各自展示基础提示词与工具提示词 */
+/** 移动端独立的「系统提示词」子页面：展示快速、专家与 RP 模式基础提示词 */
 export const MobileSystemPromptPage = () => {
   const t = useTranslate()
   const [editorTarget, setEditorTarget] = useState<PromptTarget | null>(null)
@@ -260,45 +184,20 @@ export const MobileSystemPromptPage = () => {
   return (
     <>
       <div className={clsx(styles.content, styles.mobileDataContent)}>
-        {MODE_PROMPT_GROUPS.map((group) => {
-          const mainCfg = PROMPT_TARGET_CONFIG[group.main]
+        {MODE_PROMPT_TARGETS.map((item) => {
+          const cfg = PROMPT_TARGET_CONFIG[item]
           return (
-            <div key={group.main} className={styles.mobileCard}>
-              <MobileActionCard
-                embedded
-                className={styles.modePromptMainRow}
-                label={t(mainCfg.titleKey)}
-                description={t(mainCfg.descKey)}
-                right={
-                  <span className={styles.mobileNavRight}>
-                    <IconChevronRightOutline14 />
-                  </span>
-                }
-                onAction={() => setEditorTarget(group.main)}
-              />
-              {group.tools.length > 0 ? (
-                <div className={styles.modePromptSubList}>
-                  {group.tools.map((item) => {
-                    const cfg = PROMPT_TARGET_CONFIG[item]
-                    return (
-                      <MobileActionCard
-                        key={item}
-                        embedded
-                        className={styles.modePromptSubRow}
-                        label={t(cfg.titleKey)}
-                        description={t(cfg.descKey)}
-                        right={
-                          <span className={styles.mobileNavRight}>
-                            <IconChevronRightOutline14 />
-                          </span>
-                        }
-                        onAction={() => setEditorTarget(item)}
-                      />
-                    )
-                  })}
-                </div>
-              ) : null}
-            </div>
+            <MobileActionCard
+              key={item}
+              label={t(cfg.titleKey)}
+              description={t(cfg.descKey)}
+              right={
+                <span className={styles.mobileNavRight}>
+                  <IconChevronRightOutline14 />
+                </span>
+              }
+              onAction={() => setEditorTarget(item)}
+            />
           )
         })}
       </div>
@@ -307,64 +206,31 @@ export const MobileSystemPromptPage = () => {
   )
 }
 
-/** 桌面端「系统提示词」：拆分为快速模式与专家模式，各自列出基础提示词及对应工具提示词 */
+/** 桌面端「系统提示词」：列出快速、专家与 RP 模式基础提示词 */
 export const SystemPromptSetting = () => {
   const t = useTranslate()
   const [editorTarget, setEditorTarget] = useState<PromptTarget | null>(null)
 
   return (
     <>
-      {MODE_PROMPT_GROUPS.map((group) => {
-        const mainCfg = PROMPT_TARGET_CONFIG[group.main]
+      {MODE_PROMPT_TARGETS.map((item) => {
+        const cfg = PROMPT_TARGET_CONFIG[item]
         return (
-          <div key={group.main}>
-            <div className={clsx(styles.cell, styles.row)}>
-              <div className={styles.text}>
-                <div className={styles.labelRow}>
-                  <span className={styles.label}>{t(mainCfg.titleKey)}</span>
-                  <InfoModalButton
-                    ariaLabel={t(mainCfg.titleKey)}
-                    description={t(mainCfg.descKey)}
-                  />
-                </div>
+          <div key={item} className={clsx(styles.cell, styles.row)}>
+            <div className={styles.text}>
+              <div className={styles.labelRow}>
+                <span className={styles.label}>{t(cfg.titleKey)}</span>
+                <InfoModalButton ariaLabel={t(cfg.titleKey)} description={t(cfg.descKey)} />
               </div>
-              <Button
-                variant="outlined"
-                size="m"
-                className={styles.cellButton}
-                onClick={() => setEditorTarget(group.main)}
-              >
-                {t('settingsEditAction')}
-              </Button>
             </div>
-            {group.tools.length > 0 ? (
-              <div className={styles.desktopToolList}>
-                {group.tools.map((item) => {
-                  const cfg = PROMPT_TARGET_CONFIG[item]
-                  return (
-                    <div key={item} className={clsx(styles.cell, styles.row)}>
-                      <div className={styles.text}>
-                        <div className={styles.labelRow}>
-                          <span className={styles.label}>{t(cfg.titleKey)}</span>
-                          <InfoModalButton
-                            ariaLabel={t(cfg.titleKey)}
-                            description={t(cfg.descKey)}
-                          />
-                        </div>
-                      </div>
-                      <Button
-                        variant="outlined"
-                        size="m"
-                        className={styles.cellButton}
-                        onClick={() => setEditorTarget(item)}
-                      >
-                        {t('settingsEditAction')}
-                      </Button>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : null}
+            <Button
+              variant="outlined"
+              size="m"
+              className={styles.cellButton}
+              onClick={() => setEditorTarget(item)}
+            >
+              {t('settingsEditAction')}
+            </Button>
           </div>
         )
       })}

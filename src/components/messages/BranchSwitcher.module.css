@@ -3,6 +3,26 @@
   align-items: center;
   gap: 2px;
   height: 28px;
+
+  [data-chat-bg='true'] & {
+    button {
+      color: var(--dsw-alias-label-primary);
+    }
+
+    button:disabled {
+      color: rgba(15, 17, 21, 0.42);
+    }
+  }
+
+  [data-ds-dark-theme] [data-chat-bg='true'] & {
+    button {
+      color: var(--dsw-alias-label-primary);
+    }
+
+    button:disabled {
+      color: rgba(249, 250, 251, 0.44);
+    }
+  }
 }
 
 .previous svg {
@@ -17,4 +37,8 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   user-select: none;
+
+  [data-chat-bg='true'] & {
+    color: var(--dsw-alias-label-primary);
+  }
 }

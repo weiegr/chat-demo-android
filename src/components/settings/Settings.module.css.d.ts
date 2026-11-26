@@ -8,6 +8,21 @@ declare const styles: {
   readonly navItem: string
   readonly navItemActive: string
   readonly content: string
+  readonly desktopSubPanel: string
+  readonly desktopSubHeader: string
+  readonly desktopBackButton: string
+  readonly desktopSubTitle: string
+  readonly desktopSubScroll: string
+  readonly desktopMemoryAlert: string
+  readonly memoryFileDesktop: string
+  readonly memoryFileDesktopBody: string
+  readonly memoryDesktopStatus: string
+  readonly memoryDesktopFooter: string
+  readonly memoryDesktopDelete: string
+  readonly memoryDocCard: string
+  readonly memoryEmptyState: string
+  readonly memoryEmptyIcon: string
+  readonly memoryDocument: string
   readonly mobileSubHeader: string
   readonly mobileTitleStack: string
   readonly mobileTitleItem: string
@@ -20,11 +35,13 @@ declare const styles: {
   readonly mobileMainPagePushed: string
   readonly mobileSubPage: string
   readonly mobileSubPageVisible: string
+  readonly mobileSubPagePushed: string
   readonly mobileDataContent: string
   readonly mobileLocationContent: string
   readonly mobileSubActionRow: string
   readonly mobileActionGroup: string
   readonly mobileCardHint: string
+  readonly mobileEmbeddedHint: string
   readonly mobileCardHintError: string
   readonly mobileActionCard: string
   readonly mobileActionCardEmbedded: string
@@ -33,10 +50,6 @@ declare const styles: {
   readonly mobileActionRight: string
   readonly mobileActionDangerLabel: string
   readonly mobileActionLabelDisabled: string
-  readonly modePromptMainRow: string
-  readonly modePromptSubList: string
-  readonly modePromptSubRow: string
-  readonly desktopToolList: string
   readonly mobileGroupTitle: string
   readonly mobileCard: string
   readonly mobileNavRow: string
@@ -132,5 +145,66 @@ declare const styles: {
   readonly deleteConfirm: string
   readonly deleteActions: string
   readonly version: string
+  readonly dialogImmersive: string
+  readonly mobileHeaderBackdrop: string
+  readonly mobileHeaderBackdropSolid: string
+  readonly mobileHeaderDivider: string
+  readonly mobileHeaderDividerVisible: string
+  readonly mobileBackButtonOverlay: string
+  readonly mobileBackButtonSolid: string
+  readonly mobileRootTitleInner: string
+  readonly floatingAvatarLayer: string
+  readonly floatingAvatarLayerHidden: string
+  readonly floatingAvatarAnchor: string
+  readonly floatingAvatarAnchorLarge: string
+  readonly mobileHeroBackdrop: string
+  readonly mobileHeroBackdropParallax: string
+  readonly mobileHeroBackdropFade: string
+  readonly mobileHeroCoverImage: string
+  readonly mobileHeroCoverScrim: string
+  readonly heroLabelOnCover: string
+  readonly mobileImmersiveScroll: string
+  readonly mobilePlainScroll: string
+  readonly mobileHeroSpacer: string
+  readonly mobileHeroIdentity: string
+  readonly mobileHeroAccountLabel: string
+  readonly mobileSettingsSheet: string
+  readonly mobileSettingsSheetGlass: string
+  readonly mobileSettingsSheetGlassOff: string
+  readonly mobileSettingsSheetLower: string
+  readonly mobileSettingsSheetSolid: string
+  readonly mobileSettingsSheetContent: string
+  readonly mobileGlassCard: string
+  readonly mobileGlassCardSolid: string
+  readonly accountAvatarCircle: string
+  readonly accountAvatarImage: string
+  readonly accountAvatarDefaultIcon: string
+  readonly heroParallaxLayer: string
+  readonly heroAvatar3d: string
+  readonly heroAvatarShadow: string
+  readonly heroAvatarSheen: string
+  readonly floatingAvatarHit: string
+  readonly heroAvatarCircle: string
+  readonly heroAvatarDefaultIcon: string
+  readonly heroAvatarEditButton: string
+  readonly desktopHeroAvatarEditButton: string
+  readonly heroCoverEditButton: string
+  readonly desktopHeroCoverEditButton: string
+  readonly heroEditOnCover: string
+  readonly desktopAccountHero: string
+  readonly desktopAccountHeroBg: string
+  readonly desktopAccountHeroBgParallax: string
+  readonly desktopAccountHeroCenter: string
+  readonly desktopAccountHeroCenterAvatarOnly: string
+  readonly desktopHeroAvatarWrap: string
+  readonly desktopHeroAvatarLarge: string
+  readonly desktopHeroAvatarCircle: string
+  readonly desktopHeroAvatarIcon: string
+  readonly desktopHeroAccountLabel: string
+  readonly avatarModal: string
+  readonly avatarSheetMain: string
+  readonly avatarSheetActions: string
+  readonly avatarSheetButton: string
+  readonly avatarSheetButtonDanger: string
 }
 export = styles

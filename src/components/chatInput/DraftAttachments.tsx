@@ -2,6 +2,7 @@ import clsx from 'clsx'
 import { memo, useEffect, useState, type ReactNode } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { useUploads, type UploadTask } from '../../services/attachments.js'
+import { getAudioSpectrogramIds } from '../../services/audio/metadata.js'
 import {
   shouldSkipDraftUpload,
   type DraftAttachment,
@@ -10,6 +11,7 @@ import {
 import type { FileAttachment, VideoAttachment } from '../../services/chat/types.js'
 import { IconCloseFill14, IconPhotoErrorFill20, IconRefreshOutline16 } from '../base/icons.js'
 import { Tooltip } from '../base/Tooltip.js'
+import { AudioFileCard } from '../files/AudioFileCard.js'
 import { FileCard } from '../files/FileCard.js'
 import { useFileUrl } from '../files/useFileUrl.js'
 import { StoredVideoTile, VideoTile } from '../files/VideoTile.js'
@@ -53,6 +55,7 @@ export const DraftAttachments = memo(function DraftAttachments({
   if (items.length === 0 && existingFiles.length === 0) {
     return null
   }
+  const spectrogramIds = getAudioSpectrogramIds(existingFiles)
   return (
     <div className={styles.attachments}>
       {existingVideo && sessionId !== null ? (
@@ -64,14 +67,23 @@ export const DraftAttachments = memo(function DraftAttachments({
         />
       ) : null}
       {existingFiles
-        .filter((file) => !existingVideo?.frameIds.includes(file.id))
-        .map((file) => (
-          <ExistingAttachmentItem
-            key={`existing:${file.id}`}
-            file={file}
-            onRemove={onRemoveExisting ? () => onRemoveExisting(file.id) : undefined}
-          />
-        ))}
+        .filter(
+          (file) => !existingVideo?.frameIds.includes(file.id) && !spectrogramIds.has(file.id)
+        )
+        .map((file) => {
+          const remove = onRemoveExisting ? () => onRemoveExisting(file.id) : undefined
+          return file.audio ? (
+            <AudioFileCard
+              key={`existing:${file.id}`}
+              name={file.name}
+              size={file.size}
+              source={{ id: file.id, sessionId: sessionId ?? undefined }}
+              onRemove={remove}
+            />
+          ) : (
+            <ExistingAttachmentItem key={`existing:${file.id}`} file={file} onRemove={remove} />
+          )
+        })}
       {video ? (
         <DraftVideoTile
           key={video.id}
@@ -82,15 +94,25 @@ export const DraftAttachments = memo(function DraftAttachments({
       ) : null}
       {items
         .filter((item) => !video?.frameIds.includes(item.id))
-        .map((item) => (
-          <AttachmentItem
-            key={item.id}
-            item={item}
-            useOcrModel={useOcrModel}
-            onRetry={() => onRetry(item.id)}
-            onRemove={() => onRemove(item.id)}
-          />
-        ))}
+        .map((item) =>
+          item.audio ? (
+            <AudioFileCard
+              key={item.id}
+              name={item.file.name}
+              size={item.file.size}
+              source={{ blob: item.file }}
+              onRemove={() => onRemove(item.id)}
+            />
+          ) : (
+            <AttachmentItem
+              key={item.id}
+              item={item}
+              useOcrModel={useOcrModel}
+              onRetry={() => onRetry(item.id)}
+              onRemove={() => onRemove(item.id)}
+            />
+          )
+        )}
     </div>
   )
 })

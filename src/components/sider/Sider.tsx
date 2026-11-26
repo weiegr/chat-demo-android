@@ -7,16 +7,24 @@ import {
   IconSettingsOutline16,
   NewChatIcon,
 } from '../base/icons.js'
-import { setSiderCollapsed } from '../../services/settings.js'
-import { newChat, removeSession } from '../../services/chat/store.js'
+import { getAccountDisplayLabel, useMockAccount } from '../../services/account.js'
+import { setSiderCollapsed, useSettings } from '../../services/settings.js'
+import { loadSession } from '../../services/chat/db.js'
+import { isMemorySession } from '../../services/chat/memoryModel.js'
+import { newChat, removeSession, useChatStore } from '../../services/chat/store.js'
 import type { SessionSummary } from '../../services/chat/types.js'
 import { Button } from '../base/Button.js'
 import { IconButton } from '../base/IconButton.js'
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
+import { usePresence } from '../base/usePresence.js'
 import { openChatSearch, useChatSearch } from '../search/chatSearchState.js'
+import { AccountAvatar } from '../settings/AccountAvatar.js'
 import { openSettings } from '../settings/settingsDialogState.js'
 import {
+  applySiderDrawerProgress,
+  bindSiderDrawerMotion,
+  cancelClearSiderMainInline,
   clearSiderMainInline,
   closeMobileSider,
   dismissKeyboard,
@@ -27,23 +35,70 @@ import {
   useMobileSider,
 } from './mobileSiderState.js'
 import { SessionList } from './SessionList.js'
+import { RpContextRing } from '../session/RpContextRing.js'
+import { RpModelCapsule } from '../session/RpModelCapsule.js'
 import styles from './Sider.module.css'
 
 /** 展开的侧边栏：名称与收起按钮、开启新对话、按时间分组的会话列表、底部设置；移动端放在抽屉里，收起按钮关闭抽屉 */
-export const Sider = memo(function Sider({ mobile = false }: { mobile?: boolean }) {
+export const Sider = memo(function Sider({
+  mobile = false,
+  showRpContext = false,
+}: {
+  mobile?: boolean
+  showRpContext?: boolean
+}) {
   const t = useTranslate()
+  const personalCenterEnabled = useSettings((state) => state.personalCenterEnabled)
+  const showPersonalCenter = __BETA__ && personalCenterEnabled
+  const account = useMockAccount()
+  const accountLabel = getAccountDisplayLabel(account)
+  const floatingAvatarOnly = showPersonalCenter && !accountLabel
   const chatSearchOpen = useChatSearch((state) => mobile && state.open)
   const chatSearchPresenting = useChatSearch((state) => mobile && state.presenting)
   const chatSearchClosingToSession = useChatSearch((state) => mobile && state.closingToSession)
   const [deleting, setDeleting] = useState<SessionSummary | null>(null)
   const [deletePending, setDeletePending] = useState(false)
-  const requestDelete = useCallback((session: SessionSummary) => setDeleting(session), [])
+  const lastDeletingRef = useRef<SessionSummary | null>(null)
+  if (deleting) {
+    lastDeletingRef.current = deleting
+  }
+  const deleteTarget = deleting ?? lastDeletingRef.current
+  const cachedDeleteTarget = useChatStore((state) =>
+    deleteTarget && Object.hasOwn(state.sessionCache, deleteTarget.id)
+      ? state.sessionCache[deleteTarget.id]
+      : undefined
+  )
+  const deletePresence = usePresence(deleting !== null, 220)
+  const requestDelete = useCallback((session: SessionSummary) => {
+    if (
+      !__BETA__ ||
+      session.mode !== undefined ||
+      Object.hasOwn(useChatStore.getState().sessionCache, session.id)
+    ) {
+      setDeleting(session)
+      return
+    }
+    void loadSession(session.id)
+      .then((loaded) =>
+        setDeleting(
+          loaded
+            ? { ...session, mode: loaded.mode, origin: loaded.origin ?? session.origin }
+            : session
+        )
+      )
+      .catch(() => setDeleting(session))
+  }, [])
+  const resolvedDeleteTarget = cachedDeleteTarget ?? deleteTarget
+  const showDeleteMemoryHint = Boolean(
+    __BETA__ && resolvedDeleteTarget && isMemorySession(resolvedDeleteTarget)
+  )
 
   return (
     <div
       className={clsx(
         styles.sider,
         mobile && styles.mobile,
+        floatingAvatarOnly && styles.siderAvatarOnly,
         mobile && (chatSearchOpen || chatSearchClosingToSession) && styles.searchOpen,
         mobile && chatSearchPresenting && styles.searchPresenting
       )}
@@ -80,35 +135,64 @@ export const Sider = memo(function Sider({ mobile = false }: { mobile?: boolean 
         )}
       </div>
       {mobile ? null : (
-        <button
-          type="button"
-          className={styles.newChat}
-          onClick={() => {
-            newChat()
-            closeMobileSider()
-          }}
-        >
-          <span className={styles.newChatIcon}>
-            <NewChatIcon />
-          </span>
-          {t('newChat')}
-          <span className={styles.newChatHint} aria-hidden="true">
-            Ctrl+J
-          </span>
-        </button>
+        <div className={styles.newChatRow}>
+          <button
+            type="button"
+            className={styles.newChat}
+            onClick={() => {
+              newChat()
+              closeMobileSider()
+            }}
+          >
+            <span className={styles.newChatIcon}>
+              <NewChatIcon />
+            </span>
+            {t('newChat')}
+            <span className={styles.newChatHint} aria-hidden="true">
+              Ctrl+J
+            </span>
+          </button>
+          {showRpContext ? (
+            <>
+              <RpContextRing />
+              <RpModelCapsule />
+            </>
+          ) : null}
+        </div>
       )}
-      <SessionList mobile={mobile} onDelete={requestDelete} />
-      <div className={styles.bottom}>
-        <button type="button" className={styles.settings} onClick={() => openSettings('general')}>
-          <span className={styles.settingsIcon}>
-            <IconSettingsOutline16 />
-          </span>
-          <span className={styles.settingsLabel}>{t('settings')}</span>
-        </button>
+      <SessionList mobile={mobile} floatingBottom={floatingAvatarOnly} onDelete={requestDelete} />
+      <div className={clsx(styles.bottom, floatingAvatarOnly && styles.bottomFloating)}>
+        {showPersonalCenter ? (
+          <button
+            type="button"
+            className={clsx(
+              styles.settings,
+              styles.accountEntry,
+              floatingAvatarOnly && styles.accountEntryAvatarOnly
+            )}
+            aria-label={t('settings')}
+            onClick={() => openSettings(mobile ? 'general' : 'data')}
+          >
+            <AccountAvatar
+              src={account.avatarDataUrl}
+              className={styles.accountAvatar}
+              iconClassName={styles.accountAvatarIcon}
+            />
+            {accountLabel ? <span className={styles.accountLabel}>{accountLabel}</span> : null}
+          </button>
+        ) : (
+          <button type="button" className={styles.settings} onClick={() => openSettings('general')}>
+            <span className={styles.settingsIcon}>
+              <IconSettingsOutline16 />
+            </span>
+            <span className={styles.settingsLabel}>{t('settings')}</span>
+          </button>
+        )}
       </div>
-      {deleting ? (
+      {deletePresence.mounted && lastDeletingRef.current ? (
         <Modal
           title={t('deleteSessionModalContentTitle')}
+          visible={deletePresence.visible}
           onClose={() => {
             if (!deletePending) {
               setDeleting(null)
@@ -116,13 +200,21 @@ export const Sider = memo(function Sider({ mobile = false }: { mobile?: boolean 
           }}
           footer={
             <>
-              <Button variant="outlined" disabled={deletePending} onClick={() => setDeleting(null)}>
+              <Button
+                variant="outlined"
+                autoFocus={!mobile}
+                disabled={deletePending}
+                onClick={() => setDeleting(null)}
+              >
                 {t('cancel')}
               </Button>
               <Button
                 variant="danger"
-                disabled={deletePending}
+                disabled={deletePending || !deleting}
                 onClick={async () => {
+                  if (!deleting || deletePending) {
+                    return
+                  }
                   setDeletePending(true)
                   try {
                     if (await removeSession(deleting.id)) {
@@ -140,7 +232,11 @@ export const Sider = memo(function Sider({ mobile = false }: { mobile?: boolean 
             </>
           }
         >
-          {t('deleteSessionWithFilesDescription')}
+          {t(
+            showDeleteMemoryHint
+              ? 'deleteSessionWithMemoryDescription'
+              : 'deleteSessionWithFilesDescription'
+          )}
         </Modal>
       ) : null}
     </div>
@@ -167,16 +263,23 @@ const canScrollHorizontally = (target: EventTarget | null, dx: number) => {
 }
 
 /**
- * 移动端抽屉：不再浮在对话界面之上，而是把对话界面整体右移、抽屉留在下层，
- * 对话界面左缘的阴影投向抽屉，形成「内容在上、侧栏在下」的层次。
+ * 移动端抽屉：不再浮在对话界面之上，而是把对话界面整体右移、抽屉在下层从左下方往右上方浮起迎合，
+ * 对话界面左缘的阴影投向抽屉，形成「内容在上、侧栏在下且跟手浮现」的层次。
  * 支持按键与左右滑动手势开合。
  */
 export const MobileSider = () => {
   const open = useMobileSider((state) => state.open)
   const chatSearchOpen = useChatSearch((state) => state.open)
   const drawerRef = useRef<HTMLDivElement>(null)
+  const drawerMotionRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => () => clearSiderMainInline(), [])
+  useEffect(() => {
+    bindSiderDrawerMotion(drawerMotionRef.current)
+    return () => {
+      clearSiderMainInline()
+      bindSiderDrawerMotion(null)
+    }
+  }, [])
 
   // 抽屉常驻在对话界面下方，关闭或进入全屏搜索态时用 inert 移出焦点与读屏范围
   useEffect(() => {
@@ -269,18 +372,26 @@ export const MobileSider = () => {
       }
 
       if (mode === 'dragging') {
+        cancelClearSiderMainInline()
         lastDx = dx
         const width = Math.max(1, drawerWidth)
         const offset = wasOpen
           ? Math.max(0, Math.min(width, width + dx))
           : Math.max(0, Math.min(width, dx))
+        const progress = offset / width
         const main = getSiderMain()
-        // 抽屉在下层且始终绘制完成，本身不动；对话界面右移多少就露出多少
+        const drawerMotion = drawerMotionRef.current
+        // 对话界面右移的同时，下层抽屉跟手水平微视差迎合
         if (main) {
           main.dataset.siderDragging = 'true'
           main.style.transition = 'none'
           main.style.transform = `translate3d(${offset}px, 0, 0)`
-          main.style.boxShadow = offset > 0 ? '-10px 0 30px rgba(0, 0, 0, 0.18)' : ''
+          main.style.boxShadow = offset > 0 ? '-6px 0 16px rgba(0, 0, 0, 0.14)' : ''
+        }
+        if (drawerMotion) {
+          drawerMotion.dataset.siderDragging = 'true'
+          drawerMotion.style.transition = 'none'
+          applySiderDrawerProgress(drawerMotion, progress)
         }
       }
     }
@@ -297,11 +408,16 @@ export const MobileSider = () => {
         ? lastDx > drawerWidth * 0.25 || (vx > 0.35 && lastDx > 24)
         : !(lastDx < -drawerWidth * 0.2 || (vx < -0.35 && lastDx < -24))
       const main = getSiderMain()
+      const drawerMotion = drawerMotionRef.current
       if (main) {
         main.style.removeProperty('transition')
         main.style.transform = `translate3d(${shouldOpen ? drawerWidth : 0}px, 0, 0)`
       }
-      scheduleClearSiderMainInline(320)
+      if (drawerMotion) {
+        drawerMotion.style.removeProperty('transition')
+        applySiderDrawerProgress(drawerMotion, shouldOpen ? 1 : 0)
+      }
+      scheduleClearSiderMainInline(350)
       if (shouldOpen) {
         openMobileSider()
       } else {
@@ -322,8 +438,15 @@ export const MobileSider = () => {
   }, [])
 
   return (
-    <div ref={drawerRef} data-open={open ? 'true' : undefined} className={styles.drawer}>
-      <Sider mobile />
+    <div
+      ref={drawerRef}
+      data-mobile-sider-drawer="true"
+      data-open={open ? 'true' : undefined}
+      className={styles.drawer}
+    >
+      <div ref={drawerMotionRef} className={styles.drawerMotion}>
+        <Sider mobile />
+      </div>
     </div>
   )
 }

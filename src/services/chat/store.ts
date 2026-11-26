@@ -1,6 +1,15 @@
 import { create } from 'zustand'
 import { getAbortReason, throwIfAborted } from '../../utils/abort.js'
+import { formatDate } from '../../utils/format.js'
 import { createId } from '../../utils/id.js'
+import {
+  buildAppGuideContext,
+  isAppGuideOverviewQuery,
+  searchAppGuide,
+  toAppGuideMatch,
+  toAppGuideOverview,
+} from '../appGuide.js'
+import { fetchAccountBalance, formatBalanceSummary } from '../api/balance.js'
 import { ApiError, streamMessage } from '../api/client.js'
 import { isOcrSupportedAttachment, recognizeFileText } from '../api/ocr.js'
 import {
@@ -23,12 +32,14 @@ import {
   uploadAttachment,
   useUploads,
 } from '../attachments.js'
+import { canAttachAudio } from '../audio/format.js'
+import { getAudioSpectrogramIds } from '../audio/metadata.js'
+import { useMockAccount } from '../account.js'
 import { GeolocationError, getCurrentPosition } from '../geolocation.js'
 import {
   canTranscribeVideo,
   canUploadVideo,
-  DEFAULT_LOCATION_TOOL_PROMPT,
-  getModePrompts,
+  getModeSystemPrompt,
   resolveModeModel,
   useSettings,
   type ChatMode,
@@ -47,6 +58,32 @@ import {
 } from './drafts.js'
 import { isTextAttachment, loadInlineTexts } from './inlineFiles.js'
 import { createLatestReminder } from './latestReminder.js'
+import {
+  captureMemoryRequest,
+  initGlobalMemory,
+  noteMemoryActivity,
+  prependGlobalMemory,
+} from './globalMemory.js'
+import {
+  isMemoryReply,
+  isMemorySession,
+  type MemoryProfile,
+  type MemorySource,
+  type MemoryTurn,
+} from './memoryModel.js'
+import { hasMemorySources, loadMemoryProfile, loadSessionMemory } from './memoryStorage.js'
+import {
+  createMemoryToolTurn,
+  executeMemoryTool,
+  hideMemoryToolResults,
+  isMemoryTool,
+  memoryToolCombination,
+  memoryTools,
+  presentMemoryTools,
+  recallWithFallback,
+  requiresMemoryToolFallback,
+  validateMemoryToolHits,
+} from './memoryTools.js'
 import { autoStartReadAloud } from '../speech/readAloud.js'
 import {
   applyEvent,
@@ -56,12 +93,15 @@ import {
   settleReply,
   toRequestMessages,
 } from './reply.js'
+import { getRpContextOverflow, prepareRpTurn, type RpTurn } from './rpCompaction.js'
+import { actualRpInput, buildRpPrompt, getRpHistoryForFiles } from './rpContext.js'
 import {
   toSessionSummary,
   type AssistantMessage,
   type ClientToolResultBlock,
   type ClientToolUseBlock,
   type FileAttachment,
+  type MemoryToolStepBlock,
   type Message,
   type Session,
   type SessionSummary,
@@ -88,9 +128,48 @@ const MAX_TOOL_ROUNDS = 5
 
 const LINK_PATTERN = /https?:\/\//i
 
-const buildLocationTool = (description: string): ClientToolDefinition => ({
+/** DeepSeek Live 通话模式内置附加提示词 */
+const FAST_LIVE_PROMPT = [
+  '你正在 DeepSeek Live 通话模式中，由 DeepSeek Flash 模型提供回答。',
+  '像当面聊天一样，用自然口语和简短连贯的句子直接回答。少用书面语、列表、分点、括号注释和复杂长句。',
+  '复杂话题先讲当前最关键的一小段，把后续逻辑拆成几轮对话，给用户留出插话和追问的空间。',
+  '用户打断或改问时，跟随最新发言。需要核实信息或实际位置时，按可用工具和授权使用搜索或定位。',
+].join('\n')
+
+/** 视频抽帧拼图与对白转写的内置说明提示词 */
+const FAST_VIDEO_PROMPT = [
+  '「视频画面」后的每张图按左上、右上、左下、右下排列四幅画面。每格对应独立时刻，以单格画面判断该时刻的物体数量和位置。',
+  '「视频对白」是视频中人物说的话。结合画面和对白，用自然的语言直接回答用户的问题。需要引用时，直接说视频里的人讲了什么。',
+  '回答聚焦视频内容。只有用户问到处理方式时，才说明提供了哪些画面和对白。证据不足时，只指出影响回答的具体细节。',
+].join('\n')
+
+/** 联网搜索工具（deepseek_web_search）内置提示词说明 */
+const SEARCH_TOOL_PROMPT = [
+  '本轮已启用联网能力：你可以调用 deepseek_web_search 搜索网页。是否调用由你根据问题需要判断，不需要用户先提出「搜索」的要求。',
+  '当问题涉及最新信息、具体事实、人物、地点、地标、机构、产品、作品、影视游戏、动植物、事件新闻或操作步骤时，先搜索核实再回答；寒暄、闲聊、纯创作或你已确定的常识问题不必搜索。',
+  '你具备上述能力，请不要表示自己无法联网或没有搜索工具。',
+].join('\n')
+
+/** 链接阅读工具（deepseek_read_url）内置提示词说明 */
+const READ_LINK_TOOL_PROMPT =
+  '本轮消息包含网页链接，你可以调用 deepseek_read_url 阅读用户消息中的链接内容以辅助回答。'
+
+/** 快速/专家模式下开启「昵称用于回复」时，将非空昵称拼接到基础提示词 */
+const buildNicknamePrompt = (nickname: string, enabled: boolean): string => {
+  if (!enabled) {
+    return ''
+  }
+  const normalized = nickname.replace(/[\r\n]+/g, ' ').trim()
+  if (!normalized) {
+    return ''
+  }
+  return `用户的昵称是「${normalized}」。在合适的对话情境下可以使用该昵称自然地称呼用户，但无需每轮回复都刻意提及。`
+}
+
+const LOCATION_TOOL: ClientToolDefinition = {
   name: 'get_location',
-  description: description.trim() || DEFAULT_LOCATION_TOOL_PROMPT,
+  description:
+    "Get the user's real-time physical geographic location (latitude, longitude, and resolved address when available). Call this tool only when the user's request depends on their actual current location (such as local weather, nearby places, current city, or directions).",
   input_schema: {
     type: 'object',
     properties: {
@@ -100,36 +179,114 @@ const buildLocationTool = (description: string): ClientToolDefinition => ({
       },
     },
   },
-})
+}
+
+const BALANCE_TOOL: ClientToolDefinition = {
+  name: 'get_balance',
+  description:
+    "Get the current DeepSeek API account balance for the API key in use. Call this tool only when the user asks about their remaining balance, credit, quota, whether the account can still be used, or how much they have topped up. The result contains is_available plus per-currency total, granted, and topped-up balances.",
+  input_schema: {
+    type: 'object',
+    properties: {},
+  },
+}
+
+const APP_GUIDE_TOOL: ClientToolDefinition = {
+  name: 'get_app_guide',
+  description:
+    "Look up this app's user-facing feature guide when the user asks what a feature does, how to use it, or where its setting is. Returns matching entries with a short purpose description, the in-app path, and a settings link. Always call this tool for questions about this app's features or settings instead of answering from memory.",
+  input_schema: {
+    type: 'object',
+    properties: {
+      topic: {
+        type: 'string',
+        description: "The feature or setting the user is asking about, using the user's own words.",
+      },
+    },
+    required: ['topic'],
+  },
+}
+
+/** 余额工具可用时的提示词；金额只来自工具结果，避免模型猜测。 */
+const BALANCE_TOOL_PROMPT =
+  '本轮可以调用 get_balance 查询当前 API Key 的账户余额。用户询问余额、额度、是否够用或充值情况时，先调用工具获取真实金额再回答；不要猜测具体金额，也不要在无关话题中主动提及余额。'
+
+/** 未声明余额工具时收紧回答，避免模型编造余额或给出错误的开启路径。 */
+const BALANCE_TOOL_UNAVAILABLE_PROMPT =
+  '本轮没有余额查询工具。用户询问账户余额或额度时，不要猜测金额，提示对方在快速模式下开启深度思考与智能搜索后再问。'
+
+/** 专家模式不支持客户端工具，直接说明无法查询，避免误导用户去找开关。 */
+const BALANCE_TOOL_UNSUPPORTED_PROMPT =
+  '当前模式不支持查询账户余额。用户问到时，不要猜测金额，直接说明该模式无法查询真实余额。'
+
+/** 功能文档工具可用时的提示词；只讲用途和入口，不讲实现细节。 */
+const APP_GUIDE_TOOL_PROMPT =
+  '本轮可以调用 get_app_guide 查阅应用功能文档。用户询问软件功能、某个设置在哪、怎么使用时，先调用工具，再按返回的说明回答；只讲用途和入口，不讲实现细节。返回带 settings_url 时，用 Markdown 链接给出，链接文字用「打开设置」，地址必须原样使用 settings_url，不要自己拼页面名。'
+
+/** 未声明工具时把命中的文档直接注入 system，保证默认设置下也能准确回答。 */
+const APP_GUIDE_CONTEXT_PROMPT =
+  '以下是本轮问题相关的应用功能资料（可能是功能总览或具体条目）。回答功能或设置位置问题时按资料说明，只讲用途和入口，不讲实现细节；有设置链接时用 Markdown 链接给出，不要编造资料里没有的功能。'
+
+/**
+ * 思考链语言约束：模型偶尔会用英文推理。
+ * 不硬编码中文，因为用户可能用英文提问；要求跟随用户最新消息的语言。
+ */
+const LANGUAGE_PROMPT = [
+  '思考过程和最终回答都使用与用户最新一条消息相同的语言。',
+  '用户用中文提问时，即使消息里夹着英文单词、代码、链接或专有名词，也要用中文思考和回答，不要整段切换成英文。',
+  '用户用其他语言提问时跟随该语言，不要因为系统提示或工具说明是中文就改用中文。',
+].join('\n')
+
+/** RP 模式只约束思考语言，不干扰角色设定指定的语言。 */
+const RP_LANGUAGE_PROMPT =
+  '思考过程使用与你当前角色回复相同的语言。角色设定明确指定语言时以设定为准，不要无故切换成英文。'
 
 /**
  * 组装本轮请求的 system 提示词：
- * - RP 模式仅发送 RP 模式基础系统提示词，不附带任何工具提示词；
- * - 快速/专家模式在基础系统提示词后，按本轮实际启用的工具附带对应模式的搜索与链接阅读工具提示词。
+ * - RP 模式使用角色设定里的时间；
+ * - 快速/专家模式提供本轮设备日期、时效性信息的答复规则及可用工具说明。
  */
 const buildRequestSystem = (
   basePrompt: string,
   {
     isRpMode,
+    now,
     search,
     hasLink,
-    searchToolPrompt,
-    readLinkToolPrompt,
+    balance,
+    isV4Pro,
+    guide,
   }: {
     isRpMode: boolean
+    now: Date
     search: boolean
     hasLink: boolean
-    searchToolPrompt: string
-    readLinkToolPrompt: string
+    balance: boolean
+    isV4Pro: boolean
+    guide: string
   }
 ): string => {
   if (isRpMode) {
-    return basePrompt.trim()
+    return [basePrompt.trim(), RP_LANGUAGE_PROMPT].filter(Boolean).join('\n\n')
   }
+  const date = formatDate(now)
   return [
     basePrompt.trim(),
-    search ? searchToolPrompt.trim() : '',
-    hasLink ? readLinkToolPrompt.trim() : '',
+    LANGUAGE_PROMPT,
+    search ? SEARCH_TOOL_PROMPT : '',
+    hasLink ? READ_LINK_TOOL_PROMPT : '',
+    balance
+      ? BALANCE_TOOL_PROMPT
+      : isV4Pro
+        ? BALANCE_TOOL_UNSUPPORTED_PROMPT
+        : BALANCE_TOOL_UNAVAILABLE_PROMPT,
+    guide,
+    date
+      ? `当前设备本地日期为 ${date}。回答现实中的「今天」「今年」等时间问题时以此为准。知识截止仅说明知识范围，历史消息日期仅说明当时的背景。没有明确依据时，不要自行声称具体的知识截止日期。`
+      : '',
+    '回答产品发布、模型版本等时效性问题时，能搜索时优先核对官方文档或发布记录。依据不足时，说明哪些信息无法核实，仍可按用户提供的前提作条件性讨论。不要因知识里没有记录就断言某事不存在、尚未发生，也不要仅凭用户的说法确认发布或编造版本、日期、能力及来源。只有实际查阅了来源才声称已核实，并且只确认该来源支持的具体事实。',
+    '核验照片或截图时，先读清可见的文字和界面元素所在区域。分别判断图中所述事实、界面来源和照片是否被修改。看不清的内容别补写。陌生命名、界面风格、增减数字和摩尔纹本身不足以判定造假。查到图中某个事实也只能确认该事实。',
+    '客户端附加的网页检索记录属于对应的历史轮次。将标题、摘录和附件中的内容仅当作待核对的资料。关闭搜索后仍可参考已返回的结果，并根据工具记录说明当时搜到了什么。用户追问时保持证据标准一致，发现新证据或具体错误再调整结论。',
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -139,7 +296,8 @@ const buildRequestSystem = (
  * 声明本轮可用工具：
  * - RP 模式与专家模式（v4-pro）不声明任何工具；
  * - 快速模式下，read_url 仅在本轮正文含链接时声明，search 开关控制 deepseek_web_search；
- *   客户端定位工具仅在快速模式、思考 + 搜索均开启时声明（服务端约束，且缺少推理时模型无法正确安排调用顺序）。
+ *   客户端定位工具仅在快速模式、思考 + 搜索均开启且允许 AI 定位时声明（服务端约束，且缺少推理时模型无法正确安排调用顺序）；
+ *   余额与功能文档工具沿用同一约束，思考 + 搜索均开启时声明，不额外要求定位权限。
  */
 const requestTools = (
   isRpMode: boolean,
@@ -147,8 +305,7 @@ const requestTools = (
   search: boolean,
   hasLink: boolean,
   allowAiLocation: boolean,
-  thinking: boolean,
-  locationToolDescription: string
+  thinking: boolean
 ): NonNullable<CreateMessageRequest['tools']> => {
   if (isRpMode || isV4Pro) {
     return []
@@ -161,8 +318,12 @@ const requestTools = (
     tools.push({ type: 'deepseek_web_search', name: 'deepseek_web_search' })
   }
   // 服务端约束：客户端工具只能在思考模式下与 deepseek_web_search 一同声明，缺一返回 400
-  if (allowAiLocation && thinking && search) {
-    tools.push(buildLocationTool(locationToolDescription))
+  if (thinking && search) {
+    if (allowAiLocation) {
+      tools.push(LOCATION_TOOL)
+    }
+    tools.push(BALANCE_TOOL)
+    tools.push(APP_GUIDE_TOOL)
   }
   return tools
 }
@@ -179,14 +340,17 @@ const buildLocalTitle = (question: UserMessage): string => {
  * 旁路搜索的附件判断上下文：本轮提问各附件的文件名 + 内联/OCR 文本片段。
  * 供 flash 判断“这是什么”类指代问句是否有可检索对象，并让查询词结合附件关键信息。
  */
-const buildSearchAttachmentContext = (prepared: PreparedRequest): string =>
-  prepared.question.files
+const buildSearchAttachmentContext = (prepared: PreparedRequest): string => {
+  const spectrogramIds = getAudioSpectrogramIds(prepared.question.files)
+  return prepared.question.files
+    .filter((file) => !file.audio && !spectrogramIds.has(file.id))
     .map((file) => {
       const text = prepared.texts?.get(file.id) ?? prepared.ocrTexts?.get(file.id) ?? ''
       const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 200)
       return snippet ? `${file.name}：${snippet}` : file.name
     })
     .join('\n')
+}
 
 /**
  * 搜索结果按 URL 去重：来源面板按 URL 首次出现登记角标编号，
@@ -260,6 +424,8 @@ type ChatState = {
   sessionSaveErrors: Record<string, boolean>
   /** null 表示新对话（欢迎页） */
   activeId: string | null
+  /** 欢迎页草稿的单会话记忆偏好，发送后归入该会话。 */
+  draftMemoryEnabled: boolean
   /** 正在生成回复的会话 */
   streaming: Record<string, AbortController>
   /**
@@ -267,6 +433,7 @@ type ChatState = {
    * 每帧增量只改这一份数据，整段消息数组与列表组件不再跟着重建。
    */
   draftReplies: Record<string, AssistantMessage>
+  rpCompacting: Record<string, string>
 }
 
 export const useChatStore = create<ChatState>(() => ({
@@ -278,11 +445,15 @@ export const useChatStore = create<ChatState>(() => ({
   sessionLoadErrors: {},
   sessionSaveErrors: {},
   activeId: null,
+  draftMemoryEnabled: true,
   streaming: {},
   draftReplies: {},
+  rpCompacting: {},
 }))
 
 const { getState: get, setState: set } = useChatStore
+
+export const setDraftMemoryEnabled = (enabled: boolean) => set({ draftMemoryEnabled: enabled })
 
 const sortSessions = (sessions: SessionSummary[]) =>
   [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
@@ -304,6 +475,18 @@ const sessionAccess = new Map<string, number>()
 const unsavedSessions = new Set<string>()
 /** 保存失败时保留原件，重试成功后才释放。 */
 const pendingFiles = new Map<string, db.StoredFile[]>()
+const pendingMemoryTurns = new Map<string, MemoryTurn>()
+const pendingMemoryExclusions = new Set<string>()
+/** 通话会话复制了来源会话的上下文时，记忆检索排除该来源会话以免重复召回。 */
+const liveSourceSessions = new Map<string, string>()
+
+export type LiveToolActivity =
+  | 'search'
+  | 'read_link'
+  | 'location'
+  | 'balance'
+  | 'guide'
+  | 'memory'
 
 export const loadSessionAttachment = async (sessionId: string, id: string) =>
   pendingFiles.get(sessionId)?.find((file) => file.id === id)?.blob ?? (await db.loadFile(id))
@@ -425,14 +608,22 @@ const persist = (sessionId: string) => {
     }
     const epoch = historyEpoch
     const files = pendingFiles.get(sessionId)
+    const memoryTurn = pendingMemoryTurns.get(sessionId)
+    const memoryExcluded = pendingMemoryExclusions.has(sessionId)
     void db
-      .saveSession(session, files)
+      .saveSession(session, files, memoryTurn, memoryExcluded)
       .then(() => {
         if (epoch !== historyEpoch || !getSession(sessionId)) {
           return
         }
         if (pendingFiles.get(sessionId) === files) {
           pendingFiles.delete(sessionId)
+        }
+        if (pendingMemoryTurns.get(sessionId) === memoryTurn) {
+          pendingMemoryTurns.delete(sessionId)
+        }
+        if (memoryExcluded) {
+          pendingMemoryExclusions.delete(sessionId)
         }
         if (getSession(sessionId) === session) {
           unsavedSessions.delete(sessionId)
@@ -538,7 +729,10 @@ export const initChat = (): Promise<void> => {
   set({ initError: false })
   initTask = (async () => {
     try {
-      const summaries = await db.loadSessionSummaries()
+      const [summaries] = await Promise.all([
+        db.loadSessionSummaries(),
+        __BETA__ ? initGlobalMemory() : undefined,
+      ])
       if (epoch === historyEpoch) {
         set({ ready: true, sessions: sortSessions(summaries) })
       }
@@ -655,6 +849,11 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
     sessionAccess.clear()
     unsavedSessions.clear()
     pendingFiles.clear()
+    pendingMemoryTurns.clear()
+    pendingMemoryExclusions.clear()
+    if (__BETA__) {
+      liveSourceSessions.clear()
+    }
     clearAllDrafts()
     set({
       ready: true,
@@ -664,7 +863,9 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
       sessionLoadErrors: {},
       sessionSaveErrors: {},
       activeId: null,
+      draftMemoryEnabled: true,
       draftReplies: {},
+      rpCompacting: {},
     })
     return summaries.length
   } finally {
@@ -748,6 +949,11 @@ const removeSessionData = async (id: string): Promise<boolean> => {
     sessionAccess.delete(id)
     unsavedSessions.delete(id)
     pendingFiles.delete(id)
+    pendingMemoryTurns.delete(id)
+    pendingMemoryExclusions.delete(id)
+    if (__BETA__) {
+      liveSourceSessions.delete(id)
+    }
     clearDraft(id)
     set((state) => ({
       sessions: state.sessions.filter((session) => session.id !== id),
@@ -841,21 +1047,33 @@ export const createLiveSession = (sourceId: string | null): Session | null => {
     }
   }
   const now = Date.now()
-  return {
+  const session: Session = {
     id: createId(),
     title: 'DeepSeek Live',
     mode: 'fast',
+    ...(__BETA__ ? { origin: 'live' } : {}),
     createdAt: now,
     updatedAt: now,
     messages,
   }
+  if (__BETA__ && sourceId) {
+    liveSourceSessions.set(session.id, sourceId)
+    if (liveSourceSessions.size > 32) {
+      const oldest = liveSourceSessions.keys().next().value
+      if (oldest !== undefined) {
+        liveSourceSessions.delete(oldest)
+      }
+    }
+  }
+  return session
 }
 
 /** 通话首轮建立自己的会话，挂断前由通话页接管展示与朗读。 */
 export const sendLiveMessage = async (
   initialSession: Session,
   content: string,
-  controller: AbortController
+  controller: AbortController,
+  onLiveTool?: (activity: LiveToolActivity | null) => void
 ): Promise<AssistantMessage | null> => {
   const sessionId = initialSession.id
   if (getStreamController(sessionId)) {
@@ -892,7 +1110,7 @@ export const sendLiveMessage = async (
     insertSession({ ...next, title: session.title + ' · ' + buildLocalTitle(question) }, true)
   }
   persist(sessionId)
-  return streamReply(sessionId, reply, { history, question, live: true }, controller)
+  return streamReply(sessionId, reply, { history, question, live: true, onLiveTool }, controller)
 }
 
 const prepareQuestionDraft = (
@@ -903,15 +1121,15 @@ const prepareQuestionDraft = (
   existingFiles: FileAttachment[] = []
 ) => {
   const settings = useSettings.getState()
-  const prepared = prepareDraftMessage(
-    getDraft(draftKey),
-    useUploads.getState().tasks,
-    model === 'deepseek-v4-pro',
-    canUploadVideo(mode, settings),
-    existingFiles.length > 0
-  )
+  const prepared = prepareDraftMessage(getDraft(draftKey), useUploads.getState().tasks, {
+    useOcrModel: model === 'deepseek-v4-pro',
+    videoAllowed: canUploadVideo(mode, settings),
+    audioAllowed: canAttachAudio(mode),
+    existingFiles,
+  })
   if (
     !prepared ||
+    prepared.audioPending ||
     (videoTranscript &&
       (prepared.video?.id !== videoTranscript.videoId || !canTranscribeVideo(mode, settings)))
   ) {
@@ -966,6 +1184,8 @@ export const sendMessage = (
   }
   const { text, files, video, blobs } = prepared
   const now = Date.now()
+  const memoryExcluded =
+    __BETA__ && sessionId === null && mode === 'fast' && !get().draftMemoryEnabled
   if (sessionId === null) {
     const session: Session = {
       id: createId(),
@@ -975,8 +1195,13 @@ export const sendMessage = (
       updatedAt: now,
       messages: [],
       rootMessageId: null,
+      ...(__BETA__ ? { origin: 'chat' } : {}),
     }
     sessionId = session.id
+    if (memoryExcluded) {
+      pendingMemoryExclusions.add(sessionId)
+    }
+    set({ draftMemoryEnabled: true })
     insertSession(session, true)
   }
   const current = getSession(sessionId)
@@ -1002,7 +1227,7 @@ export const sendMessage = (
   }))
   persist(sessionId)
   clearSentDraft(targetSessionId)
-  void streamReply(sessionId, reply, { history, question })
+  void streamReply(sessionId, reply, { history, question, recordMemory: !memoryExcluded })
   return true
 }
 
@@ -1089,7 +1314,11 @@ export const editMessage = (
   }))
   persist(sessionId)
   clearSentDraft(draftKey)
-  void streamReply(sessionId, reply, { history: path.slice(0, index), question })
+  void streamReply(sessionId, reply, {
+    history: path.slice(0, index),
+    question,
+    recordMemory: true,
+  })
   return true
 }
 
@@ -1134,6 +1363,7 @@ export const continueReply = (sessionId: string, messageId: string) => {
     thinking: previous.thinking ?? thinking,
     search: mode === 'rp' ? false : (previous.search ?? search),
     status: 'pending',
+    rpContext: undefined,
     stopReason: undefined,
     stopDetails: undefined,
     error: undefined,
@@ -1175,6 +1405,8 @@ type Request = {
   question: UserMessage
   prefix?: AssistantMessage
   live?: boolean
+  recordMemory?: boolean
+  onLiveTool?: (activity: LiveToolActivity | null) => void
 }
 type PreparedRequest = Request & {
   texts?: Map<string, string>
@@ -1278,7 +1510,9 @@ const prepareFiles = async (
   sessionId: string,
   request: Request,
   model: ChatModel,
-  signal: AbortSignal
+  signal: AbortSignal,
+  includeAudio: boolean,
+  useRpContext: boolean
 ): Promise<PreparedRequest> => {
   const epoch = historyEpoch
   // 服务端判定 file_id 失效时会清掉会话里的 serverId，先用最新消息替换请求快照，
@@ -1288,9 +1522,15 @@ const prepareFiles = async (
     (pendingFiles.get(sessionId) ?? []).map((file) => [file.id, file.blob])
   )
   /** 纯文本附件的正文在本地读出后直接并入提问，不再上传为 document */
-  const texts = await loadInlineTexts([...request.history, request.question], pendingBlobs)
+  let fileHistory = useRpContext ? getRpHistoryForFiles(request.history) : request.history
+  const texts = await loadInlineTexts([...fileHistory, request.question], pendingBlobs)
   const apiKey = useSettings.getState().apiKey ?? ''
   const useOcr = model === 'deepseek-v4-pro'
+  const uploadableFiles = ({ files }: UserMessage) => {
+    const ignore = includeAudio ? undefined : getAudioSpectrogramIds(files)
+    return files.filter((file) => !file.audio && !ignore?.has(file.id))
+  }
+  let questionFiles = uploadableFiles(request.question)
   const serverIds = new Map<string, string>()
   const ocrTexts = new Map<string, string>()
   // 停止生成立即生效；上传本身不取消（输入框与其他消息可能共用同一任务），完成后照常写回 serverId
@@ -1300,20 +1540,20 @@ const prepareFiles = async (
 
   if (useOcr) {
     // 收集本轮提问与历史中已缓存的 OCR 文本
-    for (const message of [...request.history, request.question]) {
+    for (const message of [...fileHistory, request.question]) {
       if (message.role !== 'user') {
         continue
       }
-      for (const file of message.files) {
+      for (const file of uploadableFiles(message)) {
         if (file.ocrText !== undefined) {
           ocrTexts.set(file.id, file.ocrText)
         }
       }
     }
-    const ocrTargets = request.question.files.filter(
+    const ocrTargets = questionFiles.filter(
       (file) => isOcrSupportedAttachment(file) && !ocrTexts.has(file.id)
     )
-    const uploadTargets = request.question.files.filter(
+    const uploadTargets = questionFiles.filter(
       (file) => !texts.has(file.id) && !isTextAttachment(file) && !isOcrSupportedAttachment(file)
     )
     const questionTasks = Promise.allSettled([
@@ -1347,8 +1587,8 @@ const prepareFiles = async (
     // 历史轮次中缺失 OCR 文本的图片/文档从新到旧逐个补齐，单条失败静默跳过不阻塞本轮
     const pendingHistoryOcr = new Map<string, FileAttachment>()
     const pendingHistoryUpload = new Map<string, FileAttachment>()
-    for (const [user] of [...getContextRounds(request.history)].reverse()) {
-      for (const file of user.files) {
+    for (const [user] of [...getContextRounds(fileHistory)].reverse()) {
+      for (const file of uploadableFiles(user)) {
         if (texts.has(file.id) || isTextAttachment(file)) {
           continue
         }
@@ -1397,8 +1637,8 @@ const prepareFiles = async (
   } else {
     // 旧图片超限时先清除 ID，交给下方已有的附件补传流程（补传前自动按长边 4096 压缩）。
     const filesToCheck = [
-      ...request.question.files,
-      ...getContextRounds(request.history).flatMap(([user]) => user.files),
+      ...questionFiles,
+      ...getContextRounds(fileHistory).flatMap(([user]) => uploadableFiles(user)),
     ]
     const checked = await Promise.race([
       checkImageFileIds(filesToCheck, signal, pendingBlobs),
@@ -1407,10 +1647,12 @@ const prepareFiles = async (
     if (checked.size > 0) {
       saveServerIds(sessionId, checked)
       request = refreshRequest(sessionId, request)
+      fileHistory = useRpContext ? getRpHistoryForFiles(request.history) : request.history
+      questionFiles = uploadableFiles(request.question)
     }
 
     const uploads = Promise.allSettled(
-      request.question.files
+      questionFiles
         .filter((file) => !texts.has(file.id) && !isTextAttachment(file))
         .map(async (file) => {
           const serverId = await ensureServerId(apiKey, file, pendingBlobs)
@@ -1431,8 +1673,8 @@ const prepareFiles = async (
     }
 
     const pending = new Map<string, FileAttachment>()
-    for (const [user] of [...getContextRounds(request.history)].reverse()) {
-      for (const file of user.files) {
+    for (const [user] of [...getContextRounds(fileHistory)].reverse()) {
+      for (const file of uploadableFiles(user)) {
         if (
           !file.serverId &&
           !serverIds.has(file.id) &&
@@ -1550,10 +1792,134 @@ const waitForRetry = (attempt: number, signal: AbortSignal) =>
     signal.addEventListener('abort', onAbort, { once: true })
   })
 
+const executeAppGuideTool = (block: ClientToolUseBlock): ClientToolResultBlock => {
+  const topic = typeof block.input.topic === 'string' ? block.input.topic.trim() : ''
+  if (!topic) {
+    return {
+      type: 'client_tool_result',
+      tool_use_id: block.id,
+      name: block.name,
+      status: 'failed',
+      is_error: true,
+      errorCode: 'missing_topic',
+      content: JSON.stringify({
+        error: 'missing_topic',
+        message: 'A feature or setting topic is required',
+      }),
+    }
+  }
+  if (isAppGuideOverviewQuery(topic)) {
+    return {
+      type: 'client_tool_result',
+      tool_use_id: block.id,
+      name: block.name,
+      status: 'done',
+      summary: '功能总览',
+      content: JSON.stringify({
+        query: topic,
+        overview: toAppGuideOverview(),
+        matches: [],
+      }),
+    }
+  }
+  const matches = searchAppGuide(topic, 4).map(toAppGuideMatch)
+  return {
+    type: 'client_tool_result',
+    tool_use_id: block.id,
+    name: block.name,
+    status: 'done',
+    summary: matches.length > 0 ? `${matches.length} 条功能说明` : '未找到相关功能说明',
+    content: JSON.stringify({ query: topic, matches }),
+  }
+}
+
+const balanceErrorCode = (error: unknown) => {
+  if (error instanceof ApiError) {
+    if (error.status === 401) {
+      return 'unauthorized'
+    }
+    if (error.status === 402) {
+      return 'insufficient_balance'
+    }
+    if (error.status === 429) {
+      return 'rate_limited'
+    }
+    if (error.kind === 'network') {
+      return 'network'
+    }
+  }
+  return 'unavailable'
+}
+
+/** 查询账户余额：只读接口，不产生费用；金额原样回传给模型与时间线。 */
+const executeBalanceTool = async (
+  block: ClientToolUseBlock,
+  signal: AbortSignal
+): Promise<ClientToolResultBlock> => {
+  const { apiKey } = useSettings.getState()
+  if (!apiKey) {
+    return {
+      type: 'client_tool_result',
+      tool_use_id: block.id,
+      name: block.name,
+      status: 'failed',
+      is_error: true,
+      errorCode: 'missing_api_key',
+      content: JSON.stringify({
+        error: 'missing_api_key',
+        message: 'API key is not configured',
+      }),
+    }
+  }
+  try {
+    const balance = await fetchAccountBalance(apiKey, signal)
+    return {
+      type: 'client_tool_result',
+      tool_use_id: block.id,
+      name: block.name,
+      status: 'done',
+      summary: formatBalanceSummary(balance),
+      content: JSON.stringify({
+        is_available: balance.available,
+        balances: balance.entries.map((entry) => ({
+          currency: entry.currency,
+          total_balance: entry.total,
+          granted_balance: entry.granted,
+          topped_up_balance: entry.toppedUp,
+        })),
+        fetched_at: new Date().toISOString(),
+      }),
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw error
+    }
+    const code = balanceErrorCode(error)
+    return {
+      type: 'client_tool_result',
+      tool_use_id: block.id,
+      name: block.name,
+      status: 'failed',
+      is_error: true,
+      errorCode: code,
+      content: JSON.stringify({
+        error: code,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    }
+  }
+}
+
 const executeClientTool = async (
   block: ClientToolUseBlock,
   signal: AbortSignal
 ): Promise<ClientToolResultBlock> => {
+  if (block.name === 'get_app_guide') {
+    return executeAppGuideTool(block)
+  }
+  if (block.name === 'get_balance') {
+    return executeBalanceTool(block, signal)
+  }
   if (block.name !== 'get_location') {
     return {
       type: 'client_tool_result',
@@ -1644,6 +2010,23 @@ const streamReply = async (
   const sessionMode = getSession(sessionId)?.mode ?? 'fast'
   const isRpMode = sessionMode === 'rp'
   const model = initial.model ?? resolveModeModel(sessionMode, settingsSnapshot.rpModel)
+  const rpTurn: RpTurn | undefined = __BETA__ && isRpMode ? { summaryAttempted: false } : undefined
+  const requestEpoch = historyEpoch
+  const turnStartedAt = new Date()
+  const includeAudio = canAttachAudio(sessionMode) && model === 'deepseek-flash' && !request.live
+  const session = getSession(sessionId)
+  const canReadMemory = __BETA__ && sessionMode === 'fast' && model === 'deepseek-flash'
+  const memoryEligible =
+    canReadMemory && !request.live && session !== undefined && isMemorySession(session)
+  let memoryProfile: MemoryProfile | undefined
+  let memorySource: MemorySource | undefined
+  let memoryToolTurn: ReturnType<typeof createMemoryToolTurn> | undefined
+  let memoryRequest: CreateMessageRequest | undefined
+  let fallbackContext: string | undefined
+  let fallbackAttempted = false
+  if (memoryEligible) {
+    noteMemoryActivity(sessionId, true)
+  }
   // v4-pro 无原生识图，且服务端不支持 server-side 工具、title 与 latest_reminder 等扩展能力
   const isV4Pro = model === 'deepseek-v4-pro'
   const useOcrForVisual = isV4Pro
@@ -1655,11 +2038,103 @@ const streamReply = async (
   const flush = () => {
     cancelAnimationFrame(frame)
     frame = 0
-    updateReply(sessionId, reply)
+    updateReply(sessionId, __BETA__ ? presentMemoryTools(reply) : reply)
+  }
+  let liveToolActive = false
+  const notifyLiveTool = (activity: LiveToolActivity | null) => {
+    if (!__BETA__ || !request.onLiveTool) {
+      return
+    }
+    liveToolActive = activity !== null
+    request.onLiveTool(activity)
+  }
+  const publishMemoryToolStep = (step: MemoryToolStepBlock) => {
+    if (step.status === 'wip') {
+      notifyLiveTool('memory')
+    }
+    const blocks = [...reply.blocks]
+    const index = blocks.findIndex(
+      (block) => block.type === 'memory_tool_step' && block.id === step.id
+    )
+    if (index < 0) {
+      blocks.push(step)
+    } else {
+      blocks[index] = step
+    }
+    reply = { ...reply, blocks }
+    flush()
+  }
+  const saveRpSummary = (replyId: string, summary: string) => {
+    const active = getSession(sessionId)
+    if (
+      controller.signal.aborted ||
+      requestEpoch !== historyEpoch ||
+      get().importingHistory ||
+      deletingSessions.has(sessionId) ||
+      getStreamController(sessionId) !== controller ||
+      active?.mode !== 'rp'
+    ) {
+      return false
+    }
+    const branch = getVisibleMessages(active)
+    const boundary = branch.findIndex(
+      (message) => message.id === replyId && message.role === 'assistant'
+    )
+    const questionIndex = branch.findIndex((message) => message.id === request.question.id)
+    if (boundary < 0 || boundary >= questionIndex) {
+      return false
+    }
+    updateSession(sessionId, (session) => ({
+      ...session,
+      messages: session.messages.map((message) =>
+        message.id === replyId && message.role === 'assistant'
+          ? { ...message, rpSummary: summary }
+          : message
+      ),
+    }))
+    persist(sessionId)
+    return true
   }
   streamFlushes.set(sessionId, flush)
 
   try {
+    if (canReadMemory) {
+      memoryProfile = await loadMemoryProfile().catch(() => undefined)
+      const memoryExcludeId = liveSourceSessions.get(sessionId) ?? sessionId
+      if (
+        memoryProfile?.enabled &&
+        !request.prefix &&
+        (await hasMemorySources(memoryProfile, memoryExcludeId).catch(() => false))
+      ) {
+        memoryToolTurn = createMemoryToolTurn(memoryExcludeId, memoryProfile.epoch)
+      }
+    }
+    if (memoryEligible) {
+      const savedConsent = request.question.memoryConsent
+      if (
+        memoryProfile?.enabled &&
+        (request.recordMemory || savedConsent?.epoch === memoryProfile.epoch)
+      ) {
+        const source = await loadSessionMemory(sessionId).catch(() => undefined)
+        if (
+          source?.enabled &&
+          (request.recordMemory || savedConsent?.sourceRevision === source.revision)
+        ) {
+          memorySource = source
+          if (request.recordMemory) {
+            const memoryConsent = { epoch: memoryProfile.epoch, sourceRevision: source.revision }
+            updateSession(sessionId, (session) => ({
+              ...session,
+              messages: session.messages.map((message) =>
+                message.role === 'user' && message.id === request.question.id
+                  ? { ...message, memoryConsent }
+                  : message
+              ),
+            }))
+          }
+        }
+      }
+    }
     let toolRound = 0
     /** 旁路搜索注入文本；附件重传重试时沿用首轮结果，不重复搜索 */
     let searchContext: string | undefined
@@ -1668,10 +2143,19 @@ const streamReply = async (
       /** 附件补齐或 OCR 前出错属于预处理失败，主对话请求还没有发出 */
       let preparing = toolRound === 0
       let receivedContent = false
+      let offeredMemory = false
+      let combination: string | undefined
       try {
         if (toolRound === 0) {
           if (!request.live) {
-            prepared = await prepareFiles(sessionId, request, model, controller.signal)
+            prepared = await prepareFiles(
+              sessionId,
+              request,
+              model,
+              controller.signal,
+              includeAudio,
+              Boolean(rpTurn)
+            )
           }
           preparing = false
           // 附件就绪后获取本轮信息；续写沿用原回答快照，重新生成的快照独立保存。
@@ -1679,10 +2163,13 @@ const streamReply = async (
             ? prepared.prefix.latestReminder
             : isV4Pro
               ? undefined
-              : createLatestReminder({
-                  locale: settingsSnapshot.locale,
-                  location: settingsSnapshot.locationEnabled ? settingsSnapshot.location : null,
-                })
+              : createLatestReminder(
+                  {
+                    locale: settingsSnapshot.locale,
+                    location: settingsSnapshot.locationEnabled ? settingsSnapshot.location : null,
+                  },
+                  turnStartedAt
+                )
           reply = { ...reply, latestReminder }
           // 只进草稿槽，收尾时随整段回复一起落盘；这里再写一次是整段会话的重复克隆。
           updateReply(sessionId, reply)
@@ -1775,35 +2262,93 @@ const streamReply = async (
             }
           }
         }
-        const { messages, hasVideoContext } = toRequestMessages(
-          prepared.history,
-          prepared.question,
-          prepared.prefix,
-          initial.thinking ?? false,
-          reply.latestReminder,
-          toolRound > 0 ? reply : undefined,
-          {
+        const currentMemory = memoryProfile?.enabled
+          ? await loadMemoryProfile().catch(() => undefined)
+          : undefined
+        const activeMemory =
+          currentMemory?.enabled && currentMemory.epoch === memoryProfile?.epoch
+            ? currentMemory
+            : undefined
+        const evidenceIsCurrent = Boolean(
+          activeMemory &&
+          (!memoryToolTurn || (await validateMemoryToolHits(memoryToolTurn).catch(() => false)))
+        )
+        const makeMessages = (includeHistory = evidenceIsCurrent) =>
+          toRequestMessages(
+            prepared.history,
+            prepared.question,
+            prepared.prefix,
+            initial.thinking ?? false,
+            reply.latestReminder,
+            toolRound > 0
+              ? memoryToolTurn && !includeHistory
+                ? hideMemoryToolResults(reply)
+                : reply
+              : undefined,
+            {
+              texts: prepared.texts,
+              ocrTexts: prepared.ocrTexts,
+              omitServerTools: isRpMode,
+              omitLatestReminder: isV4Pro,
+              useOcrForVisual,
+              includeVideo: sessionMode === 'fast' && !request.live,
+              includeAudio,
+              searchContext: searchContext ?? (includeHistory ? fallbackContext : undefined),
+            }
+          )
+        const rpPrompt =
+          rpTurn &&
+          buildRpPrompt({
+            history: prepared.history,
+            question: prepared.question,
+            prefix: prepared.prefix,
+            latestReminder: reply.latestReminder,
+            model,
+            thinking: initial.thinking ?? false,
             texts: prepared.texts,
             ocrTexts: prepared.ocrTexts,
-            omitServerTools: isRpMode,
-            omitLatestReminder: isV4Pro,
-            useOcrForVisual,
-            includeVideo: sessionMode === 'fast' && !request.live,
-            searchContext,
-          }
-        )
+          })
+        const { messages, hasVideoContext } = rpPrompt
+          ? { messages: rpPrompt.messages, hasVideoContext: false }
+          : makeMessages()
         const currentSettings = useSettings.getState()
         const { apiKey } = currentSettings
-        const modePrompts = getModePrompts(sessionMode, currentSettings, hasVideoContext)
-        const livePrompt = request.live ? currentSettings.fastLivePrompt.trim() : ''
-        const systemPrompt = [modePrompts.systemPrompt.trim(), livePrompt]
+        const modeSystemPrompt = getModeSystemPrompt(sessionMode, currentSettings)
+        const accountState = useMockAccount.getState()
+        const nicknamePrompt =
+          sessionMode === 'fast' || sessionMode === 'expert'
+            ? buildNicknamePrompt(accountState.nickname, accountState.useNicknameInReply)
+            : ''
+        const videoPrompt =
+          hasVideoContext && canUploadVideo(sessionMode, currentSettings) ? FAST_VIDEO_PROMPT : ''
+        const livePrompt = request.live
+          ? [
+              FAST_LIVE_PROMPT,
+              __BETA__ && memoryToolTurn
+                ? '需要核实过往对话细节时，按可用工具和授权使用历史记录查询。'
+                : '',
+            ]
+              .filter(Boolean)
+              .join('\n')
+          : ''
+        const systemPrompt = [modeSystemPrompt.trim(), nicknamePrompt, videoPrompt, livePrompt]
           .filter(Boolean)
           .join('\n\n')
         // 服务端约束：v4-pro 不支持 server-side 工具（web_search/read_url）与 title 生成，
-        // 请求携带任一项即整体报错，因此连同依赖 search 的定位工具一并停用，标题走本地兜底
+        // 请求携带任一项即整体报错，因此连同依赖 search 的定位/余额工具一并停用，标题走本地兜底
         const serverToolsAllowed = !isRpMode && !isV4Pro
         const hasLink = serverToolsAllowed && LINK_PATTERN.test(prepared.question.content)
         const searchEnabled = serverToolsAllowed && (initial.search ?? false)
+        const balanceEnabled = serverToolsAllowed && (initial.thinking ?? false) && searchEnabled
+        const guideEnabled = serverToolsAllowed && (initial.thinking ?? false) && searchEnabled
+        // 未声明工具时（默认快速模式、专家模式）把命中的功能文档直接注入，避免只能回答“无法查询”
+        const guideContext =
+          !guideEnabled && !isRpMode ? buildAppGuideContext(prepared.question.content) : ''
+        const guidePrompt = guideEnabled
+          ? APP_GUIDE_TOOL_PROMPT
+          : guideContext
+            ? `${APP_GUIDE_CONTEXT_PROMPT}\n\n${guideContext}`
+            : ''
         const safety = safetyCheck(isRpMode)
         const tools = requestTools(
           isRpMode,
@@ -1811,34 +2356,118 @@ const streamReply = async (
           searchEnabled,
           hasLink,
           allowAiLocation,
-          initial.thinking ?? false,
-          modePrompts.locationToolPrompt
+          initial.thinking ?? false
         )
         // RP 模式省略服务端 title（避免触发单条 32K 限制），v4-pro 不支持服务端 title，
         // 两者首轮结束后均写本地兜底标题
         const askTitle = titleRequests.has(controller) && serverToolsAllowed
-        const events = streamMessage(
-          apiKey ?? '',
-          {
-            model,
-            system: buildRequestSystem(systemPrompt, {
-              isRpMode,
-              search: searchEnabled,
-              hasLink,
-              searchToolPrompt: modePrompts.searchToolPrompt,
-              readLinkToolPrompt: modePrompts.readLinkToolPrompt,
-            }),
-            messages,
-            thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
-            ...(safety ? { safety_check: safety } : {}),
-            ...(tools.length > 0 ? { tools } : {}),
-            ...(askTitle ? { title: { enabled: true } } : {}),
-          },
-          controller.signal
-        )
+        const baseSystem = buildRequestSystem(systemPrompt, {
+          isRpMode,
+          now: turnStartedAt,
+          search: searchEnabled,
+          hasLink,
+          balance: balanceEnabled,
+          isV4Pro,
+          guide: guidePrompt,
+        })
+        let body: CreateMessageRequest = {
+          model,
+          system: prependGlobalMemory(baseSystem, activeMemory),
+          messages,
+          thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
+          ...(safety ? { safety_check: safety } : {}),
+          ...(tools.length > 0 ? { tools } : {}),
+          ...(askTitle ? { title: { enabled: true } } : {}),
+        }
+        if (rpTurn && rpPrompt) {
+          const ready = await prepareRpTurn({
+            apiKey: apiKey ?? '',
+            body,
+            prompt: rpPrompt,
+            turn: rpTurn,
+            prefillLength: prepared.prefix ? getReplyText(prepared.prefix).length : 0,
+            signal: controller.signal,
+            showCompaction: (active) =>
+              set((state) => ({
+                rpCompacting: active
+                  ? { ...state.rpCompacting, [sessionId]: reply.id }
+                  : Object.fromEntries(
+                      Object.entries(state.rpCompacting).filter(([id]) => id !== sessionId)
+                    ),
+              })),
+            saveSummary: saveRpSummary,
+          })
+          body = ready.body
+          reply = { ...reply, rpContext: ready.sample }
+          flush()
+        }
+        if (
+          memoryToolTurn &&
+          evidenceIsCurrent &&
+          toolRound < MAX_TOOL_ROUNDS &&
+          (memoryToolTurn.searches < 2 || memoryToolTurn.reads < 2)
+        ) {
+          combination = memoryToolCombination(body)
+          if (requiresMemoryToolFallback(combination)) {
+            if (!fallbackAttempted && toolRound === 0 && apiKey) {
+              fallbackAttempted = true
+              const recalled = await recallWithFallback(
+                memoryToolTurn,
+                prepared.question.content,
+                prepared.history
+                  .slice(-2)
+                  .map((message) =>
+                    message.role === 'user' ? message.content : getReplyText(message)
+                  )
+                  .join('\n'),
+                apiKey,
+                controller.signal,
+                publishMemoryToolStep
+              ).catch((error: unknown) => {
+                if (controller.signal.aborted) {
+                  throw error
+                }
+                return undefined
+              })
+              if (recalled && (await validateMemoryToolHits(memoryToolTurn).catch(() => false))) {
+                fallbackContext = recalled.context
+                body.messages = makeMessages().messages
+              }
+              const latest = await loadMemoryProfile().catch(() => undefined)
+              if (!latest?.enabled || latest.epoch !== activeMemory?.epoch) {
+                body.system = baseSystem
+                body.messages = makeMessages(false).messages
+              }
+            }
+          } else if (!fallbackAttempted) {
+            offeredMemory = true
+            body.tools = [...tools, ...memoryTools]
+          }
+        }
+        memoryRequest =
+          memoryEligible && activeMemory && toolRound === 0 && !fallbackContext ? body : undefined
+        const events = streamMessage(apiKey ?? '', body, controller.signal)
         const blockIndexes = new Map<number, number>()
         for await (const event of events) {
           receivedContent ||= event.type === 'content_block_start'
+          if (__BETA__ && event.type === 'content_block_start' && request.onLiveTool) {
+            const { content_block: block } = event
+            if (block.type === 'server_tool_use') {
+              notifyLiveTool(block.input.action === 'read_link' ? 'read_link' : 'search')
+            } else if (block.type === 'tool_use') {
+              if (__BETA__ && isMemoryTool(block.name)) {
+                notifyLiveTool('memory')
+              } else if (block.name === 'get_location') {
+                notifyLiveTool('location')
+              } else if (block.name === 'get_balance') {
+                notifyLiveTool('balance')
+              } else if (block.name === 'get_app_guide') {
+                notifyLiveTool('guide')
+              }
+            } else if (block.type === 'text' && liveToolActive) {
+              notifyLiveTool(null)
+            }
+          }
           if (
             event.type === 'message_delta' &&
             (event.delta.stop_reason === 'end_turn' || event.delta.stop_reason === 'max_tokens') &&
@@ -1852,6 +2481,18 @@ const streamReply = async (
             titleRequests.delete(controller)
           }
           reply = applyEvent(reply, event, Date.now(), blockIndexes)
+          if (rpTurn && reply.rpContext) {
+            const usage =
+              event.type === 'message_start'
+                ? event.message.usage
+                : event.type === 'message_delta'
+                  ? event.usage
+                  : undefined
+            const input = usage && actualRpInput(usage)
+            if (input !== undefined) {
+              reply = { ...reply, rpContext: { ...reply.rpContext, inputTokens: input } }
+            }
+          }
           if (document.visibilityState === 'hidden') {
             flush()
           } else {
@@ -1863,10 +2504,17 @@ const streamReply = async (
           reply = settleReply(reply, 'stopped', Date.now())
           break
         }
-        const pendingToolUses = getPendingClientToolUses(reply)
+        const pendingToolUses = rpTurn ? [] : getPendingClientToolUses(reply)
         if (pendingToolUses.length > 0 && toolRound < MAX_TOOL_ROUNDS) {
           for (const toolUse of pendingToolUses) {
-            const resultBlock = await executeClientTool(toolUse, controller.signal)
+            const resultBlock =
+              __BETA__ && isMemoryTool(toolUse.name)
+                ? await executeMemoryTool(
+                    toolUse,
+                    offeredMemory ? memoryToolTurn : undefined,
+                    controller.signal
+                  )
+                : await executeClientTool(toolUse, controller.signal)
             reply = { ...reply, blocks: [...reply.blocks, resultBlock] }
             flush()
           }
@@ -1896,6 +2544,29 @@ const streamReply = async (
           reply = settleReply(reply, 'stopped', Date.now())
           break
         }
+        const overflow = rpTurn && !preparing && getRpContextOverflow(error)
+        if (rpTurn && overflow) {
+          if (!receivedContent && !rpTurn.overflow) {
+            rpTurn.overflow = overflow
+            continue
+          }
+          reply = settleReply(reply, 'error', Date.now(), {
+            kind: 'protocol',
+            message: '',
+            localMessage: { key: 'rpContextTooLong' },
+          })
+          break
+        }
+        if (
+          toolRound === 0 &&
+          !receivedContent &&
+          offeredMemory &&
+          combination &&
+          requiresMemoryToolFallback(combination, error)
+        ) {
+          attempt -= 1
+          continue
+        }
         if (preparing) {
           const statusClass = error instanceof ApiError ? classifyStatus(error.status) : 'other'
           if (
@@ -1924,6 +2595,7 @@ const streamReply = async (
         if (
           toolRound === 0 &&
           attempt < FILE_RETRY_LIMIT &&
+          !rpTurn?.overflow &&
           !receivedContent &&
           reuploadInvalidatedFiles(sessionId, request, error)
         ) {
@@ -1961,12 +2633,36 @@ const streamReply = async (
     streamFlushes.delete(sessionId)
     cancelAnimationFrame(frame)
     // 收尾时把草稿一次性并入会话：整段落盘只有这一次。
-    commitReply(sessionId, reply)
+    const visibleReply = __BETA__ ? presentMemoryTools(reply) : reply
+    commitReply(sessionId, visibleReply)
     set((state) => ({
       streaming: Object.fromEntries(
         Object.entries(state.streaming).filter(([id]) => id !== sessionId)
       ),
     }))
+    if (memoryEligible) {
+      if (
+        memoryProfile?.enabled &&
+        memorySource?.enabled &&
+        prepared.question.content.trim() &&
+        reply.stopReason === 'end_turn' &&
+        isMemoryReply(reply) &&
+        !get().importingHistory &&
+        !deletingSessions.has(sessionId)
+      ) {
+        const turn = {
+          questionId: prepared.question.id,
+          replyId: reply.id,
+          epoch: memoryProfile.epoch,
+          sourceRevision: memorySource.revision,
+        }
+        pendingMemoryTurns.set(sessionId, turn)
+        if (memoryRequest && (memorySource.active || request.history.length === 0)) {
+          captureMemoryRequest(sessionId, turn, memoryProfile, memoryRequest, reply)
+        }
+      }
+      noteMemoryActivity(sessionId, false)
+    }
     persist(sessionId)
   }
   return reply

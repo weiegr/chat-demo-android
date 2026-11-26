@@ -2,7 +2,11 @@ declare const styles: {
   readonly container: string
   readonly welcome: string
   readonly inputSlot: string
+  readonly inputParallax: string
+  readonly modeSwitchParallax: string
   readonly hero: string
+  readonly heroInner: string
+  readonly heroEntering: string
   readonly heroAnimating: string
   readonly greeting: string
   readonly greetingText: string

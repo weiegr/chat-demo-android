@@ -3,7 +3,8 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from
 import { getImeMotionState, hasNativeImeMotion, subscribeImeMotion } from '../../app/imeMotion.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
-import { useChatStore } from '../../services/chat/store.js'
+import { useActiveChatBackgroundUrl } from '../../services/chatBackground.js'
+import { useChatStore, type LiveToolActivity } from '../../services/chat/store.js'
 import { getAudioLevel } from '../../services/speech/voiceActivity.js'
 import { IconButton } from '../base/IconButton.js'
 import {
@@ -20,6 +21,7 @@ import { MessageList } from '../messages/MessageList.js'
 import { closeSearchPanel, useSearchPanel } from '../search/searchPanelState.js'
 import sessionStyles from '../session/SessionView.module.css'
 import { useLiveCall, type LiveCall } from './useLiveCall.js'
+import { createBetaLiveImeController } from './liveImeLayout.js'
 import styles from './LiveCallView.module.css'
 
 const MIC_LABELS = {
@@ -35,20 +37,36 @@ const PHASE_LABELS = {
   speaking: 'liveSpeaking',
 } as const satisfies Record<string, TranslationKey>
 
+const TOOL_LABELS = {
+  memory: 'liveToolMemory',
+  search: 'liveToolSearch',
+  read_link: 'liveToolReadLink',
+  location: 'liveToolLocation',
+  balance: 'liveToolBalance',
+  guide: 'liveToolGuide',
+} as const satisfies Record<LiveToolActivity, TranslationKey>
+
 const LIVE_TITLE = 'DeepSeek Live'
 
 export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () => void }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
+  const activeChatBgUrl = useActiveChatBackgroundUrl()
   const [text, setText] = useState('')
   const [transcriptOpen, setTranscriptOpen] = useState(false)
   const panelId = useId()
   const rootRef = useRef<HTMLElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
+  const orbGroupRef = useRef<HTMLDivElement>(null)
+  const visualizerRef = useRef<HTMLButtonElement>(null)
   const formRef = useRef<HTMLFormElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const orbRef = useRef<HTMLSpanElement>(null)
-  const { mic, analyser, hearing, phase, toggleMic, submit, interrupt, close } = useLiveCall(call)
+  const transcriptOpenRef = useRef(transcriptOpen)
+  transcriptOpenRef.current = transcriptOpen
+  const betaImeRef = useRef<ReturnType<typeof createBetaLiveImeController> | null>(null)
+  const { mic, analyser, hearing, phase, toolActivity, toggleMic, submit, interrupt, close } =
+    useLiveCall(call)
   const session = useChatStore((state) => state.sessionCache[call.session.id]) ?? call.session
   const streaming = useChatStore((state) => Object.hasOwn(state.streaming, call.session.id))
   const getOutputAnalyser = useCallback(() => call.output?.analyser ?? null, [call])
@@ -68,6 +86,54 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
     const stage = stageRef.current
     if (!isMobile || !hasNativeImeMotion() || !form || !stage) {
       return
+    }
+    if (__BETA__) {
+      const orbGroup = orbGroupRef.current
+      const visualizer = visualizerRef.current
+      if (!orbGroup || !visualizer) {
+        return
+      }
+      const notebook = orbGroup.querySelector<HTMLButtonElement>(`.${styles.notebook}`)
+      const controller = createBetaLiveImeController(
+        { form, stage, orbGroup, visualizer, notebook },
+        () => transcriptOpenRef.current
+      )
+      betaImeRef.current = controller
+      const initial = getImeMotionState()
+      controller.apply(initial.shift, initial.animating, 'none', !initial.animating)
+      const unsubscribe = subscribeImeMotion((phase, ime) => {
+        if (phase === 'prepare') {
+          controller.prepare()
+          return
+        }
+        controller.apply(
+          ime.shift,
+          ime.animating,
+          phase === 'end' && ime.smoothSettle ? 'settle' : 'none',
+          phase === 'end'
+        )
+      })
+      const onResize = () => {
+        controller.syncMetrics('none')
+      }
+      const resizeObserver =
+        typeof ResizeObserver === 'function' ? new ResizeObserver(onResize) : null
+      if (resizeObserver) {
+        resizeObserver.observe(stage)
+      } else {
+        window.addEventListener('resize', onResize)
+      }
+      return () => {
+        resizeObserver?.disconnect()
+        if (!resizeObserver) {
+          window.removeEventListener('resize', onResize)
+        }
+        unsubscribe()
+        controller.dispose()
+        if (betaImeRef.current === controller) {
+          betaImeRef.current = null
+        }
+      }
     }
     const SMOOTH_SETTLE_TRANSITION = 'transform 180ms cubic-bezier(0.22, 1, 0.36, 1)'
     const reducedMotion = () =>
@@ -146,6 +212,12 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
     }
   }, [isMobile])
 
+  useLayoutEffect(() => {
+    if (__BETA__) {
+      betaImeRef.current?.syncMetrics('layout')
+    }
+  }, [transcriptOpen])
+
   useEffect(() => {
     const onEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) {
@@ -204,17 +276,37 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
   const playing = phase === 'speaking'
   const micEnabled = mic === 'on' || mic === 'opening'
   const micLabel = t(micEnabled ? 'liveMute' : 'liveUnmute')
-  const status = phase !== 'idle' ? PHASE_LABELS[phase] : hearing ? 'liveHearing' : MIC_LABELS[mic]
+  const status =
+    __BETA__ && (phase === 'answering' || phase === 'speaking') && toolActivity
+      ? TOOL_LABELS[toolActivity]
+      : phase !== 'idle'
+        ? PHASE_LABELS[phase]
+        : hearing
+          ? 'liveHearing'
+          : MIC_LABELS[mic]
 
   return (
     <section
       ref={rootRef}
       className={clsx(styles.call, transcriptOpen && styles.historyOpen)}
+      data-chat-bg={activeChatBgUrl ? 'true' : undefined}
+      {...(__BETA__ ? { 'data-beta-live-ime': '' } : {})}
       role="dialog"
       aria-modal="true"
       aria-label={LIVE_TITLE}
       tabIndex={-1}
     >
+      {activeChatBgUrl ? (
+        <div className={styles.chatBackgroundLayer} aria-hidden="true">
+          <img
+            src={activeChatBgUrl}
+            alt=""
+            draggable={false}
+            className={styles.chatBackgroundImage}
+          />
+          <div className={styles.chatBackgroundScrim} />
+        </div>
+      ) : null}
       <header className={styles.header}>
         <IconButton
           size="xl"
@@ -238,8 +330,9 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
       </header>
 
       <div ref={stageRef} className={styles.stage}>
-        <div className={styles.orbGroup}>
+        <div ref={orbGroupRef} className={styles.orbGroup}>
           <button
+            ref={visualizerRef}
             type="button"
             className={clsx(
               styles.visualizer,

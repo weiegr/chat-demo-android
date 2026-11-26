@@ -11,6 +11,8 @@ import {
   validateFiles,
   type UploadTask,
 } from '../attachments.js'
+import type { PreparedAudio } from '../audio/analyze.js'
+import { getAudioMimeType } from '../audio/format.js'
 import { canUploadVideo, type ChatMode } from '../settings.js'
 import { releaseVideoAudioSelection } from '../video/audio.js'
 import { canInlineTextAttachment } from './inlineFiles.js'
@@ -22,6 +24,7 @@ export type DraftAttachment = {
   file: File
   isImage: boolean
   previewUrl: string | null
+  audio?: { spectrogramId: string; result?: PreparedAudio }
 }
 
 export type DraftVideo = VideoAttachment & { file: File; audioSelectionId?: string }
@@ -82,17 +85,30 @@ const appendDraftFiles = (
   sessionId: string | null,
   files: File[],
   apiKey: string,
-  useOcrModel = false,
-  video?: Omit<DraftVideo, 'frameIds'>
+  {
+    useOcrModel = false,
+    audioAllowed = false,
+    video,
+  }: { useOcrModel?: boolean; audioAllowed?: boolean; video?: Omit<DraftVideo, 'frameIds'> } = {}
 ): { error: TranslationMessage | null; ids: string[] } => {
   if (files.length === 0) {
     return { error: null, ids: [] }
   }
-  const error = validateFiles(files, getDraft(sessionId).attachments.length)
+  const error = validateFiles(files, getDraft(sessionId).attachments.length, audioAllowed)
   if (error) {
     return { error, ids: [] }
   }
   const added = files.map((file): DraftAttachment => {
+    const audioType = audioAllowed ? getAudioMimeType(file) : undefined
+    if (audioType) {
+      return {
+        id: createId(),
+        file: file.type === audioType ? file : new File([file], file.name, { type: audioType }),
+        isImage: false,
+        previewUrl: null,
+        audio: { spectrogramId: createId() },
+      }
+    }
     const image = isImage(resolveMimeType(file))
     return {
       id: createId(),
@@ -110,6 +126,7 @@ const appendDraftFiles = (
   // 纯文本附件与 Pro 模型下的 OCR 附件发送时本地读取/识别，无需提前占用 Files API 配额。
   added.forEach((attachment) => {
     if (
+      !attachment.audio &&
       !shouldSkipDraftUpload(
         { name: attachment.file.name, size: attachment.file.size, isImage: attachment.isImage },
         useOcrModel
@@ -126,8 +143,9 @@ export const addDraftFilesWithIds = (
   sessionId: string | null,
   files: File[],
   apiKey: string,
-  useOcrModel = false
-) => appendDraftFiles(sessionId, files, apiKey, useOcrModel)
+  useOcrModel = false,
+  audioAllowed = false
+) => appendDraftFiles(sessionId, files, apiKey, { useOcrModel, audioAllowed })
 
 export const addDraftVideoFrames = (
   sessionId: string | null,
@@ -143,13 +161,15 @@ export const addDraftVideoFrames = (
   if (getDraft(sessionId).video) {
     return { key: 'videoLimitOne' }
   }
-  return appendDraftFiles(sessionId, frames, apiKey, false, {
-    id: createId(),
-    name: source.name,
-    size: source.size,
-    mimeType: source.type,
-    file: source,
-    audioSelectionId,
+  return appendDraftFiles(sessionId, frames, apiKey, {
+    video: {
+      id: createId(),
+      name: source.name,
+      size: source.size,
+      mimeType: source.type,
+      file: source,
+      audioSelectionId,
+    },
   }).error
 }
 
@@ -158,8 +178,22 @@ export const addDraftFiles = (
   sessionId: string | null,
   files: File[],
   apiKey: string,
-  useOcrModel = false
-): TranslationMessage | null => addDraftFilesWithIds(sessionId, files, apiKey, useOcrModel).error
+  useOcrModel = false,
+  audioAllowed = false
+): TranslationMessage | null =>
+  addDraftFilesWithIds(sessionId, files, apiKey, useOcrModel, audioAllowed).error
+
+export const saveDraftAudio = (
+  sessionId: string | null,
+  results: ReadonlyMap<string, PreparedAudio>
+) =>
+  updateDraft(sessionId, (draft) => ({
+    ...draft,
+    attachments: draft.attachments.map((item) => {
+      const result = results.get(item.id)
+      return item.audio && result ? { ...item, audio: { ...item.audio, result } } : item
+    }),
+  }))
 
 /** 从 Pro 切回 Flash 模式时，为草稿中此前跳过预上传的图片/文档补发上传 */
 export const ensureDraftUploads = (
@@ -174,6 +208,7 @@ export const ensureDraftUploads = (
   const draft = getDraft(sessionId)
   for (const attachment of draft.attachments) {
     if (
+      !attachment.audio &&
       !draft.video?.frameIds.includes(attachment.id) &&
       !tasks[attachment.id] &&
       !shouldSkipDraftUpload(
@@ -194,7 +229,11 @@ export const retryDraftAttachment = (
 ) => {
   const draft = getDraft(sessionId)
   const attachment = draft.attachments.find((item) => item.id === attachmentId)
-  if (attachment && (videoAllowed || !draft.video?.frameIds.includes(attachment.id))) {
+  if (
+    attachment &&
+    !attachment.audio &&
+    (videoAllowed || !draft.video?.frameIds.includes(attachment.id))
+  ) {
     upload(attachment, apiKey)
   }
 }
@@ -203,23 +242,61 @@ export const retryDraftAttachment = (
 export const prepareDraftMessage = (
   draft: Draft,
   tasks: Record<string, UploadTask>,
-  useOcrModel: boolean,
-  videoAllowed: boolean,
-  hasExistingFiles = false
+  {
+    useOcrModel,
+    videoAllowed,
+    audioAllowed,
+    existingFiles = [],
+  }: {
+    useOcrModel: boolean
+    videoAllowed: boolean
+    audioAllowed: boolean
+    existingFiles?: FileAttachment[]
+  }
 ) => {
   const text = draft.text.trim()
   if (
-    (!text && !hasExistingFiles && draft.attachments.length === 0) ||
-    (draft.video && !videoAllowed)
+    (!text && existingFiles.length === 0 && draft.attachments.length === 0) ||
+    (draft.video && !videoAllowed) ||
+    (!audioAllowed &&
+      (draft.attachments.some((file) => file.audio) || existingFiles.some((file) => file.audio)))
   ) {
     return null
   }
   const files: (FileAttachment & { blob: Blob })[] = []
+  let audioPending = false
   for (const attachment of draft.attachments) {
     const meta = {
       name: attachment.file.name,
       size: attachment.file.size,
       isImage: attachment.isImage,
+    }
+    if (attachment.audio) {
+      const { spectrogramId, result } = attachment.audio
+      if (!result) {
+        audioPending = true
+        continue
+      }
+      files.push(
+        {
+          ...meta,
+          id: attachment.id,
+          serverId: null,
+          mimeType: attachment.file.type,
+          blob: attachment.file,
+          audio: { spectrogramId, analysis: result.analysis },
+        },
+        {
+          id: spectrogramId,
+          serverId: null,
+          name: 'spectrogram.png',
+          size: result.spectrogram.size,
+          isImage: true,
+          mimeType: 'image/png',
+          blob: result.spectrogram,
+        }
+      )
+      continue
     }
     const inlineText = canInlineTextAttachment(meta)
     const skipUpload = inlineText || (useOcrModel && isOcrSupportedAttachment(meta))
@@ -240,11 +317,11 @@ export const prepareDraftMessage = (
       blob: attachment.file,
     })
   }
-  return { text, files, video: draft.video }
+  return { text, files, video: draft.video, audioPending }
 }
 
 const releaseAttachment = (attachment: DraftAttachment, cancel: boolean) => {
-  if (cancel) {
+  if (cancel && !attachment.audio) {
     cancelUpload(attachment.id)
   }
   if (attachment.previewUrl) {

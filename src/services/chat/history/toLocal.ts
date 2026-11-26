@@ -18,8 +18,8 @@ import { sessionFilesDir } from './paths.js'
 
 export type LocalSession = {
   session: Session
-  /** 原件的 ZIP 条目名。图片 MIME 由读取端探测，视频沿用归档类型。 */
-  originals: Map<string, { id: string; videoType?: string }>
+  /** 原件的 ZIP 条目名。图片 MIME 由读取端探测，音视频沿用归档类型。 */
+  originals: Map<string, { id: string; mediaType?: string }>
 }
 
 const time = (value: string) => Date.parse(value)
@@ -40,8 +40,14 @@ const toFile = (file: FileEntry): FileAttachment => ({
   size: file.file_size,
   isImage: file.is_image,
   // 图片身份来自归档；原件随后从 ZIP 读取后补充具体 MIME。
-  mimeType: '',
+  mimeType: file.api_demo_audio?.mimeType ?? '',
   ...(file.ocr_text !== undefined ? { ocrText: file.ocr_text } : {}),
+  ...(file.api_demo_audio && {
+    audio: {
+      spectrogramId: file.api_demo_audio.spectrogramId,
+      analysis: file.api_demo_audio.analysis,
+    },
+  }),
 })
 
 const toUser = (message: ChatMessage): UserMessage => {
@@ -58,6 +64,22 @@ const toUser = (message: ChatMessage): UserMessage => {
       video.frameIds.some((id) => !files.some((file) => file.id === id && file.isImage)))
   ) {
     fail('backupInvalidFiles')
+  }
+  const spectrogramIds = new Set(video?.frameIds)
+  for (const file of files) {
+    if (!file.audio) {
+      continue
+    }
+    const { spectrogramId } = file.audio
+    if (
+      !file.id ||
+      file.isImage ||
+      spectrogramIds.has(spectrogramId) ||
+      !files.some((image) => image.id === spectrogramId && image.isImage && !image.audio)
+    ) {
+      fail('backupInvalidFiles')
+    }
+    spectrogramIds.add(spectrogramId)
   }
   return {
     id: String(message.id),
@@ -261,6 +283,7 @@ const toAssistant = (message: ChatMessage): AssistantMessage => {
     search: message.search_enabled,
     prefix: false,
     status: replyStatus[message.status],
+    ...(__BETA__ && message.api_demo_rp_summary && { rpSummary: message.api_demo_rp_summary }),
     // 拒绝回复丢弃模型正文和思考，保留模板提示与工具步骤。
     ...(refused ? { stopReason: 'refusal' as const } : {}),
     blocks: refused
@@ -312,6 +335,10 @@ const buildTree = (file: SessionFile): Pick<Session, 'messages' | 'rootMessageId
 
 /** 转换单个会话，并列出本会话目录下需要从 ZIP 读取的原件。 */
 export const toLocalSession = (file: SessionFile): LocalSession => {
+  const tree = buildTree(file)
+  const memory = __BETA__ ? file.api_demo_memory : undefined
+  const processed =
+    memory?.processed_user_message_ids && new Set(memory.processed_user_message_ids.map(String))
   const session: Session = {
     id: file.id,
     // 空标题按「新对话」显示，导出时还原为 null。
@@ -319,10 +346,22 @@ export const toLocalSession = (file: SessionFile): LocalSession => {
     createdAt: time(file.inserted_at),
     updatedAt: time(file.updated_at),
     ...(file.mode ? { mode: file.mode } : {}),
-    ...buildTree(file),
+    ...(file.origin ? { origin: file.origin } : {}),
+    ...tree,
+    ...(memory && {
+      memoryRestore: {
+        enabled: memory.enabled,
+        active: memory.active,
+        processed:
+          processed &&
+          tree.messages.flatMap((message) =>
+            message.role === 'user' && processed.has(message.id) ? [message.id] : []
+          ),
+      },
+    }),
   }
   const originals: LocalSession['originals'] = new Map()
-  const addOriginal = (exportPath: string | null, id: string, videoType?: string) => {
+  const addOriginal = (exportPath: string | null, id: string, mediaType?: string) => {
     if (exportPath === null) {
       return
     }
@@ -330,11 +369,11 @@ export const toLocalSession = (file: SessionFile): LocalSession => {
     const existing = originals.get(path)
     if (
       !path.startsWith(sessionFilesDir(file.id)) ||
-      (existing && (existing.id !== id || existing.videoType !== videoType))
+      (existing && (existing.id !== id || existing.mediaType !== mediaType))
     ) {
       fail('backupInvalidFiles')
     }
-    originals.set(path, { id, videoType })
+    originals.set(path, { id, mediaType })
   }
   for (const message of file.messages) {
     const video = message.video
@@ -350,8 +389,8 @@ export const toLocalSession = (file: SessionFile): LocalSession => {
         continue
       }
       for (const entry of item.files) {
-        if (entry.is_image) {
-          addOriginal(entry.export_path, entry.id)
+        if (entry.is_image || entry.api_demo_audio) {
+          addOriginal(entry.export_path, entry.id, entry.api_demo_audio?.mimeType)
         }
       }
     }

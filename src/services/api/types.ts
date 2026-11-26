@@ -208,6 +208,8 @@ export type CreateMessageRequest = {
   thinking: { type: 'enabled' | 'disabled' }
   /** 空数组等同于未提供工具；RP 模式直接省略该字段 */
   tools?: (DeepseekWebSearchTool | DeepseekReadUrlTool | ClientToolDefinition)[]
+  tool_choice?: { type: 'none' }
+  max_tokens?: number
   /** RP 模式省略该字段，只保留接口默认检查，避免单条 32K 限制 */
   safety_check?: { level: 'low' | 'high' }
   title?: { enabled: boolean }

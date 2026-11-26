@@ -98,12 +98,16 @@ let resources = path.join(root, 'android', 'res')
 if (beta) {
   const betaResources = path.join(workDir, 'res')
   await cp(resources, betaResources, { recursive: true })
+  const betaOverrideDir = path.join(root, 'android', 'res-beta')
+  if (existsSync(betaOverrideDir)) {
+    await cp(betaOverrideDir, betaResources, { recursive: true, force: true })
+  }
   resources = betaResources
   const stringsPath = path.join(resources, 'values', 'strings.xml')
   const strings = await readFile(stringsPath, 'utf8')
   await writeFile(
     stringsPath,
-    strings.replace(/(<string name="app_name">)[^<]*(<\/string>)/, '$1API demo β$2')
+    strings.replace(/(<string name="app_name">)[^<]*(<\/string>)/, '$1Abyss β$2')
   )
 }
 const compiledResZip = path.join(workDir, 'compiled-res.zip')
@@ -204,7 +208,7 @@ if (!existsSync(keystorePath)) {
   ])
 }
 
-const finalApk = path.join(outDir, beta ? 'chat-demo-beta.apk' : 'chat-demo.apk')
+const finalApk = path.join(outDir, beta ? 'abyss-beta.apk' : 'chat-demo.apk')
 run(apksigner, [
   'sign',
   '--ks',

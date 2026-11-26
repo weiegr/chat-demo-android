@@ -1,4 +1,6 @@
 .call {
+  position: relative;
+  isolation: isolate;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
@@ -13,9 +15,46 @@
   color: var(--dsw-alias-label-primary);
   background-color: var(--dsw-alias-bg-base);
   outline: none;
+
+  & > form {
+    position: relative;
+    z-index: 2;
+  }
+}
+
+.chatBackgroundLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  contain: strict;
+  transform: translate3d(0, 0, 0);
+  pointer-events: none;
+}
+
+.chatBackgroundImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  user-select: none;
+}
+
+.chatBackgroundScrim {
+  position: absolute;
+  inset: 0;
+  /* 与主对话页保持一致的轻柔压噪层，进入与挂断通话时背景亮度零跳变 */
+  background-color: rgba(255, 255, 255, 0.16);
+
+  [data-ds-dark-theme] & {
+    background-color: rgba(0, 0, 0, 0.28);
+  }
 }
 
 .header {
+  position: relative;
+  z-index: 2;
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) 44px;
   align-items: center;
@@ -93,6 +132,7 @@
   --ocean-accent: #397bad;
   --ocean-track: rgb(57 123 173 / 23%);
   position: relative;
+  z-index: 1;
   min-height: 0;
   overflow: hidden;
   container-type: size;
@@ -145,6 +185,7 @@
   top: var(--orb-center);
   left: 50%;
   width: var(--orb-size);
+  height: var(--orb-size);
   aspect-ratio: 1;
   transform: translate(-50%, -50%);
   transition:
@@ -292,6 +333,39 @@
   max-height: min(336px, 48dvh);
 }
 
+.call[data-beta-live-ime] {
+  & .header {
+    position: relative;
+    z-index: 2;
+    background-color: var(--dsw-alias-bg-base);
+  }
+
+  @supports (width: min(1px, 2px)) {
+    &.historyOpen .stage {
+      --orb-center: max(calc(var(--orb-size) / 2 + 8px), min(78px, 23%));
+    }
+  }
+
+  @supports (height: 1cqh) {
+    & .stage {
+      --orb-size: min(220px, 64vw, max(40px, calc(100cqh - 72px)), 52cqh);
+    }
+
+    &.historyOpen .stage {
+      --orb-size: min(118px, 34vw, 31cqh);
+      --orb-center: max(calc(var(--orb-size) / 2 + 8px), min(78px, 23%));
+    }
+  }
+
+  &.historyOpen .history {
+    top: var(
+      --live-history-top,
+      calc(var(--orb-center) + var(--orb-size) / 2 + var(--notebook-gap) + var(--notebook-size))
+    );
+    bottom: var(--live-ime-inset, 0px);
+  }
+}
+
 @media (max-height: 450px) {
   .header {
     padding-block: calc(2px + var(--safe-top)) 2px;
@@ -313,4 +387,73 @@
   .history {
     transition: none;
   }
+}
+
+/* 自定义背景时的通话界面适配（默认背景不生效） */
+.call[data-chat-bg='true'] {
+  background-color: transparent;
+}
+
+.call[data-chat-bg='true'][data-beta-live-ime] .header {
+  background-color: transparent;
+}
+
+.call[data-chat-bg='true'] .heading span {
+  color: rgba(15, 17, 21, 0.84);
+  font-weight: 500;
+}
+
+[data-ds-dark-theme] .call[data-chat-bg='true'] .heading span {
+  color: rgba(249, 250, 251, 0.88);
+}
+
+.call[data-chat-bg='true'] .muted {
+  color: rgba(15, 17, 21, 0.78);
+}
+
+[data-ds-dark-theme] .call[data-chat-bg='true'] .muted {
+  color: rgba(249, 250, 251, 0.84);
+}
+
+.call[data-chat-bg='true'] .header .hangUp {
+  box-shadow: 0 2px 10px rgba(219, 60, 71, 0.3);
+}
+
+.call[data-chat-bg='true'] .stage {
+  --ocean-accent: #29699b;
+  --ocean-track: rgba(255, 255, 255, 0.44);
+}
+
+[data-ds-dark-theme] .call[data-chat-bg='true'] .stage {
+  --ocean-accent: #7cc4f0;
+  --ocean-track: rgba(255, 255, 255, 0.24);
+}
+
+.call[data-chat-bg='true'] .orb {
+  box-shadow:
+    0 8px 28px rgba(57, 123, 173, 0.28),
+    inset 0 1px 2px rgba(255, 255, 255, 0.45);
+}
+
+[data-ds-dark-theme] .call[data-chat-bg='true'] .orb {
+  box-shadow:
+    0 10px 30px rgba(0, 0, 0, 0.38),
+    inset 0 1px 2px rgba(255, 255, 255, 0.32);
+}
+
+.call[data-chat-bg='true'] .stage .notebook {
+  color: var(--dsw-alias-label-primary);
+}
+
+.call[data-chat-bg='true'] .stage .notebook.selected {
+  color: var(--dsw-alias-brand-text);
+}
+
+.call[data-chat-bg='true'] .empty {
+  color: rgba(15, 17, 21, 0.8);
+  font-weight: 500;
+}
+
+[data-ds-dark-theme] .call[data-chat-bg='true'] .empty {
+  color: rgba(249, 250, 251, 0.84);
 }

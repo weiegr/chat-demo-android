@@ -25,6 +25,14 @@
   background-color: var(--dsw-alias-label-dimmed);
   animation: fading 0.9s linear infinite;
 
+  [data-chat-bg='true'] & {
+    background-color: rgba(15, 23, 42, 0.58);
+  }
+
+  [data-ds-dark-theme] [data-chat-bg='true'] & {
+    background-color: rgba(255, 255, 255, 0.68);
+  }
+
   &:nth-child(2) {
     animation-delay: 0.1s;
   }
@@ -98,6 +106,26 @@
   gap: 10px;
   opacity: 0;
   transition: opacity var(--ds-transition-duration) var(--ds-ease-in-out);
+
+  [data-chat-bg='true'] & {
+    button {
+      color: var(--dsw-alias-label-primary);
+    }
+
+    button:disabled {
+      color: rgba(15, 17, 21, 0.42);
+    }
+  }
+
+  [data-ds-dark-theme] [data-chat-bg='true'] & {
+    button {
+      color: var(--dsw-alias-label-primary);
+    }
+
+    button:disabled {
+      color: rgba(249, 250, 251, 0.44);
+    }
+  }
 }
 
 @media not all and (min-width: 768px) {
@@ -121,6 +149,17 @@
 
 .continueButton {
   margin-left: auto;
+
+  [data-chat-bg='true'] & {
+    border-color: rgba(15, 23, 42, 0.24);
+    color: var(--dsw-alias-label-primary);
+    font-weight: 500;
+  }
+
+  [data-ds-dark-theme] [data-chat-bg='true'] & {
+    border-color: rgba(255, 255, 255, 0.28);
+    color: var(--dsw-alias-label-primary);
+  }
 }
 
 .summary {
@@ -137,6 +176,17 @@
   cursor: pointer;
   user-select: none;
   transition: background-color 0.3s;
+
+  [data-chat-bg='true'] & {
+    border-color: rgba(15, 23, 42, 0.18);
+    background-color: rgba(255, 255, 255, 0.42);
+    font-weight: 500;
+  }
+
+  [data-ds-dark-theme] [data-chat-bg='true'] & {
+    border-color: rgba(255, 255, 255, 0.2);
+    background-color: rgba(24, 26, 34, 0.46);
+  }
 
   > span:first-child {
     margin-left: 0;

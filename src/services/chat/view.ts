@@ -6,7 +6,12 @@ import type {
   WebSearchResult,
   WebSearchToolResultBlock,
 } from '../api/types.js'
-import type { AssistantMessage, ClientToolResultBlock, ThinkingPart } from './types.js'
+import type {
+  AssistantMessage,
+  ClientToolResultBlock,
+  MemoryToolStepBlock,
+  ThinkingPart,
+} from './types.js'
 
 /**
  * 由回复的内容块推导界面需要的结构：思考与工具步骤的时间线、带引用角标的正文、可引用的来源列表。
@@ -69,6 +74,40 @@ export type LocationStep = {
   errorCode?: string
 }
 
+export type BalanceStep = {
+  type: 'balance'
+  id: string
+  status: ToolStatus
+  /** 多币种余额摘要，如「¥110.00」 */
+  summary?: string
+  /** 接口返回的 is_available，false 表示余额不足 */
+  available?: boolean
+  errorCode?: string
+}
+
+export type GuideItem = {
+  id: string
+  title: string
+  summary: string
+  steps?: string
+  /** app://settings?page=...，由设置页链接组件校验后打开 */
+  settingsUrl?: string
+}
+
+export type GuideOverview = {
+  title: string
+  categories: string[]
+}
+
+export type GuideStep = {
+  type: 'guide'
+  id: string
+  status: ToolStatus
+  items: GuideItem[]
+  overview?: GuideOverview
+  errorCode?: string
+}
+
 export type ThinkingStep = { type: 'thinking'; key: string; blocks: ThinkingPart[] }
 
 /** 工具调用前输出的说明文字 */
@@ -80,6 +119,9 @@ export type Step =
   | FindStep
   | ReadLinkStep
   | LocationStep
+  | BalanceStep
+  | GuideStep
+  | MemoryToolStepBlock
   | ThinkingStep
   | PreambleStep
 
@@ -204,6 +246,47 @@ const joinTextBlocks = (
   return { markdown, text }
 }
 
+const readGuideItem = (value: unknown): GuideItem | null => {
+  if (typeof value !== 'object' || value === null) {
+    return null
+  }
+  const item = value as Record<string, unknown>
+  if (
+    typeof item.id !== 'string' ||
+    typeof item.title !== 'string' ||
+    typeof item.summary !== 'string'
+  ) {
+    return null
+  }
+  return {
+    id: item.id,
+    title: item.title,
+    summary: item.summary,
+    ...(typeof item.steps === 'string' && item.steps.trim() ? { steps: item.steps } : {}),
+    ...(typeof item.settingsUrl === 'string' && item.settingsUrl
+      ? { settingsUrl: item.settingsUrl }
+      : {}),
+  }
+}
+
+const readGuideOverview = (value: unknown): GuideOverview | null => {
+  if (typeof value !== 'object' || value === null) {
+    return null
+  }
+  const overview = value as Record<string, unknown>
+  const title = typeof overview.title === 'string' ? overview.title : ''
+  const categories = Array.isArray(overview.categories)
+    ? overview.categories.flatMap((category) => {
+        if (typeof category !== 'object' || category === null) {
+          return []
+        }
+        const categoryTitle = (category as Record<string, unknown>).title
+        return typeof categoryTitle === 'string' && categoryTitle ? [categoryTitle] : []
+      })
+    : []
+  return title && categories.length > 0 ? { title, categories } : null
+}
+
 export const buildReplyView = (reply: AssistantMessage, streaming: boolean): ReplyView => {
   const results = new Map<string, WebSearchToolResultBlock | WebFetchToolResultBlock>()
   const clientResults = new Map<string, ClientToolResultBlock>()
@@ -298,6 +381,88 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
         summary: res?.summary,
         errorCode: res?.errorCode,
       })
+      return
+    }
+    if (block.type === 'tool_use' && block.name === 'get_balance') {
+      // 与定位工具一致：模型调用前的过场提示语不单独成节点
+      pendingText = []
+      const res = clientResults.get(block.id)
+      const status: ToolStatus = !res
+        ? streaming
+          ? 'wip'
+          : 'failed'
+        : res.is_error || res.status === 'failed'
+          ? 'failed'
+          : 'done'
+      let available: boolean | undefined
+      if (res?.status === 'done') {
+        try {
+          const parsed = JSON.parse(res.content) as { is_available?: unknown }
+          if (typeof parsed.is_available === 'boolean') {
+            available = parsed.is_available
+          }
+        } catch {
+          // 结果不是合法 JSON 时只展示摘要，不影响时间线
+        }
+      }
+      steps.push({
+        type: 'balance',
+        id: block.id,
+        status,
+        summary: res?.summary,
+        available,
+        errorCode: res?.errorCode,
+      })
+      return
+    }
+    if (block.type === 'tool_use' && block.name === 'get_app_guide') {
+      // 功能文档查询与其它工具一致：调用前的过场提示语不单独成节点
+      pendingText = []
+      const res = clientResults.get(block.id)
+      const status: ToolStatus = !res
+        ? streaming
+          ? 'wip'
+          : 'failed'
+        : res.is_error || res.status === 'failed'
+          ? 'failed'
+          : 'done'
+      const items: GuideItem[] = []
+      let overview: GuideOverview | undefined
+      if (res?.status === 'done') {
+        try {
+          const parsed = JSON.parse(res.content) as { matches?: unknown; overview?: unknown }
+          overview = readGuideOverview(parsed.overview) ?? undefined
+          if (Array.isArray(parsed.matches)) {
+            for (const value of parsed.matches) {
+              const item = readGuideItem(value)
+              if (item) {
+                items.push(item)
+              }
+            }
+          }
+        } catch {
+          // 结果不是合法 JSON 时按空列表展示，不影响时间线
+        }
+      }
+      steps.push({
+        type: 'guide',
+        id: block.id,
+        status,
+        items,
+        ...(overview ? { overview } : {}),
+        errorCode: res?.errorCode,
+      })
+      return
+    }
+    if (block.type === 'memory_tool_step') {
+      flushPreamble()
+      const status =
+        block.status === 'wip' && !streaming
+          ? reply.status === 'stopped'
+            ? 'stopped'
+            : 'failed'
+          : block.status
+      steps.push(status === block.status ? block : { ...block, status })
       return
     }
     if (block.type !== 'server_tool_use') {
@@ -452,6 +617,11 @@ export const getAreaTitle = (
   }
   if (last?.type === 'location' && last.status === 'wip') {
     return translate('toolLocationFetchingTitle')
+  }
+  if (last?.type === 'memory_tool_step' && last.status === 'wip') {
+    return translate(
+      last.action === 'search' ? 'toolHistorySearchPending' : 'toolHistoryReadPending'
+    )
   }
   return translate('messageThinking')
 }

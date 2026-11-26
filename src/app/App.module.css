@@ -34,6 +34,49 @@
   position: relative;
   flex: 1;
   min-height: 0;
+  /* 锁定内部磨砂元素的 Backdrop Root，侧栏推开整体平移主屏时不穿透重采且零延迟闪变 */
+  isolation: isolate;
+}
+
+.chatBackgroundLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  contain: strict;
+  transform: translate3d(0, 0, 0);
+  pointer-events: none;
+}
+
+.chatBackgroundParallax {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* 开启动态视差时四周预留 14px 出血边，背景反向微移时不露白/黑边 */
+.chatBackgroundParallaxBleed {
+  inset: -14px;
+}
+
+.chatBackgroundImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  user-select: none;
+}
+
+.chatBackgroundScrim {
+  position: absolute;
+  inset: 0;
+  /* 轻柔压低背景高反差噪点，不损伤原图色彩同时提升无框文字可读性 */
+  background-color: rgba(255, 255, 255, 0.16);
+
+  [data-ds-dark-theme] & {
+    background-color: rgba(0, 0, 0, 0.28);
+  }
 }
 
 .saveError {
@@ -51,6 +94,7 @@
 .loadingView {
   position: absolute;
   inset: 0;
+  z-index: 1;
   display: flex;
   flex-direction: column;
 }
@@ -111,13 +155,13 @@
 
   .mainPushed {
     transform: translate3d(var(--mobile-sider-width), 0, 0);
-    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.18);
+    box-shadow: -6px 0 16px rgba(0, 0, 0, 0.14);
   }
 
   /* 侧边栏打开搜索时，对话界面顺势继续向右滑出屏幕外，同时把左侧阴影带离视口 */
   .mainSearchPushed {
     transform: translate3d(calc(100% + 28px), 0, 0);
-    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.18);
+    box-shadow: -6px 0 16px rgba(0, 0, 0, 0.14);
     pointer-events: none;
   }
 }

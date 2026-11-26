@@ -1,10 +1,11 @@
 import clsx from 'clsx'
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import {
   IconChevronRightOutline14,
   IconDarkOutline16,
   IconDataOutline16,
   IconDownloadOutline16,
+  IconEditOutline16,
   IconFollowsystemOutline16,
   IconLightOutline16,
   IconRightUpOutline14,
@@ -26,11 +27,21 @@ import {
 } from '../../services/chat/backup.js'
 import { formatSize } from '../../services/attachments.js'
 import { useIsMobile } from '../../app/viewport.js'
+import {
+  MAX_ACCOUNT_NICKNAME_LENGTH,
+  getAccountDisplayLabel,
+  setMockAccountNickname,
+  setMockAccountUseNicknameInReply,
+  useMockAccount,
+} from '../../services/account.js'
+import { subscribeDeviceTilt } from '../../services/deviceTilt.js'
 import { useChatStore } from '../../services/chat/store.js'
+import { useGlobalMemory } from '../../services/chat/globalMemory.js'
 import {
   setAutoReadAloud,
   setAllowVideoUpload,
   setLocale,
+  setPersonalCenterEnabled,
   setThemePreference,
   setTtsVoice,
   setVideoAudioEnabled,
@@ -42,12 +53,21 @@ import { hasVideoAudioSupport } from '../../services/video/audio.js'
 import type { TtsVoice } from '../../services/api/speech.js'
 import { useTranslate, type TranslationKey, type TranslationMessage } from '../../i18n/index.js'
 import { Button } from '../base/Button.js'
+import { IconButton } from '../base/IconButton.js'
 import { Modal } from '../base/Modal.js'
 import { Select } from '../base/Select.js'
 import { Switch } from '../base/Switch.js'
 import { showToast } from '../base/toastState.js'
 import { usePresence } from '../base/usePresence.js'
+import {
+  AccountAvatar,
+  AccountImagePickerControls,
+  useAvatarPicker,
+  useCoverPicker,
+} from './AccountAvatar.js'
 import { ApiKeySetting } from './ApiKeyField.js'
+import { AppBackgroundPage, ChatBackgroundPage } from './ChatBackgroundSettings.js'
+import { GlobalMemoryPage, MemoryFilePage } from './GlobalMemorySettings.js'
 import { InfoModalButton } from './InfoModalButton.js'
 import {
   AiLocationSetting,
@@ -57,22 +77,384 @@ import {
 } from './LocationSettings.js'
 import { MobileActionCard } from './MobileActionCard.js'
 import { QuickCameraShortcutSetting } from './QuickCameraShortcutSetting.js'
-import { MobileRpModeNavRow, MobileRpModePage, RpModeSetting } from './RpModeSettings.js'
 import {
   MobileSystemPromptNavRow,
   MobileSystemPromptPage,
   SystemPromptSetting,
 } from './SystemPromptSettings.js'
 import { closeSettings, useSettingsDialog, type SettingsSection } from './settingsDialogState.js'
+import {
+  desktopSettingsPage,
+  mobileSettingsPath,
+  settingsPageSection,
+} from '../../services/settingsPages.js'
 import styles from './Settings.module.css'
 
-type MobileSubPage = 'data' | 'location' | 'systemPrompt' | 'rpMode'
+type MobileRootSubPage =
+  | 'data'
+  | 'personalCenter'
+  | 'nickname'
+  | 'appBackground'
+  | 'importSessions'
+  | 'exportInfo'
+  | 'voiceBroadcast'
+  | 'videoUpload'
+  | 'location'
+  | 'systemPrompt'
+  | 'globalMemory'
+type MemoryPage = 'globalMemory' | 'memoryFile'
+type MobileL2SubPage = MemoryPage | 'chatBackground'
+type DesktopSubPage = MemoryPage | 'personalCenter' | 'appBackground' | 'chatBackground'
+type MobileSubPage = MobileRootSubPage | MobileL2SubPage
+
+/** Beta 移动端头图完全折叠为顶栏所需的滑动距离（px）：头图高度 340 - 顶栏高度 56 */
+const HERO_COLLAPSE_DISTANCE = 284
+const HERO_AVATAR_START_SIZE = 88
+const HERO_AVATAR_LARGE_START_SIZE = 108
+const HERO_AVATAR_END_SIZE = 34
+
+const clamp01 = (value: number) => (value <= 0 ? 0 : value >= 1 ? 1 : value)
+
+const APP_VERSION =
+  typeof document !== 'undefined'
+    ? document.querySelector('meta[name="application-version"]')?.getAttribute('content')?.trim() ||
+      ''
+    : ''
+
+const prefersReducedMotion = () =>
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+interface HeroParallaxTargets {
+  bg: HTMLElement | null
+  avatar3d: HTMLElement | null
+  avatarShadow: HTMLElement | null
+  avatarSheen: HTMLElement | null
+  avatarEdit: HTMLElement | null
+  coverEdit: HTMLElement | null
+  identity: HTMLElement | null
+}
+
+/**
+ * 统一的多层 3D 视差映射：
+ * 背景向反方向退后，账号名居中景，头像向前微浮并做 3D 透视倾转（配球面流动光泽与反向投影），
+ * 头像编辑按钮位于最前景，形成清晰的四层空间纵深。
+ */
+const applyHeroParallax = (
+  targets: HeroParallaxTargets,
+  x: number,
+  y: number,
+  weight: number,
+  scale = 1
+) => {
+  const tx = x * weight
+  const ty = y * weight
+  const tiltMag = Math.min(1, Math.hypot(tx, ty))
+
+  if (targets.bg) {
+    targets.bg.style.transform = `translate3d(${(-tx * 13 * scale).toFixed(2)}px, ${(-ty * 10 * scale).toFixed(2)}px, 0) scale(1.02)`
+  }
+  if (targets.avatar3d) {
+    targets.avatar3d.style.transform = `perspective(520px) translate3d(${(tx * 10 * scale).toFixed(2)}px, ${(ty * 8 * scale).toFixed(2)}px, 0) rotateY(${(tx * 13 * scale).toFixed(2)}deg) rotateX(${(-ty * 11 * scale).toFixed(2)}deg)`
+  }
+  if (targets.avatarShadow) {
+    targets.avatarShadow.style.transform = `translate3d(${(-tx * 9 * scale).toFixed(2)}px, ${(7 * scale - ty * 6 * scale).toFixed(2)}px, 0) scale(${(0.94 + 0.04 * weight).toFixed(3)})`
+    targets.avatarShadow.style.opacity = (0.9 * weight).toFixed(3)
+  }
+  if (targets.avatarSheen) {
+    targets.avatarSheen.style.transform = `translate3d(${(tx * 24 * scale).toFixed(2)}px, ${(ty * 22 * scale).toFixed(2)}px, 0)`
+    targets.avatarSheen.style.opacity = ((0.22 + 0.46 * tiltMag) * weight).toFixed(3)
+  }
+  if (targets.avatarEdit) {
+    targets.avatarEdit.style.transform = `perspective(520px) translate3d(${(tx * 14 * scale).toFixed(2)}px, ${(ty * 11 * scale).toFixed(2)}px, 0) rotateY(${(tx * 9 * scale).toFixed(2)}deg) rotateX(${(-ty * 8 * scale).toFixed(2)}deg)`
+  }
+  if (targets.coverEdit) {
+    targets.coverEdit.style.transform = `translate3d(${(tx * 5 * scale).toFixed(2)}px, ${(ty * 4 * scale).toFixed(2)}px, 0)`
+  }
+  if (targets.identity) {
+    targets.identity.style.transform = `translate3d(${(tx * 5.5 * scale).toFixed(2)}px, ${(ty * 4.5 * scale).toFixed(2)}px, 0)`
+  }
+}
+
+const DesktopAccountHero = ({
+  avatarDataUrl,
+  coverDataUrl,
+  accountLabel,
+  avatarAriaLabel,
+  coverAriaLabel,
+  onEditAvatar,
+  onEditCover,
+}: {
+  avatarDataUrl: string | null
+  coverDataUrl: string | null
+  accountLabel: string
+  avatarAriaLabel: string
+  coverAriaLabel: string
+  onEditAvatar: () => void
+  onEditCover: () => void
+}) => {
+  const bgParallaxRef = useRef<HTMLDivElement>(null)
+  const avatar3dRef = useRef<HTMLDivElement>(null)
+  const avatarShadowRef = useRef<HTMLDivElement>(null)
+  const avatarSheenRef = useRef<HTMLSpanElement>(null)
+  const avatarEditParallaxRef = useRef<HTMLSpanElement>(null)
+  const coverEditParallaxRef = useRef<HTMLSpanElement>(null)
+  const identityParallaxRef = useRef<HTMLSpanElement>(null)
+  const targetRef = useRef({ x: 0, y: 0 })
+  const currentRef = useRef({ x: 0, y: 0 })
+  const rafRef = useRef(0)
+  const lastFrameRef = useRef(0)
+
+  const getTargets = useCallback(
+    (): HeroParallaxTargets => ({
+      bg: bgParallaxRef.current,
+      avatar3d: avatar3dRef.current,
+      avatarShadow: avatarShadowRef.current,
+      avatarSheen: avatarSheenRef.current,
+      avatarEdit: avatarEditParallaxRef.current,
+      coverEdit: coverEditParallaxRef.current,
+      identity: identityParallaxRef.current,
+    }),
+    []
+  )
+
+  const wakeLoop = useCallback(() => {
+    if (rafRef.current || prefersReducedMotion()) {
+      return
+    }
+    lastFrameRef.current = performance.now()
+    const tick = (now: number) => {
+      const dt = Math.min(Math.max((now - lastFrameRef.current) / 1000, 0), 0.05)
+      lastFrameRef.current = now
+      const alpha = 1 - Math.exp(-dt * 11)
+      const curr = currentRef.current
+      const tgt = targetRef.current
+      curr.x += (tgt.x - curr.x) * alpha
+      curr.y += (tgt.y - curr.y) * alpha
+      const settled = Math.abs(tgt.x - curr.x) < 0.001 && Math.abs(tgt.y - curr.y) < 0.001
+      if (settled) {
+        curr.x = tgt.x
+        curr.y = tgt.y
+      }
+      applyHeroParallax(getTargets(), curr.x, curr.y, 1, 0.78)
+      if (settled) {
+        rafRef.current = 0
+        return
+      }
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+  }, [getTargets])
+
+  useEffect(() => {
+    applyHeroParallax(getTargets(), 0, 0, 1, 0.78)
+    return () => {
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = 0
+    }
+  }, [getTargets])
+
+  return (
+    <div
+      className={styles.desktopAccountHero}
+      onPointerMove={(event) => {
+        if (prefersReducedMotion()) {
+          return
+        }
+        const rect = event.currentTarget.getBoundingClientRect()
+        if (rect.width <= 0 || rect.height <= 0) {
+          return
+        }
+        const nx = Math.max(-1, Math.min(1, ((event.clientX - rect.left) / rect.width - 0.5) * 2))
+        const ny = Math.max(-1, Math.min(1, ((event.clientY - rect.top) / rect.height - 0.5) * 2))
+        targetRef.current.x = nx
+        targetRef.current.y = ny
+        wakeLoop()
+      }}
+      onPointerLeave={() => {
+        targetRef.current.x = 0
+        targetRef.current.y = 0
+        wakeLoop()
+      }}
+    >
+      <div className={styles.desktopAccountHeroBg} aria-hidden="true">
+        <div ref={bgParallaxRef} className={styles.desktopAccountHeroBgParallax}>
+          {coverDataUrl ? (
+            <>
+              <img
+                src={coverDataUrl}
+                alt=""
+                draggable={false}
+                className={styles.mobileHeroCoverImage}
+              />
+              <div className={styles.mobileHeroCoverScrim} />
+            </>
+          ) : null}
+        </div>
+      </div>
+      <div
+        className={clsx(
+          styles.desktopAccountHeroCenter,
+          !accountLabel && styles.desktopAccountHeroCenterAvatarOnly
+        )}
+      >
+        <div
+          className={clsx(
+            styles.desktopHeroAvatarWrap,
+            !accountLabel && styles.desktopHeroAvatarLarge
+          )}
+        >
+          <div ref={avatarShadowRef} className={styles.heroAvatarShadow} aria-hidden="true" />
+          <div ref={avatar3dRef} className={styles.heroAvatar3d}>
+            <button
+              type="button"
+              className={styles.floatingAvatarHit}
+              aria-label={avatarAriaLabel}
+              onClick={onEditAvatar}
+            >
+              <AccountAvatar
+                src={avatarDataUrl}
+                className={styles.desktopHeroAvatarCircle}
+                iconClassName={styles.desktopHeroAvatarIcon}
+              />
+              <span ref={avatarSheenRef} className={styles.heroAvatarSheen} aria-hidden="true" />
+            </button>
+          </div>
+          <button
+            type="button"
+            className={clsx(
+              styles.heroAvatarEditButton,
+              styles.desktopHeroAvatarEditButton,
+              coverDataUrl && styles.heroEditOnCover
+            )}
+            aria-label={avatarAriaLabel}
+            onClick={onEditAvatar}
+          >
+            <span ref={avatarEditParallaxRef} className={styles.heroParallaxLayer}>
+              <IconEditOutline16 />
+            </span>
+          </button>
+        </div>
+        {accountLabel ? (
+          <span
+            ref={identityParallaxRef}
+            className={clsx(
+              styles.desktopHeroAccountLabel,
+              coverDataUrl && styles.heroLabelOnCover
+            )}
+          >
+            {accountLabel}
+          </span>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        className={clsx(
+          styles.heroCoverEditButton,
+          styles.desktopHeroCoverEditButton,
+          coverDataUrl && styles.heroEditOnCover
+        )}
+        aria-label={coverAriaLabel}
+        onClick={onEditCover}
+      >
+        <span ref={coverEditParallaxRef} className={styles.heroParallaxLayer}>
+          <IconEditOutline16 />
+        </span>
+      </button>
+    </div>
+  )
+}
+
+const readSafeTop = () => {
+  const parsed = Number.parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--safe-top')
+  )
+  return Number.isFinite(parsed) ? parsed : 0
+}
 
 const MOBILE_SUB_TITLE_KEY: Record<MobileSubPage, TranslationKey> = {
   data: 'settingDialogAsideDataOptionLabel',
+  personalCenter: 'settingsPersonalCenter',
+  nickname: 'settingsNickname',
+  appBackground: 'settingsAppBackground',
+  chatBackground: 'settingsChatBackground',
+  importSessions: 'importSessionsTitle',
+  exportInfo: 'exportInfoTitle',
+  voiceBroadcast: 'settingsVoiceBroadcast',
+  videoUpload: 'settingsVideoUpload',
   location: 'settingsLocation',
   systemPrompt: 'settingsSystemPrompt',
-  rpMode: 'settingsRpMode',
+  globalMemory: 'globalMemory',
+  memoryFile: 'memoryFile',
+}
+
+/** 移动端二级/三级推入页面层：负责视差压栈、滚动顶栏分割线感知与底层 inert 隔离 */
+const MobileSubLayer = ({
+  visible,
+  pushed,
+  level,
+  onScrolledChange,
+  children,
+}: {
+  visible: boolean
+  pushed: boolean
+  level: 1 | 2 | 3
+  onScrolledChange?: (level: 1 | 2 | 3, scrolled: boolean) => void
+  children: ReactNode
+}) => {
+  const ref = useRef<HTMLDivElement>(null)
+  const prevPushedRef = useRef(pushed)
+  const onScrolledChangeRef = useRef(onScrolledChange)
+  onScrolledChangeRef.current = onScrolledChange
+
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.inert = pushed
+    }
+  }, [pushed])
+
+  // 仅在从更深层级退栈回到本层时重新读取真实滚动位置，避免首次推入动画首帧触发同步强制布局
+  useEffect(() => {
+    const returnedToTop = prevPushedRef.current && !pushed
+    prevPushedRef.current = pushed
+    if (!visible) {
+      onScrolledChangeRef.current?.(level, false)
+      return
+    }
+    if (!returnedToTop) {
+      return
+    }
+    const scroller = ref.current?.firstElementChild
+    const scrolled =
+      scroller instanceof HTMLElement &&
+      scroller.scrollTop > 2 &&
+      scroller.scrollHeight > scroller.clientHeight + 1
+    onScrolledChangeRef.current?.(level, scrolled)
+  }, [visible, pushed, level])
+
+  return (
+    <div
+      ref={ref}
+      aria-hidden={pushed || undefined}
+      style={{ zIndex: level + 1 }}
+      className={clsx(
+        styles.mobileSubPage,
+        visible && styles.mobileSubPageVisible,
+        pushed && styles.mobileSubPagePushed
+      )}
+      onScrollCapture={(event) => {
+        const target = event.target
+        if (!(target instanceof HTMLElement) || target.parentElement !== ref.current) {
+          return
+        }
+        const scrolled = target.scrollTop > 2 && target.scrollHeight > target.clientHeight + 1
+        onScrolledChangeRef.current?.(level, scrolled)
+      }}
+    >
+      {children}
+    </div>
+  )
 }
 
 /**
@@ -97,22 +479,355 @@ const sections: { value: SettingsSection; label: TranslationKey; icon: ReactNode
 const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
+  const personalCenterEnabled = useSettings((state) => state.personalCenterEnabled)
+  const betaMobile = __BETA__ && isMobile
+  const immersiveMobile = betaMobile && personalCenterEnabled
+  const account = useMockAccount()
+  const accountLabel = getAccountDisplayLabel(account)
+  const hasAccountLabel = accountLabel.length > 0
+  const avatarPicker = useAvatarPicker()
+  const coverPicker = useCoverPicker()
   const storeSection = useSettingsDialog((state) => state.section)
+  const storePage = useSettingsDialog((state) => state.page)
   // 打开时按调用方指定的分组选中，之后在弹窗内切换；退场未结束时快速重开同步复位
   const [section, setSection] = useState<SettingsSection>(storeSection)
-  const [mobilePage, setMobilePage] = useState<'main' | MobileSubPage>('main')
-  const [renderedSubPage, setRenderedSubPage] = useState<MobileSubPage | null>(null)
+  const [mobileStack, setMobileStack] = useState<MobileSubPage[]>([])
+  const [renderedL1, setRenderedL1] = useState<MobileRootSubPage | null>(null)
+  const [renderedL2, setRenderedL2] = useState<MobileL2SubPage | null>(null)
+  const [renderedL3, setRenderedL3] = useState<'memoryFile' | null>(null)
+  const [desktopSubPage, setDesktopSubPage] = useState<DesktopSubPage | null>(null)
+  const memoryEnabled = useGlobalMemory((state) => state.profile.enabled)
   const prevOpenRef = useRef(open)
+  const dialogRef = useRef<HTMLDivElement | null>(null)
   const mobileMainRef = useRef<HTMLDivElement>(null)
-  const mobileSubRef = useRef<HTMLDivElement>(null)
+  const mobileScrollRef = useRef<HTMLDivElement>(null)
+  const mobilePlainScrollRef = useRef<HTMLDivElement>(null)
+  const heroBgRef = useRef<HTMLDivElement>(null)
+  const heroBgParallaxRef = useRef<HTMLDivElement>(null)
+  const heroIdentityRef = useRef<HTMLDivElement>(null)
+  const identityParallaxRef = useRef<HTMLSpanElement>(null)
+  const coverEditRef = useRef<HTMLButtonElement>(null)
+  const coverEditParallaxRef = useRef<HTMLSpanElement>(null)
+  const sheetGlassRef = useRef<HTMLDivElement>(null)
+  const sheetSolidRef = useRef<HTMLDivElement>(null)
+  const dataCardRef = useRef<HTMLDivElement>(null)
+  const backButtonRef = useRef<HTMLButtonElement>(null)
+  const headerBgRef = useRef<HTMLDivElement>(null)
+  const headerDividerRef = useRef<HTMLDivElement>(null)
+  const rootTitleRef = useRef<HTMLSpanElement>(null)
+  const heroMetricsRef = useRef({ containerWidth: 0, safeTop: 0 })
+  const heroScrollRafRef = useRef(0)
+  const pendingHeroScrollTopRef = useRef(0)
+  const lastHeroScrollTopRef = useRef(-1)
+  const layerScrolledRef = useRef<Record<0 | 1 | 2 | 3, boolean>>({
+    0: false,
+    1: false,
+    2: false,
+    3: false,
+  })
+  const activeDepthRef = useRef<0 | 1 | 2 | 3>(0)
+
+  const syncHeaderDivider = useCallback(() => {
+    const divider = headerDividerRef.current
+    if (!divider) {
+      return
+    }
+    const depth = activeDepthRef.current
+    divider.classList.toggle(styles.mobileHeaderDividerVisible, layerScrolledRef.current[depth])
+  }, [])
+
+  const handleSubLayerScrolledChange = useCallback(
+    (level: 1 | 2 | 3, scrolled: boolean) => {
+      if (layerScrolledRef.current[level] === scrolled) {
+        return
+      }
+      layerScrolledRef.current[level] = scrolled
+      syncHeaderDivider()
+    },
+    [syncHeaderDivider]
+  )
+  const floatingAvatarRef = useRef<HTMLDivElement>(null)
+  const avatar3dRef = useRef<HTMLDivElement>(null)
+  const avatarShadowRef = useRef<HTMLDivElement>(null)
+  const avatarSheenRef = useRef<HTMLSpanElement>(null)
+  const editBadgeRef = useRef<HTMLButtonElement>(null)
+  const avatarEditParallaxRef = useRef<HTMLSpanElement>(null)
+  const collapseProgressRef = useRef(0)
+  const tiltTargetRef = useRef({ x: 0, y: 0 })
+  const tiltCurrentRef = useRef({ x: 0, y: 0 })
+  const tiltWeightRef = useRef(1)
+  const tiltRafRef = useRef(0)
+  const tiltLastFrameRef = useRef(0)
+
+  const getMobileParallaxTargets = useCallback(
+    (): HeroParallaxTargets => ({
+      bg: heroBgParallaxRef.current,
+      avatar3d: avatar3dRef.current,
+      avatarShadow: avatarShadowRef.current,
+      avatarSheen: avatarSheenRef.current,
+      avatarEdit: avatarEditParallaxRef.current,
+      coverEdit: coverEditParallaxRef.current,
+      identity: identityParallaxRef.current,
+    }),
+    []
+  )
+
+  const wakeTiltLoop = useCallback(() => {
+    if (tiltRafRef.current) {
+      return
+    }
+    tiltLastFrameRef.current = performance.now()
+    const tick = (now: number) => {
+      const dt = Math.min(Math.max((now - tiltLastFrameRef.current) / 1000, 0), 0.05)
+      tiltLastFrameRef.current = now
+      const alpha = 1 - Math.exp(-dt * 10)
+      const weight = clamp01(1 - collapseProgressRef.current / 0.55)
+      const reduced = prefersReducedMotion()
+      const targetX = reduced ? 0 : tiltTargetRef.current.x
+      const targetY = reduced ? 0 : tiltTargetRef.current.y
+      const curr = tiltCurrentRef.current
+      curr.x += (targetX - curr.x) * alpha
+      curr.y += (targetY - curr.y) * alpha
+      tiltWeightRef.current += (weight - tiltWeightRef.current) * alpha
+      const settled =
+        Math.abs(targetX - curr.x) < 0.001 &&
+        Math.abs(targetY - curr.y) < 0.001 &&
+        Math.abs(weight - tiltWeightRef.current) < 0.002
+      if (settled) {
+        curr.x = targetX
+        curr.y = targetY
+        tiltWeightRef.current = weight
+      }
+      applyHeroParallax(getMobileParallaxTargets(), curr.x, curr.y, tiltWeightRef.current)
+      if (settled) {
+        tiltRafRef.current = 0
+        return
+      }
+      tiltRafRef.current = requestAnimationFrame(tick)
+    }
+    tiltRafRef.current = requestAnimationFrame(tick)
+  }, [getMobileParallaxTargets])
+
+  const refreshHeroMetrics = useCallback(() => {
+    const containerWidth =
+      mobileMainRef.current?.clientWidth ||
+      mobileScrollRef.current?.clientWidth ||
+      window.innerWidth
+    const safeTop = readSafeTop()
+    const prev = heroMetricsRef.current
+    const changed = prev.containerWidth !== containerWidth || prev.safeTop !== safeTop
+    heroMetricsRef.current = { containerWidth, safeTop }
+    return changed
+  }, [])
+
+  const applyHeroScroll = useCallback(
+    (scrollTop: number, force = false) => {
+      if (!force && lastHeroScrollTopRef.current === scrollTop) {
+        return
+      }
+      lastHeroScrollTopRef.current = scrollTop
+      const progress = clamp01(scrollTop / HERO_COLLAPSE_DISTANCE)
+      collapseProgressRef.current = progress
+
+      if (heroMetricsRef.current.containerWidth <= 0) {
+        refreshHeroMetrics()
+      }
+      const { containerWidth, safeTop } = heroMetricsRef.current
+
+      if (heroBgRef.current) {
+        const bgOpacity = clamp01(1 - progress / 0.92)
+        const bgShift = -Math.min(Math.max(0, scrollTop), HERO_COLLAPSE_DISTANCE) * 0.24
+        heroBgRef.current.style.opacity = bgOpacity.toFixed(3)
+        heroBgRef.current.style.transform = `translate3d(0, ${bgShift.toFixed(2)}px, 0)`
+      }
+
+      if (sheetSolidRef.current) {
+        const solidOpacity = clamp01((progress - 0.2) / 0.72)
+        sheetSolidRef.current.style.opacity = solidOpacity.toFixed(3)
+      }
+
+      if (sheetGlassRef.current) {
+        sheetGlassRef.current.classList.toggle(styles.mobileSettingsSheetGlassOff, progress >= 0.72)
+      }
+
+      if (dataCardRef.current) {
+        dataCardRef.current.classList.toggle(styles.mobileGlassCardSolid, progress >= 0.82)
+      }
+
+      if (backButtonRef.current) {
+        backButtonRef.current.classList.toggle(styles.mobileBackButtonSolid, progress >= 0.82)
+      }
+
+      if (heroIdentityRef.current) {
+        const idOpacity = clamp01(1 - progress / 0.42)
+        heroIdentityRef.current.style.opacity = idOpacity.toFixed(3)
+        heroIdentityRef.current.style.transform = `translate3d(0, ${(-progress * 18).toFixed(2)}px, 0)`
+      }
+
+      if (coverEditRef.current) {
+        const coverBtnProgress = clamp01(1 - progress / 0.38)
+        coverEditRef.current.style.opacity = coverBtnProgress.toFixed(3)
+        coverEditRef.current.style.transform = `scale(${(0.7 + 0.3 * coverBtnProgress).toFixed(3)})`
+        coverEditRef.current.style.pointerEvents = progress > 0.3 ? 'none' : 'auto'
+      }
+
+      if (headerBgRef.current) {
+        const barOpacity = clamp01((progress - 0.68) / 0.32)
+        headerBgRef.current.style.opacity = barOpacity.toFixed(3)
+      }
+
+      layerScrolledRef.current[0] = scrollTop > 2 && progress >= 0.88
+      syncHeaderDivider()
+
+      if (rootTitleRef.current) {
+        const titleProgress = clamp01((progress - 0.62) / 0.38)
+        rootTitleRef.current.style.opacity = titleProgress.toFixed(3)
+        rootTitleRef.current.style.transform = `translate3d(0, ${((1 - titleProgress) * 8).toFixed(2)}px, 0)`
+      }
+
+      if (floatingAvatarRef.current) {
+        const startSize = hasAccountLabel ? HERO_AVATAR_START_SIZE : HERO_AVATAR_LARGE_START_SIZE
+        const startX = containerWidth / 2
+        const startY = safeTop + (hasAccountLabel ? 180 : 194)
+        const endX = containerWidth - 16 - HERO_AVATAR_END_SIZE / 2
+        const endY = safeTop + 28
+        const cx = startX + (endX - startX) * progress
+        const cy = startY + (endY - startY) * progress
+        const endScale = HERO_AVATAR_END_SIZE / startSize
+        const scale = 1 + (endScale - 1) * progress
+        floatingAvatarRef.current.style.transform = `translate3d(${(cx - startSize / 2).toFixed(2)}px, ${(cy - startSize / 2).toFixed(2)}px, 0) scale(${scale.toFixed(4)})`
+      }
+
+      if (editBadgeRef.current) {
+        const badgeProgress = clamp01(1 - progress / 0.32)
+        editBadgeRef.current.style.opacity = badgeProgress.toFixed(3)
+        editBadgeRef.current.style.transform = `scale(${(0.55 + 0.45 * badgeProgress).toFixed(3)})`
+        editBadgeRef.current.style.pointerEvents = progress > 0.25 ? 'none' : 'auto'
+      }
+
+      const weight = clamp01(1 - progress / 0.55)
+      tiltWeightRef.current = weight
+      applyHeroParallax(
+        getMobileParallaxTargets(),
+        prefersReducedMotion() ? 0 : tiltCurrentRef.current.x,
+        prefersReducedMotion() ? 0 : tiltCurrentRef.current.y,
+        weight
+      )
+    },
+    [getMobileParallaxTargets, hasAccountLabel, refreshHeroMetrics, syncHeaderDivider]
+  )
+
+  const handleImmersiveScroll = useCallback(
+    (scrollTop: number) => {
+      pendingHeroScrollTopRef.current = scrollTop
+      if (heroScrollRafRef.current) {
+        return
+      }
+      heroScrollRafRef.current = requestAnimationFrame(() => {
+        heroScrollRafRef.current = 0
+        applyHeroScroll(pendingHeroScrollTopRef.current)
+      })
+    },
+    [applyHeroScroll]
+  )
+
+  useEffect(
+    () => () => {
+      cancelAnimationFrame(heroScrollRafRef.current)
+      heroScrollRafRef.current = 0
+    },
+    []
+  )
 
   useEffect(() => {
     if (open && !prevOpenRef.current) {
-      setSection(storeSection)
-      setMobilePage('main')
+      const page = storePage
+      setSection(page ? settingsPageSection(page, isMobile) : storeSection)
+      if (page) {
+        const path = isMobile ? mobileSettingsPath(page) : []
+        setMobileStack(path as MobileSubPage[])
+        setRenderedL1((path[0] as MobileRootSubPage | undefined) ?? null)
+        setRenderedL2((path[1] as MobileL2SubPage | undefined) ?? null)
+        setRenderedL3(path[2] === 'memoryFile' ? 'memoryFile' : null)
+        setDesktopSubPage(
+          isMobile ? null : ((desktopSettingsPage(page) as DesktopSubPage | null) ?? null)
+        )
+        useSettingsDialog.setState({ page: null })
+      } else {
+        setMobileStack([])
+        setDesktopSubPage(null)
+      }
+      if (mobileScrollRef.current) {
+        mobileScrollRef.current.scrollTop = 0
+      }
+      if (mobilePlainScrollRef.current) {
+        mobilePlainScrollRef.current.scrollTop = 0
+      }
+      layerScrolledRef.current[0] = false
+      syncHeaderDivider()
+      if (immersiveMobile) {
+        refreshHeroMetrics()
+        applyHeroScroll(0, true)
+      }
     }
     prevOpenRef.current = open
-  }, [open, storeSection])
+  }, [
+    open,
+    storeSection,
+    storePage,
+    isMobile,
+    immersiveMobile,
+    refreshHeroMetrics,
+    applyHeroScroll,
+    syncHeaderDivider,
+  ])
+
+  useLayoutEffect(() => {
+    if (!immersiveMobile) {
+      lastHeroScrollTopRef.current = -1
+      collapseProgressRef.current = 0
+      headerBgRef.current?.style.removeProperty('opacity')
+      backButtonRef.current?.classList.remove(styles.mobileBackButtonSolid)
+      if (mobilePlainScrollRef.current) {
+        mobilePlainScrollRef.current.scrollTop = 0
+      }
+      layerScrolledRef.current[0] = false
+      syncHeaderDivider()
+      return
+    }
+    refreshHeroMetrics()
+    applyHeroScroll(mobileScrollRef.current?.scrollTop ?? 0, true)
+    const onResize = () => {
+      if (refreshHeroMetrics()) {
+        applyHeroScroll(mobileScrollRef.current?.scrollTop ?? 0, true)
+      }
+    }
+    if (typeof ResizeObserver === 'function' && mobileMainRef.current) {
+      const observer = new ResizeObserver(onResize)
+      observer.observe(mobileMainRef.current)
+      return () => observer.disconnect()
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [immersiveMobile, refreshHeroMetrics, applyHeroScroll, syncHeaderDivider])
+
+  // 设置页滑入/滑出及子页进退栈期间（320ms）同步挂载 data-animating，暂停巨幅实时模糊以保障高刷满帧
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current
+    if (!isMobile || !dialog) {
+      return
+    }
+    dialog.dataset.animating = 'true'
+    if (!open || !visible) {
+      return
+    }
+    const timer = window.setTimeout(() => {
+      if (dialogRef.current) {
+        delete dialogRef.current.dataset.animating
+      }
+    }, 320)
+    return () => window.clearTimeout(timer)
+  }, [isMobile, open, visible, mobileStack.length])
 
   // 切换分组不丢失导入状态
   const historyImport = useHistoryImport()
@@ -121,40 +836,285 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
   const replacingHistory = useChatStore((state) => state.importingHistory)
   const historyBusy =
     historyImport.busy || historyUrlImport.busy || historyDelete.busy || replacingHistory
-  const inMobileSubPage = isMobile && mobilePage !== 'main'
-  const subPresence = usePresence(inMobileSubPage, 280)
+  const hasL1 = isMobile && mobileStack.length >= 1
+  const hasL2 = isMobile && mobileStack.length >= 2
+  const hasL3 = isMobile && mobileStack.length >= 3
+  const l1Presence = usePresence(hasL1, 280)
+  const l2Presence = usePresence(hasL2, 280)
+  const l3Presence = usePresence(hasL3, 280)
 
-  const openMobileSubPage = (page: MobileSubPage) => {
-    setRenderedSubPage(page)
-    setMobilePage(page)
+  const openMobileSubPage = (page: MobileRootSubPage) => {
+    layerScrolledRef.current[1] = false
+    layerScrolledRef.current[2] = false
+    layerScrolledRef.current[3] = false
+    setRenderedL1(page)
+    setMobileStack([page])
+  }
+
+  const openMobileChatBackground = () => {
+    layerScrolledRef.current[2] = false
+    setRenderedL2('chatBackground')
+    setMobileStack((prev) =>
+      prev[0] === 'appBackground' ? ['appBackground', 'chatBackground'] : prev
+    )
+  }
+
+  const openMobileMemory = () => {
+    if (__BETA__) {
+      openMobileSubPage('globalMemory')
+      return
+    }
+    layerScrolledRef.current[2] = false
+    setRenderedL2('globalMemory')
+    setMobileStack((prev) => (prev[0] === 'data' ? ['data', 'globalMemory'] : prev))
+  }
+
+  const openMobileMemoryFile = () => {
+    if (__BETA__) {
+      layerScrolledRef.current[2] = false
+      setRenderedL2('memoryFile')
+      setMobileStack((prev) => (prev[0] === 'globalMemory' ? ['globalMemory', 'memoryFile'] : prev))
+      return
+    }
+    layerScrolledRef.current[3] = false
+    setRenderedL3('memoryFile')
+    setMobileStack((prev) =>
+      prev[1] === 'globalMemory' ? ['data', 'globalMemory', 'memoryFile'] : prev
+    )
+  }
+
+  const backFromMobilePage = () => {
+    setMobileStack((prev) => prev.slice(0, -1))
   }
 
   useEffect(() => {
-    if (mobileMainRef.current) {
-      mobileMainRef.current.inert = inMobileSubPage
+    const depth = (isMobile ? Math.min(3, mobileStack.length) : 0) as 0 | 1 | 2 | 3
+    activeDepthRef.current = depth
+    if (depth < 1) {
+      layerScrolledRef.current[1] = false
     }
-  }, [inMobileSubPage])
+    if (depth < 2) {
+      layerScrolledRef.current[2] = false
+    }
+    if (depth < 3) {
+      layerScrolledRef.current[3] = false
+    }
+    syncHeaderDivider()
+  }, [isMobile, mobileStack.length, open, syncHeaderDivider])
 
-  // 二级子页首次以屏外初始态挂载时主动刷新布局，防止 WebView 跳过首次滑入过渡
-  useLayoutEffect(() => {
-    if (subPresence.mounted && !subPresence.visible && mobileSubRef.current) {
-      void mobileSubRef.current.getBoundingClientRect()
+  useEffect(() => {
+    if (!memoryEnabled) {
+      setMobileStack((prev) => (prev.at(-1) === 'memoryFile' ? prev.slice(0, -1) : prev))
+      if (desktopSubPage === 'memoryFile') {
+        setDesktopSubPage('globalMemory')
+      }
     }
-  }, [subPresence.mounted, subPresence.visible])
+  }, [memoryEnabled, desktopSubPage])
+
+  useEffect(() => {
+    if (mobileMainRef.current) {
+      mobileMainRef.current.inert = hasL1
+    }
+  }, [hasL1])
+
+  // 仅在设置主页静止可见且页面过渡结束后订阅陀螺仪，避免开关设置或切换子页期间争抢主线程与 GPU
+  useEffect(() => {
+    if (
+      !immersiveMobile ||
+      !open ||
+      !visible ||
+      hasL1 ||
+      l1Presence.mounted ||
+      prefersReducedMotion()
+    ) {
+      tiltTargetRef.current.x = 0
+      tiltTargetRef.current.y = 0
+      tiltCurrentRef.current.x = 0
+      tiltCurrentRef.current.y = 0
+      cancelAnimationFrame(tiltRafRef.current)
+      tiltRafRef.current = 0
+      if (immersiveMobile) {
+        const weight = clamp01(1 - collapseProgressRef.current / 0.55)
+        tiltWeightRef.current = weight
+        applyHeroParallax(getMobileParallaxTargets(), 0, 0, weight)
+      }
+      return
+    }
+
+    let unsubscribe: (() => void) | null = null
+    const timer = window.setTimeout(() => {
+      unsubscribe = subscribeDeviceTilt((tilt) => {
+        tiltTargetRef.current.x = tilt.x
+        tiltTargetRef.current.y = tilt.y
+        wakeTiltLoop()
+      })
+    }, 340)
+
+    return () => {
+      window.clearTimeout(timer)
+      unsubscribe?.()
+      cancelAnimationFrame(tiltRafRef.current)
+      tiltRafRef.current = 0
+    }
+  }, [
+    immersiveMobile,
+    open,
+    visible,
+    hasL1,
+    l1Presence.mounted,
+    wakeTiltLoop,
+    getMobileParallaxTargets,
+  ])
+
+  const handleFloatingAvatarClick = () => {
+    if (collapseProgressRef.current > 0.55) {
+      mobileScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+      return
+    }
+    avatarPicker.openPickerOrMenu()
+  }
+
+  const renderBetaMobileGroups = (glassDataCard: boolean) => (
+    <>
+      <div className={styles.mobileGroupTitle}>{t('settingDialogAsideDataOptionLabel')}</div>
+      <div
+        ref={glassDataCard ? dataCardRef : undefined}
+        className={clsx(styles.mobileCard, glassDataCard && styles.mobileGlassCard)}
+      >
+        <ApiKeySetting />
+        <MobileActionCard
+          embedded
+          label={t('globalMemory')}
+          right={
+            <span className={styles.mobileNavRight}>
+              <IconChevronRightOutline14 />
+            </span>
+          }
+          onAction={openMobileMemory}
+        />
+        <MobileActionCard
+          embedded
+          label={t('importChatsEntry')}
+          right={
+            <span className={styles.mobileNavRight}>
+              <IconChevronRightOutline14 />
+            </span>
+          }
+          onAction={() => openMobileSubPage('importSessions')}
+        />
+        <MobileActionCard
+          embedded
+          label={t('exportInfoTitle')}
+          right={
+            <span className={styles.mobileNavRight}>
+              <IconChevronRightOutline14 />
+            </span>
+          }
+          onAction={() => openMobileSubPage('exportInfo')}
+        />
+      </div>
+      <div className={styles.mobileGroupTitle}>{t('settingsPersonalization')}</div>
+      <div className={styles.mobileCard}>
+        <button
+          type="button"
+          className={styles.mobileNavRow}
+          onClick={() => openMobileSubPage('personalCenter')}
+        >
+          <span className={styles.label}>{t('settingsPersonalCenter')}</span>
+          <span className={styles.mobileNavRight}>
+            <IconChevronRightOutline14 />
+          </span>
+        </button>
+        <button
+          type="button"
+          className={styles.mobileNavRow}
+          onClick={() => openMobileSubPage('nickname')}
+        >
+          <span className={styles.label}>{t('settingsNickname')}</span>
+          <span className={styles.mobileNavRight}>
+            <IconChevronRightOutline14 />
+          </span>
+        </button>
+        <button
+          type="button"
+          className={styles.mobileNavRow}
+          onClick={() => openMobileSubPage('appBackground')}
+        >
+          <span className={styles.label}>{t('settingsAppBackground')}</span>
+          <span className={styles.mobileNavRight}>
+            <IconChevronRightOutline14 />
+          </span>
+        </button>
+      </div>
+      <div className={styles.mobileGroupTitle}>{t('settingGroupChat')}</div>
+      <div className={styles.mobileCard}>
+        <MobileSystemPromptNavRow onOpen={() => openMobileSubPage('systemPrompt')} />
+        <button
+          type="button"
+          className={styles.mobileNavRow}
+          onClick={() => openMobileSubPage('voiceBroadcast')}
+        >
+          <span className={styles.label}>{t('settingsVoiceBroadcast')}</span>
+          <span className={styles.mobileNavRight}>
+            <IconChevronRightOutline14 />
+          </span>
+        </button>
+        <button
+          type="button"
+          className={styles.mobileNavRow}
+          onClick={() => openMobileSubPage('videoUpload')}
+        >
+          <span className={styles.label}>{t('settingsVideoUpload')}</span>
+          <span className={styles.mobileNavRight}>
+            <IconChevronRightOutline14 />
+          </span>
+        </button>
+      </div>
+      <div className={styles.mobileGroupTitle}>{t('settingGroupApp')}</div>
+      <div className={styles.mobileCard}>
+        <MobileLocaleSetting />
+        <MobileThemeSetting />
+        <MobileLocationNavRow onOpen={() => openMobileSubPage('location')} />
+      </div>
+      {APP_VERSION ? <div className={styles.version}>{`v${APP_VERSION}`}</div> : null}
+    </>
+  )
 
   return (
     <>
       <Modal
+        dialogRef={dialogRef}
         title={
           isMobile ? (
             <div className={styles.mobileSubHeader}>
+              {betaMobile ? (
+                <>
+                  <div
+                    ref={headerBgRef}
+                    aria-hidden="true"
+                    className={clsx(
+                      styles.mobileHeaderBackdrop,
+                      (l1Presence.visible || !immersiveMobile) && styles.mobileHeaderBackdropSolid
+                    )}
+                  />
+                  <div
+                    ref={headerDividerRef}
+                    aria-hidden="true"
+                    className={styles.mobileHeaderDivider}
+                  />
+                </>
+              ) : null}
               <button
+                ref={backButtonRef}
                 type="button"
-                className={styles.mobileBackButton}
-                aria-label={t(inMobileSubPage ? 'back' : 'close')}
+                className={clsx(
+                  styles.mobileBackButton,
+                  immersiveMobile && !l1Presence.visible && styles.mobileBackButtonOverlay
+                )}
+                aria-label={t(hasL1 ? 'back' : 'close')}
                 onClick={() => {
-                  if (inMobileSubPage) {
-                    setMobilePage('main')
+                  if (hasL1) {
+                    backFromMobilePage()
                   } else if (!historyDelete.busy) {
                     closeSettings()
                   }
@@ -164,23 +1124,59 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
               </button>
               <span className={styles.mobileTitleStack}>
                 <span
-                  aria-hidden={inMobileSubPage}
+                  aria-hidden={hasL1}
                   className={clsx(
                     styles.mobileTitleItem,
-                    subPresence.visible ? styles.mobileTitleExitLeft : styles.mobileTitleActive
+                    l1Presence.visible ? styles.mobileTitleExitLeft : styles.mobileTitleActive
                   )}
                 >
-                  {t('settings')}
+                  {immersiveMobile ? (
+                    <span ref={rootTitleRef} className={styles.mobileRootTitleInner}>
+                      {t('settings')}
+                    </span>
+                  ) : (
+                    t('settings')
+                  )}
                 </span>
-                {subPresence.mounted && renderedSubPage ? (
+                {l1Presence.mounted && renderedL1 ? (
                   <span
-                    aria-hidden={!inMobileSubPage}
+                    aria-hidden={!hasL1 || hasL2}
                     className={clsx(
                       styles.mobileTitleItem,
-                      subPresence.visible ? styles.mobileTitleActive : styles.mobileTitleEnterRight
+                      l2Presence.visible
+                        ? styles.mobileTitleExitLeft
+                        : l1Presence.visible
+                          ? styles.mobileTitleActive
+                          : styles.mobileTitleEnterRight
                     )}
                   >
-                    {t(MOBILE_SUB_TITLE_KEY[renderedSubPage])}
+                    {t(MOBILE_SUB_TITLE_KEY[renderedL1])}
+                  </span>
+                ) : null}
+                {l2Presence.mounted && renderedL2 ? (
+                  <span
+                    aria-hidden={!hasL2 || hasL3}
+                    className={clsx(
+                      styles.mobileTitleItem,
+                      l3Presence.visible
+                        ? styles.mobileTitleExitLeft
+                        : l2Presence.visible
+                          ? styles.mobileTitleActive
+                          : styles.mobileTitleEnterRight
+                    )}
+                  >
+                    {t(MOBILE_SUB_TITLE_KEY[renderedL2])}
+                  </span>
+                ) : null}
+                {l3Presence.mounted && renderedL3 ? (
+                  <span
+                    aria-hidden={!hasL3}
+                    className={clsx(
+                      styles.mobileTitleItem,
+                      l3Presence.visible ? styles.mobileTitleActive : styles.mobileTitleEnterRight
+                    )}
+                  >
+                    {t(MOBILE_SUB_TITLE_KEY[renderedL3])}
                   </span>
                 ) : null}
               </span>
@@ -193,14 +1189,18 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
         visible={visible}
         fullscreen={isMobile}
         overlayClassName={clsx(styles.settingsOverlay, visible && styles.settingsOverlayVisible)}
-        className={clsx(styles.dialog, visible && styles.dialogVisible)}
+        className={clsx(
+          styles.dialog,
+          visible && styles.dialogVisible,
+          betaMobile && styles.dialogImmersive
+        )}
         mainClassName={styles.dialogMain}
         onClose={() => {
           if (historyDelete.busy) {
             return
           }
-          if (inMobileSubPage) {
-            setMobilePage('main')
+          if (hasL1) {
+            backFromMobilePage()
             return
           }
           closeSettings()
@@ -208,60 +1208,254 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
       >
         {isMobile ? (
           <div className={styles.mobilePageViewport}>
+            {immersiveMobile ? (
+              <div
+                className={clsx(
+                  styles.floatingAvatarLayer,
+                  l1Presence.visible && styles.floatingAvatarLayerHidden
+                )}
+                aria-hidden={hasL1 || undefined}
+              >
+                <div
+                  ref={floatingAvatarRef}
+                  className={clsx(
+                    styles.floatingAvatarAnchor,
+                    !hasAccountLabel && styles.floatingAvatarAnchorLarge
+                  )}
+                >
+                  <div
+                    ref={avatarShadowRef}
+                    className={styles.heroAvatarShadow}
+                    aria-hidden="true"
+                  />
+                  <div ref={avatar3dRef} className={styles.heroAvatar3d}>
+                    <button
+                      type="button"
+                      className={styles.floatingAvatarHit}
+                      aria-label={t('accountChangeAvatar')}
+                      onClick={handleFloatingAvatarClick}
+                    >
+                      <AccountAvatar
+                        src={account.avatarDataUrl}
+                        className={styles.heroAvatarCircle}
+                        iconClassName={styles.heroAvatarDefaultIcon}
+                      />
+                      <span
+                        ref={avatarSheenRef}
+                        className={styles.heroAvatarSheen}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  </div>
+                  <button
+                    ref={editBadgeRef}
+                    type="button"
+                    className={clsx(
+                      styles.heroAvatarEditButton,
+                      account.coverDataUrl && styles.heroEditOnCover
+                    )}
+                    aria-label={t('accountChangeAvatar')}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      avatarPicker.openPickerOrMenu()
+                    }}
+                  >
+                    <span ref={avatarEditParallaxRef} className={styles.heroParallaxLayer}>
+                      <IconEditOutline16 />
+                    </span>
+                  </button>
+                </div>
+              </div>
+            ) : null}
             <div
               ref={mobileMainRef}
               className={clsx(
                 styles.mobileMainPage,
-                subPresence.visible && styles.mobileMainPagePushed
+                l1Presence.visible && styles.mobileMainPagePushed
               )}
-              aria-hidden={inMobileSubPage}
+              aria-hidden={hasL1}
             >
-              <div className={styles.content}>
-                <div className={styles.mobileGroupTitle}>
-                  {t('settingDialogAsideDataOptionLabel')}
-                </div>
-                <div className={styles.mobileCard}>
-                  <ApiKeySetting />
-                  <button
-                    type="button"
-                    className={styles.mobileNavRow}
-                    onClick={() => openMobileSubPage('data')}
+              {immersiveMobile ? (
+                <>
+                  <div ref={heroBgRef} className={styles.mobileHeroBackdrop} aria-hidden="true">
+                    <div ref={heroBgParallaxRef} className={styles.mobileHeroBackdropParallax}>
+                      {account.coverDataUrl ? (
+                        <>
+                          <img
+                            src={account.coverDataUrl}
+                            alt=""
+                            draggable={false}
+                            className={styles.mobileHeroCoverImage}
+                          />
+                          <div className={styles.mobileHeroCoverScrim} />
+                        </>
+                      ) : null}
+                    </div>
+                    <div className={styles.mobileHeroBackdropFade} />
+                  </div>
+                  <div
+                    ref={mobileScrollRef}
+                    className={styles.mobileImmersiveScroll}
+                    onScroll={(event) => handleImmersiveScroll(event.currentTarget.scrollTop)}
                   >
-                    <span className={styles.label}>{t('settingDialogAsideDataOptionLabel')}</span>
-                    <span className={styles.mobileNavRight}>
-                      <IconChevronRightOutline14 />
-                    </span>
-                  </button>
+                    <div className={styles.mobileHeroSpacer}>
+                      {hasAccountLabel ? (
+                        <div ref={heroIdentityRef} className={styles.mobileHeroIdentity}>
+                          <span
+                            ref={identityParallaxRef}
+                            className={clsx(
+                              styles.mobileHeroAccountLabel,
+                              account.coverDataUrl && styles.heroLabelOnCover
+                            )}
+                          >
+                            {accountLabel}
+                          </span>
+                        </div>
+                      ) : null}
+                      <button
+                        ref={coverEditRef}
+                        type="button"
+                        className={clsx(
+                          styles.heroCoverEditButton,
+                          account.coverDataUrl && styles.heroEditOnCover
+                        )}
+                        aria-label={t('accountChangeCover')}
+                        onClick={coverPicker.openPickerOrMenu}
+                      >
+                        <span ref={coverEditParallaxRef} className={styles.heroParallaxLayer}>
+                          <IconEditOutline16 />
+                        </span>
+                      </button>
+                    </div>
+                    <div className={styles.mobileSettingsSheet}>
+                      <div
+                        ref={sheetGlassRef}
+                        className={styles.mobileSettingsSheetGlass}
+                        aria-hidden="true"
+                      />
+                      <div className={styles.mobileSettingsSheetLower} aria-hidden="true" />
+                      <div
+                        ref={sheetSolidRef}
+                        className={styles.mobileSettingsSheetSolid}
+                        aria-hidden="true"
+                      />
+                      <div className={styles.mobileSettingsSheetContent}>
+                        {renderBetaMobileGroups(true)}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : betaMobile ? (
+                <div
+                  ref={mobilePlainScrollRef}
+                  className={clsx(styles.content, styles.mobilePlainScroll)}
+                  onScroll={(event) => {
+                    const target = event.currentTarget
+                    const scrolled =
+                      target.scrollTop > 2 && target.scrollHeight > target.clientHeight + 1
+                    if (layerScrolledRef.current[0] !== scrolled) {
+                      layerScrolledRef.current[0] = scrolled
+                      syncHeaderDivider()
+                    }
+                  }}
+                >
+                  {renderBetaMobileGroups(false)}
                 </div>
-                <div className={styles.mobileGroupTitle}>{t('settingGroupApp')}</div>
-                <div className={styles.mobileCard}>
-                  <MobileLocaleSetting />
-                  <MobileThemeSetting />
-                  <MobileLocationNavRow onOpen={() => openMobileSubPage('location')} />
+              ) : (
+                <div className={styles.content}>
+                  <div className={styles.mobileGroupTitle}>
+                    {t('settingDialogAsideDataOptionLabel')}
+                  </div>
+                  <div className={styles.mobileCard}>
+                    <ApiKeySetting />
+                    <button
+                      type="button"
+                      className={styles.mobileNavRow}
+                      onClick={() => openMobileSubPage('data')}
+                    >
+                      <span className={styles.label}>{t('settingDialogAsideDataOptionLabel')}</span>
+                      <span className={styles.mobileNavRight}>
+                        <IconChevronRightOutline14 />
+                      </span>
+                    </button>
+                  </div>
+                  <div className={styles.mobileGroupTitle}>{t('settingGroupApp')}</div>
+                  <div className={styles.mobileCard}>
+                    <MobileLocaleSetting />
+                    <MobileThemeSetting />
+                    <MobileLocationNavRow onOpen={() => openMobileSubPage('location')} />
+                  </div>
+                  <div className={styles.mobileGroupTitle}>{t('settingGroupChat')}</div>
+                  <div className={styles.mobileCard}>
+                    <MobileSystemPromptNavRow onOpen={() => openMobileSubPage('systemPrompt')} />
+                    <button
+                      type="button"
+                      className={styles.mobileNavRow}
+                      onClick={() => openMobileSubPage('voiceBroadcast')}
+                    >
+                      <span className={styles.label}>{t('settingsVoiceBroadcast')}</span>
+                      <span className={styles.mobileNavRight}>
+                        <IconChevronRightOutline14 />
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.mobileNavRow}
+                      onClick={() => openMobileSubPage('videoUpload')}
+                    >
+                      <span className={styles.label}>{t('settingsVideoUpload')}</span>
+                      <span className={styles.mobileNavRight}>
+                        <IconChevronRightOutline14 />
+                      </span>
+                    </button>
+                  </div>
+                  {APP_VERSION ? <div className={styles.version}>{`v${APP_VERSION}`}</div> : null}
                 </div>
-                <div className={styles.mobileGroupTitle}>{t('settingGroupChat')}</div>
-                <div className={styles.mobileCard}>
-                  <MobileSystemPromptNavRow onOpen={() => openMobileSubPage('systemPrompt')} />
-                  <MobileTtsVoiceSetting />
-                  <MobileAutoReadAloudSetting />
-                  <MobileRpModeNavRow onOpen={() => openMobileSubPage('rpMode')} />
-                  <VideoSettings />
-                  <QuickCameraShortcutSetting />
-                </div>
-              </div>
+              )}
             </div>
-            {subPresence.mounted && renderedSubPage ? (
-              <div
-                ref={mobileSubRef}
-                className={clsx(
-                  styles.mobileSubPage,
-                  subPresence.visible && styles.mobileSubPageVisible
-                )}
+            {l1Presence.mounted && renderedL1 ? (
+              <MobileSubLayer
+                visible={l1Presence.visible}
+                pushed={l2Presence.visible}
+                level={1}
+                onScrolledChange={handleSubLayerScrolledChange}
               >
-                {renderedSubPage === 'data' ? (
+                {renderedL1 === 'data' ? (
                   <div className={clsx(styles.content, styles.mobileDataContent)}>
                     <ImportHistory historyImport={historyImport} disabled={historyBusy} />
                     <ImportHistoryFromUrl urlImport={historyUrlImport} disabled={historyBusy} />
+                    <ExportHistory disabled={historyBusy} />
+                    {__BETA__ ? (
+                      <MobileActionCard
+                        label={t('globalMemory')}
+                        right={
+                          <span className={styles.mobileNavRight}>
+                            <IconChevronRightOutline14 />
+                          </span>
+                        }
+                        onAction={openMobileMemory}
+                      />
+                    ) : null}
+                    <MobileActionCard
+                      danger
+                      label={t('deleteAllSessions')}
+                      disabled={historyBusy}
+                      onAction={historyDelete.open}
+                    />
+                  </div>
+                ) : renderedL1 === 'personalCenter' ? (
+                  <PersonalCenterPage />
+                ) : renderedL1 === 'nickname' ? (
+                  <MobileNicknamePage />
+                ) : renderedL1 === 'appBackground' ? (
+                  <AppBackgroundPage onOpenChatBackground={openMobileChatBackground} />
+                ) : renderedL1 === 'importSessions' ? (
+                  <div className={clsx(styles.content, styles.mobileDataContent)}>
+                    <ImportHistory historyImport={historyImport} disabled={historyBusy} />
+                    <ImportHistoryFromUrl urlImport={historyUrlImport} disabled={historyBusy} />
+                  </div>
+                ) : renderedL1 === 'exportInfo' ? (
+                  <div className={clsx(styles.content, styles.mobileDataContent)}>
                     <ExportHistory disabled={historyBusy} />
                     <MobileActionCard
                       danger
@@ -270,14 +1464,54 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
                       onAction={historyDelete.open}
                     />
                   </div>
-                ) : renderedSubPage === 'location' ? (
+                ) : renderedL1 === 'voiceBroadcast' ? (
+                  <div className={clsx(styles.content, styles.mobileLocationContent)}>
+                    <div className={styles.mobileCard}>
+                      <MobileAutoReadAloudSetting />
+                      <MobileTtsVoiceSetting />
+                    </div>
+                  </div>
+                ) : renderedL1 === 'videoUpload' ? (
+                  <div className={clsx(styles.content, styles.mobileLocationContent)}>
+                    <div className={styles.mobileCard}>
+                      <VideoSettings />
+                      <QuickCameraShortcutSetting />
+                    </div>
+                  </div>
+                ) : renderedL1 === 'globalMemory' ? (
+                  <GlobalMemoryPage disabled={historyBusy} onOpenFile={openMobileMemoryFile} />
+                ) : renderedL1 === 'location' ? (
                   <MobileLocationPage />
-                ) : renderedSubPage === 'systemPrompt' ? (
-                  <MobileSystemPromptPage />
                 ) : (
-                  <MobileRpModePage />
+                  <MobileSystemPromptPage />
                 )}
-              </div>
+              </MobileSubLayer>
+            ) : null}
+            {l2Presence.mounted && renderedL2 ? (
+              <MobileSubLayer
+                visible={l2Presence.visible}
+                pushed={l3Presence.visible}
+                level={2}
+                onScrolledChange={handleSubLayerScrolledChange}
+              >
+                {renderedL2 === 'memoryFile' ? (
+                  <MemoryFilePage disabled={historyBusy} />
+                ) : renderedL2 === 'chatBackground' ? (
+                  <ChatBackgroundPage />
+                ) : (
+                  <GlobalMemoryPage disabled={historyBusy} onOpenFile={openMobileMemoryFile} />
+                )}
+              </MobileSubLayer>
+            ) : null}
+            {l3Presence.mounted && renderedL3 ? (
+              <MobileSubLayer
+                visible={l3Presence.visible}
+                pushed={false}
+                level={3}
+                onScrolledChange={handleSubLayerScrolledChange}
+              >
+                <MemoryFilePage disabled={historyBusy} />
+              </MobileSubLayer>
             ) : null}
           </div>
         ) : (
@@ -290,56 +1524,164 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
                   role="tab"
                   aria-selected={section === item.value}
                   className={clsx(styles.navItem, section === item.value && styles.navItemActive)}
-                  onClick={() => setSection(item.value)}
+                  onClick={() => {
+                    setSection(item.value)
+                    setDesktopSubPage(null)
+                  }}
                 >
                   {item.icon}
                   {t(item.label)}
                 </button>
               ))}
+              {APP_VERSION ? <div className={styles.version}>{`v${APP_VERSION}`}</div> : null}
             </div>
-            <div role="tabpanel" className={styles.content}>
-              {section === 'general' ? (
-                <>
-                  <ThemeSetting />
-                  <LocaleSetting />
-                  <TtsVoiceSetting />
-                  <AutoReadAloudSetting />
-                  <LocationSetting />
-                  <AiLocationSetting />
-                  <SystemPromptSetting />
-                  <RpModeSetting />
-                  <VideoSettings />
-                </>
-              ) : (
-                <>
-                  <ApiKeySetting />
-                  <ImportHistory historyImport={historyImport} disabled={historyBusy} />
-                  <ImportHistoryFromUrl urlImport={historyUrlImport} disabled={historyBusy} />
-                  <ExportHistory disabled={historyBusy} />
-                  <SettingCell
-                    label={t('deleteAllSessions')}
-                    status={null}
-                    action={
-                      <Button
-                        variant="dangerOutlined"
-                        size="m"
-                        className={styles.cellButton}
-                        disabled={historyBusy}
-                        onClick={historyDelete.open}
-                      >
-                        {t('delete')}
-                      </Button>
+            {section === 'data' && desktopSubPage ? (
+              <div role="tabpanel" className={styles.desktopSubPanel}>
+                <div className={styles.desktopSubHeader}>
+                  <IconButton
+                    size="xs"
+                    tone="primary"
+                    className={styles.desktopBackButton}
+                    aria-label={t('back')}
+                    icon={<IconChevronRightOutline14 />}
+                    onClick={() =>
+                      setDesktopSubPage(
+                        desktopSubPage === 'memoryFile'
+                          ? 'globalMemory'
+                          : desktopSubPage === 'chatBackground'
+                            ? 'appBackground'
+                            : null
+                      )
                     }
                   />
-                </>
-              )}
-            </div>
+                  <span className={styles.desktopSubTitle}>
+                    {t(MOBILE_SUB_TITLE_KEY[desktopSubPage])}
+                  </span>
+                </div>
+                {desktopSubPage === 'globalMemory' ? (
+                  <GlobalMemoryPage
+                    disabled={historyBusy}
+                    onOpenFile={() => setDesktopSubPage('memoryFile')}
+                  />
+                ) : desktopSubPage === 'memoryFile' ? (
+                  <MemoryFilePage disabled={historyBusy} />
+                ) : desktopSubPage === 'personalCenter' ? (
+                  <PersonalCenterPage />
+                ) : desktopSubPage === 'appBackground' ? (
+                  <AppBackgroundPage
+                    onOpenChatBackground={() => setDesktopSubPage('chatBackground')}
+                  />
+                ) : (
+                  <ChatBackgroundPage />
+                )}
+              </div>
+            ) : (
+              <div role="tabpanel" className={styles.content}>
+                {section === 'general' ? (
+                  <>
+                    <ThemeSetting />
+                    <LocaleSetting />
+                    <TtsVoiceSetting />
+                    <AutoReadAloudSetting />
+                    <LocationSetting />
+                    <AiLocationSetting />
+                    <SystemPromptSetting />
+                    <VideoSettings />
+                  </>
+                ) : (
+                  <>
+                    {__BETA__ ? (
+                      <>
+                        {personalCenterEnabled ? (
+                          <DesktopAccountHero
+                            avatarDataUrl={account.avatarDataUrl}
+                            coverDataUrl={account.coverDataUrl}
+                            accountLabel={accountLabel}
+                            avatarAriaLabel={t('accountChangeAvatar')}
+                            coverAriaLabel={t('accountChangeCover')}
+                            onEditAvatar={avatarPicker.openPickerOrMenu}
+                            onEditCover={coverPicker.openPickerOrMenu}
+                          />
+                        ) : null}
+                        <SettingCell
+                          label={t('settingsPersonalCenter')}
+                          status={null}
+                          action={
+                            <Button
+                              variant="outlined"
+                              size="m"
+                              className={styles.cellButton}
+                              onClick={() => setDesktopSubPage('personalCenter')}
+                            >
+                              {t('memoryManage')}
+                            </Button>
+                          }
+                        />
+                        <NicknameSetting />
+                        <NicknameForReplySetting />
+                        <SettingCell
+                          label={t('settingsAppBackground')}
+                          status={null}
+                          action={
+                            <Button
+                              variant="outlined"
+                              size="m"
+                              className={styles.cellButton}
+                              onClick={() => setDesktopSubPage('appBackground')}
+                            >
+                              {t('memoryManage')}
+                            </Button>
+                          }
+                        />
+                      </>
+                    ) : null}
+                    <ApiKeySetting />
+                    <ImportHistory historyImport={historyImport} disabled={historyBusy} />
+                    <ImportHistoryFromUrl urlImport={historyUrlImport} disabled={historyBusy} />
+                    <ExportHistory disabled={historyBusy} />
+                    {__BETA__ ? (
+                      <SettingCell
+                        label={t('globalMemory')}
+                        status={null}
+                        action={
+                          <Button
+                            variant="outlined"
+                            size="m"
+                            className={styles.cellButton}
+                            onClick={() => setDesktopSubPage('globalMemory')}
+                          >
+                            {t('memoryManage')}
+                          </Button>
+                        }
+                      />
+                    ) : null}
+                    <SettingCell
+                      label={t('deleteAllSessions')}
+                      status={null}
+                      action={
+                        <Button
+                          variant="dangerOutlined"
+                          size="m"
+                          className={styles.cellButton}
+                          disabled={historyBusy}
+                          onClick={historyDelete.open}
+                        >
+                          {t('delete')}
+                        </Button>
+                      }
+                    />
+                  </>
+                )}
+              </div>
+            )}
           </>
         )}
       </Modal>
-      {historyImport.file ? <ImportConfirm historyImport={historyImport} /> : null}
+      <AccountImagePickerControls picker={avatarPicker} />
+      <AccountImagePickerControls picker={coverPicker} />
+      <ImportConfirm historyImport={historyImport} />
       <UrlImportDialog urlImport={historyUrlImport} />
-      {historyDelete.opened ? <DeleteAllConfirm historyDelete={historyDelete} /> : null}
+      <DeleteAllConfirm historyDelete={historyDelete} />
     </>
   )
 }
@@ -351,16 +1693,22 @@ const DeleteAllConfirm = ({
   historyDelete: ReturnType<typeof useHistoryDelete>
 }) => {
   const t = useTranslate()
+  const isMobile = useIsMobile()
+  const presence = usePresence(historyDelete.opened, 220)
+  if (!presence.mounted) {
+    return null
+  }
   return (
     <Modal
       title={t('deleteAllSessionsModalTitle')}
+      visible={presence.visible}
       className={styles.deleteConfirm}
       onClose={historyDelete.cancel}
       footer={
         <div className={styles.deleteActions} aria-busy={historyDelete.busy}>
           <Button
             variant="outlined"
-            autoFocus
+            autoFocus={!isMobile}
             disabled={historyDelete.busy}
             onClick={historyDelete.cancel}
           >
@@ -368,7 +1716,7 @@ const DeleteAllConfirm = ({
           </Button>
           <Button
             variant="danger"
-            disabled={historyDelete.busy}
+            disabled={historyDelete.busy || !historyDelete.opened}
             onClick={() => void historyDelete.confirm()}
           >
             {t(historyDelete.busy ? 'historyDeleting' : 'deleteAllSessions')}
@@ -416,6 +1764,245 @@ const useHistoryDelete = () => {
     confirm,
   }
 }
+
+/** 设置昵称：顶替默认手机号显示，留空保存则恢复默认手机号占位 */
+const NicknameSetting = ({
+  mobileLabelKey = 'settingsNickname',
+}: {
+  mobileLabelKey?: TranslationKey
+}) => {
+  const t = useTranslate()
+  const isMobile = useIsMobile()
+  const nickname = useMockAccount((state) => state.nickname)
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState(nickname)
+  const sheetPresence = usePresence(open && isMobile, 280)
+  const modalPresence = usePresence(open && !isMobile, 220)
+
+  const openModal = () => {
+    setDraft(nickname)
+    setOpen(true)
+  }
+
+  const closeModal = () => {
+    setOpen(false)
+  }
+
+  const handleConfirm = () => {
+    const next = draft
+      .replace(/[\r\n]+/g, ' ')
+      .trim()
+      .slice(0, MAX_ACCOUNT_NICKNAME_LENGTH)
+    if (next === nickname) {
+      setOpen(false)
+      return
+    }
+    setMockAccountNickname(next)
+    setOpen(false)
+    showToast(
+      { key: next ? 'settingsNicknameUpdated' : 'settingsNicknameCleared' },
+      { placement: 'center' }
+    )
+  }
+
+  const content = (
+    <div className={styles.apiKeyModalBody}>
+      <div className={styles.apiKeyInput}>
+        <input
+          type="text"
+          aria-label={t('settingsNickname')}
+          placeholder={t('settingsNicknamePlaceholder')}
+          maxLength={MAX_ACCOUNT_NICKNAME_LENGTH}
+          autoComplete="nickname"
+          // 移动端不自动聚焦：抽屉滑入与软键盘同时进行会整段掉帧，交给用户点
+          autoFocus={!isMobile}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+              handleConfirm()
+            }
+          }}
+        />
+      </div>
+      {draft ? (
+        <div className={styles.promptEditorFooterMeta}>
+          <button type="button" className={styles.promptResetButton} onClick={() => setDraft('')}>
+            {t('searchClear')}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  )
+
+  return (
+    <>
+      {isMobile ? (
+        <button type="button" className={styles.mobileNavRow} onClick={openModal}>
+          <span className={styles.label}>{t(mobileLabelKey)}</span>
+          <span className={styles.mobileNavRight}>
+            <span className={styles.mobileNavValue}>{nickname || t('settingsNicknameNotSet')}</span>
+            <IconChevronRightOutline14 />
+          </span>
+        </button>
+      ) : (
+        <SettingCell
+          label={t('settingsNickname')}
+          description={nickname || t('settingsNicknameNotSet')}
+          status={null}
+          action={
+            <Button variant="outlined" size="m" className={styles.cellButton} onClick={openModal}>
+              {t('settingsEditAction')}
+            </Button>
+          }
+        />
+      )}
+
+      {isMobile ? (
+        sheetPresence.mounted ? (
+          <Modal
+            title={t('settingsNickname')}
+            closable
+            visible={sheetPresence.visible}
+            className={clsx(styles.urlSheet, sheetPresence.visible && styles.sheetVisible)}
+            mainClassName={styles.urlSheetMain}
+            onClose={closeModal}
+          >
+            <div className={styles.promptStage}>{content}</div>
+            <button
+              type="button"
+              className={styles.ttsSheetConfirm}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={handleConfirm}
+            >
+              {t('confirm')}
+            </button>
+          </Modal>
+        ) : null
+      ) : modalPresence.mounted ? (
+        <Modal
+          title={t('settingsNickname')}
+          visible={modalPresence.visible}
+          className={styles.urlModal}
+          onClose={closeModal}
+          footer={
+            <>
+              <Button variant="outlined" size="m" onClick={closeModal}>
+                {t('cancel')}
+              </Button>
+              <Button
+                variant="primary"
+                size="m"
+                disabled={!open}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={handleConfirm}
+              >
+                {t('confirm')}
+              </Button>
+            </>
+          }
+        >
+          {content}
+        </Modal>
+      ) : null}
+    </>
+  )
+}
+
+/** 昵称用于回复开关：开启后在快速模式、专家模式随提示词一并发送 */
+const NicknameForReplySetting = () => {
+  const t = useTranslate()
+  const isMobile = useIsMobile()
+  const useNicknameInReply = useMockAccount((state) => state.useNicknameInReply)
+  const label = t('settingsNicknameForReply')
+  const description = t('settingsNicknameForReplyDesc')
+
+  if (isMobile) {
+    return (
+      <div className={clsx(styles.cell, styles.switchHeader)}>
+        <div className={styles.labelRow}>
+          <span className={styles.label}>{label}</span>
+          <InfoModalButton ariaLabel={label} description={description} />
+        </div>
+        <Switch
+          checked={useNicknameInReply}
+          ariaLabel={label}
+          onChange={setMockAccountUseNicknameInReply}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <SettingCell
+      label={label}
+      description={description}
+      infoAsModal
+      status={null}
+      action={
+        <Switch
+          checked={useNicknameInReply}
+          ariaLabel={label}
+          onChange={setMockAccountUseNicknameInReply}
+        />
+      }
+    />
+  )
+}
+
+/** 独立的「个人中心」页面：开启或关闭顶部背景图、头像、昵称展示与侧边栏账号入口 */
+const PersonalCenterPage = () => {
+  const t = useTranslate()
+  const isMobile = useIsMobile()
+  const personalCenterEnabled = useSettings((state) => state.personalCenterEnabled)
+  const label = t('settingsPersonalCenter')
+  const description = t('settingsPersonalCenterDesc')
+
+  if (isMobile) {
+    return (
+      <div className={clsx(styles.content, styles.mobileLocationContent)}>
+        <div className={styles.mobileCard}>
+          <div className={clsx(styles.cell, styles.switchHeader)}>
+            <span className={styles.label}>{label}</span>
+            <Switch
+              checked={personalCenterEnabled}
+              ariaLabel={label}
+              onChange={setPersonalCenterEnabled}
+            />
+          </div>
+        </div>
+        <p className={styles.mobileCardHint}>{description}</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className={styles.desktopSubScroll}>
+      <SettingCell
+        label={label}
+        description={description}
+        status={null}
+        action={
+          <Switch
+            checked={personalCenterEnabled}
+            ariaLabel={label}
+            onChange={setPersonalCenterEnabled}
+          />
+        }
+      />
+    </div>
+  )
+}
+
+/** 移动端独立的「设置昵称」二级页面：含昵称编辑项与「昵称用于回复」开关 */
+const MobileNicknamePage = () => (
+  <div className={clsx(styles.content, styles.mobileLocationContent)}>
+    <div className={styles.mobileCard}>
+      <NicknameSetting mobileLabelKey="settingsNicknameField" />
+      <NicknameForReplySetting />
+    </div>
+  </div>
+)
 
 const LocaleSetting = () => {
   const t = useTranslate()
@@ -605,13 +2192,19 @@ const MobileTtsVoiceSetting = () => {
   )
 }
 
-/** 移动端自动朗读：开关行，置于朗读音色下方 */
+/** 移动端自动朗读：开关行，置于语音播报子页面内 */
 const MobileAutoReadAloudSetting = () => {
   const t = useTranslate()
   const autoReadAloud = useSettings((state) => state.autoReadAloud)
   return (
-    <div className={styles.mobileNavRow}>
-      <span className={styles.label}>{t('settingsAutoReadAloud')}</span>
+    <div className={clsx(styles.cell, styles.switchHeader)}>
+      <div className={styles.labelRow}>
+        <span className={styles.label}>{t('settingsAutoReadAloud')}</span>
+        <InfoModalButton
+          ariaLabel={t('settingsAutoReadAloud')}
+          description={t('settingsAutoReadAloudDesc')}
+        />
+      </div>
       <Switch
         checked={autoReadAloud}
         ariaLabel={t('settingsAutoReadAloud')}
@@ -709,17 +2302,28 @@ const ImportConfirm = ({
   historyImport: ReturnType<typeof useHistoryImport>
 }) => {
   const t = useTranslate()
+  const isMobile = useIsMobile()
+  const presence = usePresence(historyImport.file !== null, 220)
+  if (!presence.mounted) {
+    return null
+  }
   return (
     <Modal
       title={t('historyImportConfirmTitle')}
+      visible={presence.visible}
       className={styles.importConfirm}
       onClose={historyImport.cancel}
       footer={
         <>
-          <Button variant="outlined" size="m" autoFocus onClick={historyImport.cancel}>
+          <Button variant="outlined" size="m" autoFocus={!isMobile} onClick={historyImport.cancel}>
             {t('cancel')}
           </Button>
-          <Button variant="dangerOutlined" size="m" onClick={() => void historyImport.confirm()}>
+          <Button
+            variant="dangerOutlined"
+            size="m"
+            disabled={!historyImport.file}
+            onClick={() => void historyImport.confirm()}
+          >
             {t('historyImportConfirm')}
           </Button>
         </>
@@ -993,9 +2597,11 @@ const useHistoryImport = () => {
 const ImportHistory = ({
   historyImport,
   disabled,
+  embedded = false,
 }: {
   historyImport: ReturnType<typeof useHistoryImport>
   disabled: boolean
+  embedded?: boolean
 }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
@@ -1027,6 +2633,7 @@ const ImportHistory = ({
       : null
     return (
       <MobileActionCard
+        embedded={embedded}
         label={t('historyImport')}
         description={t('historyImportDescription')}
         statusText={statusText}
@@ -1142,9 +2749,11 @@ const useHistoryUrlImport = () => {
 const ImportHistoryFromUrl = ({
   urlImport,
   disabled,
+  embedded = false,
 }: {
   urlImport: ReturnType<typeof useHistoryUrlImport>
   disabled: boolean
+  embedded?: boolean
 }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
@@ -1152,6 +2761,7 @@ const ImportHistoryFromUrl = ({
   if (isMobile) {
     return (
       <MobileActionCard
+        embedded={embedded}
         label={t('historyImportFromUrl')}
         description={t('historyImportFromUrlDescription')}
         disabled={disabled}
@@ -1186,6 +2796,7 @@ const UrlImportDialog = ({ urlImport }: { urlImport: ReturnType<typeof useHistor
   const t = useTranslate()
   const isMobile = useIsMobile()
   const sheetPresence = usePresence(urlImport.open && isMobile, 280)
+  const modalPresence = usePresence(urlImport.open && !isMobile, 220)
   const { progress } = urlImport
   const confirmLabel =
     progress === null
@@ -1241,13 +2852,14 @@ const UrlImportDialog = ({ urlImport }: { urlImport: ReturnType<typeof useHistor
     )
   }
 
-  if (!urlImport.open) {
+  if (!modalPresence.mounted) {
     return null
   }
 
   return (
     <Modal
       title={t('historyUrlModalTitle')}
+      visible={modalPresence.visible}
       className={styles.urlModal}
       onClose={urlImport.closeModal}
       footer={
@@ -1258,7 +2870,7 @@ const UrlImportDialog = ({ urlImport }: { urlImport: ReturnType<typeof useHistor
           <Button
             variant="primary"
             size="m"
-            disabled={urlImport.busy}
+            disabled={urlImport.busy || !urlImport.open}
             onClick={() => void urlImport.submit()}
           >
             {confirmLabel}
@@ -1298,7 +2910,13 @@ const exportRecordStatus = (record: ExportRecord | null): Status => {
 }
 
 /** 将全部会话及图片导出为 ZIP 文件并下载；导出结果与路径展示在卡片/标题下方 */
-const ExportHistory = ({ disabled }: { disabled: boolean }) => {
+const ExportHistory = ({
+  disabled,
+  embedded = false,
+}: {
+  disabled: boolean
+  embedded?: boolean
+}) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
   const empty = useChatStore((state) => state.sessions.length === 0)
@@ -1343,6 +2961,31 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
     const hintText = status
       ? t(status.key, status.reason ? { message: t(status.reason) } : status.params)
       : null
+
+    if (embedded) {
+      return (
+        <>
+          <MobileActionCard
+            embedded
+            label={t('exportAllLabel')}
+            description={t('historyExportDescription')}
+            disabled={actionDisabled}
+            onAction={() => void onExport()}
+          />
+          {hintText ? (
+            <div
+              className={clsx(
+                styles.mobileEmbeddedHint,
+                status?.error && styles.mobileCardHintError
+              )}
+            >
+              <span>{hintText}</span>
+              {openFolderLink}
+            </div>
+          ) : null}
+        </>
+      )
+    }
 
     return (
       <div className={styles.mobileActionGroup}>

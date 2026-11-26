@@ -250,6 +250,41 @@ if (typeof Array.prototype.toSorted !== 'function') {
 }
 
 if (
+  typeof AbortController !== 'undefined' &&
+  typeof AbortSignal !== 'undefined' &&
+  !('reason' in AbortSignal.prototype)
+) {
+  const reasons = new WeakMap<AbortSignal, unknown>()
+  const nativeAbort = AbortController.prototype.abort
+  Object.defineProperty(AbortSignal.prototype, 'reason', {
+    get(this: AbortSignal): unknown {
+      if (!this.aborted) {
+        return undefined
+      }
+      return reasons.has(this)
+        ? reasons.get(this)
+        : new DOMException('The operation was aborted.', 'AbortError')
+    },
+    configurable: true,
+  })
+  Object.defineProperty(AbortController.prototype, 'abort', {
+    value(this: AbortController, reason?: unknown): void {
+      if (!this.signal.aborted) {
+        reasons.set(
+          this.signal,
+          reason !== undefined
+            ? reason
+            : new DOMException('The operation was aborted.', 'AbortError')
+        )
+      }
+      nativeAbort.call(this)
+    },
+    configurable: true,
+    writable: true,
+  })
+}
+
+if (
   typeof AbortSignal !== 'undefined' &&
   typeof AbortSignal.prototype.throwIfAborted !== 'function'
 ) {
@@ -261,6 +296,61 @@ if (
           ? reason
           : new DOMException('The operation was aborted.', 'AbortError')
       }
+    },
+    configurable: true,
+    writable: true,
+  })
+}
+
+if (typeof Blob !== 'undefined' && typeof Blob.prototype.arrayBuffer !== 'function') {
+  Object.defineProperty(Blob.prototype, 'arrayBuffer', {
+    value(this: Blob): Promise<ArrayBuffer> {
+      if (typeof FileReader !== 'undefined') {
+        return new Promise<ArrayBuffer>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result as ArrayBuffer)
+          reader.onerror = () => reject(reader.error ?? new Error('Failed to read blob'))
+          reader.readAsArrayBuffer(this)
+        })
+      }
+      return new Response(this).arrayBuffer()
+    },
+    configurable: true,
+    writable: true,
+  })
+}
+
+// Blob.text / Blob.stream 在 Chromium 76 才加入；旧内核的会话导入与分片导出依赖它们。
+if (typeof Blob !== 'undefined' && typeof Blob.prototype.text !== 'function') {
+  Object.defineProperty(Blob.prototype, 'text', {
+    value(this: Blob): Promise<string> {
+      return this.arrayBuffer().then((buffer) => new TextDecoder().decode(buffer))
+    },
+    configurable: true,
+    writable: true,
+  })
+}
+
+if (typeof Blob !== 'undefined' && typeof Blob.prototype.stream !== 'function') {
+  Object.defineProperty(Blob.prototype, 'stream', {
+    value(this: Blob): ReadableStream<Uint8Array> {
+      let offset = 0
+      const chunkSize = 64 * 1024
+      return new ReadableStream<Uint8Array>({
+        pull: async (controller) => {
+          if (offset >= this.size) {
+            controller.close()
+            return
+          }
+          const chunk = this.slice(offset, offset + chunkSize)
+          const buffer = await chunk.arrayBuffer()
+          offset += chunk.size
+          controller.enqueue(new Uint8Array(buffer))
+          if (offset >= this.size) {
+            controller.close()
+          }
+        },
+      })
     },
     configurable: true,
     writable: true,

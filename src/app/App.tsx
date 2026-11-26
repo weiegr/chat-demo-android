@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { useTranslate } from '../i18n/index.js'
 import { initApiKey, useSettings } from '../services/settings.js'
+import { initChatBackgrounds, useActiveChatBackgroundUrl } from '../services/chatBackground.js'
 import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport.js'
 import {
   bindChatPersistence,
@@ -17,10 +18,15 @@ import { closeSearchPanel } from '../components/search/searchPanelState.js'
 import { ChatSearchView } from '../components/search/ChatSearchView.js'
 import { openChatSearch, useChatSearch } from '../components/search/chatSearchState.js'
 import { SessionView } from '../components/session/SessionView.js'
+import {
+  ComposerSnapshotBridge,
+  type ComposerViewKind,
+} from '../components/session/composerTransition.js'
 import { LiveCallView } from '../components/live/LiveCallView.js'
 import type { LiveCall } from '../components/live/useLiveCall.js'
 import { createSpeechOutput, type SpeechOutput } from '../services/speech/pcmPlayback.js'
 import { MobileHeader } from '../components/session/MobileHeader.js'
+import { RpContextProgress } from '../components/session/RpContextProgress.js'
 import { Welcome } from '../components/session/Welcome.js'
 import { ensureApiKey } from '../components/settings/settingsDialogState.js'
 import { SettingsDialog } from '../components/settings/SettingsDialog.js'
@@ -48,6 +54,11 @@ export const App = () => {
   const [liveCall, setLiveCall] = useState<LiveCall | null>(null)
   const isMobile = useIsMobile()
   const locale = useSettings((state) => state.locale)
+  const chatMode = useSettings((state) => state.chatMode)
+  const chatParallaxEnabled = useSettings((state) => state.chatParallaxEnabled)
+  const activeChatBgUrl = useActiveChatBackgroundUrl()
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  const chatBgParallaxRef = useRef<HTMLDivElement | null>(null)
   // 移动端侧边栏以独立抽屉管理开合状态
   const siderCollapsed = useSettings((state) => state.siderCollapsed) && !isMobile
   const ready = useChatStore((state) => state.ready)
@@ -160,6 +171,7 @@ export const App = () => {
 
   useEffect(() => {
     void initChat()
+    void initChatBackgrounds()
     // 等待读取或迁移完成，只有需要输入 API Key 时才打开设置。
     void initApiKey().then(ensureApiKey)
   }, [])
@@ -208,8 +220,15 @@ export const App = () => {
     closeMobileSider()
   }
 
+  const currentChatMode = session ? (session.mode ?? 'fast') : chatMode
+  const viewKind: ComposerViewKind | null =
+    !ready || (activeId !== null && !session) ? null : session ? 'session' : 'welcome'
+  const showChatBackground =
+    Boolean(activeChatBgUrl) &&
+    (currentChatMode === 'fast' || currentChatMode === 'expert' || currentChatMode === 'rp')
+
   return (
-    <>
+    <RpContextProgress>
       <div ref={frameRef} className={styles.frame}>
         {liveCall ? (
           <LiveCallView
@@ -246,7 +265,31 @@ export const App = () => {
                   </Button>
                 </div>
               ) : null}
-              <div className={styles.content}>
+              <div
+                ref={contentRef}
+                className={styles.content}
+                data-chat-bg={showChatBackground ? 'true' : undefined}
+              >
+                <ComposerSnapshotBridge viewKind={viewKind} containerRef={contentRef} />
+                {showChatBackground && activeChatBgUrl ? (
+                  <div className={styles.chatBackgroundLayer} aria-hidden="true">
+                    <div
+                      ref={chatBgParallaxRef}
+                      className={clsx(
+                        styles.chatBackgroundParallax,
+                        chatParallaxEnabled && styles.chatBackgroundParallaxBleed
+                      )}
+                    >
+                      <img
+                        src={activeChatBgUrl}
+                        alt=""
+                        draggable={false}
+                        className={styles.chatBackgroundImage}
+                      />
+                      <div className={styles.chatBackgroundScrim} />
+                    </div>
+                  </div>
+                ) : null}
                 {isMobile ? null : <CollapsedSider collapsed={siderCollapsed} />}
                 {!ready || (activeId !== null && !session) ? (
                   <div className={styles.loadingView}>
@@ -282,7 +325,7 @@ export const App = () => {
                     onStartCall={openLiveCall}
                   />
                 ) : (
-                  <Welcome onStartCall={openLiveCall} />
+                  <Welcome onStartCall={openLiveCall} bgParallaxRef={chatBgParallaxRef} />
                 )}
               </div>
             </main>
@@ -294,6 +337,6 @@ export const App = () => {
       <SettingsDialog />
       <ImagePreview />
       <Toast />
-    </>
+    </RpContextProgress>
   )
 }

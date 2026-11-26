@@ -94,3 +94,14 @@
     }
   }
 }
+
+/* 自定义背景时增强思考正文对比度，避免中灰细字贴图发虚 */
+[data-chat-bg='true'] .ds-think-content .ds-markdown {
+  color: rgba(15, 17, 21, 0.84);
+  font-weight: 500;
+}
+
+[data-ds-dark-theme] [data-chat-bg='true'] .ds-think-content .ds-markdown {
+  color: rgba(249, 250, 251, 0.86);
+  font-weight: 500;
+}

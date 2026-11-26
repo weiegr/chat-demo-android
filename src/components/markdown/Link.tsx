@@ -1,5 +1,9 @@
 import type { Image, Link as LinkNode } from 'mdast'
 import { memo, type ReactNode } from 'react'
+import {
+  openSettingsPage,
+  readSettingsPageFromUrl,
+} from '../settings/settingsDialogState.js'
 
 const sanitizeUrl = (url: string) => {
   // 如果URL没有协议，添加默认的https协议
@@ -33,6 +37,23 @@ export const Link = memo(function Link({
   // 邮件地址显示链接文字。
   if (node.url.startsWith('mailto:')) {
     return children
+  }
+
+  // 应用内设置深链：拦截默认跳转，直接打开设置弹窗对应页面。
+  const settingsPage = readSettingsPageFromUrl(node.url)
+  if (settingsPage) {
+    return (
+      <a
+        href={node.url}
+        onClick={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          openSettingsPage(settingsPage)
+        }}
+      >
+        {children}
+      </a>
+    )
   }
 
   // URL 解析失败时 href 为空，链接文字仍可显示。

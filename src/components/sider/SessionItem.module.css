@@ -58,7 +58,9 @@
   display: flex;
 }
 
-.renameInput {
+.renameBox {
+  display: flex;
+  align-items: center;
   box-sizing: border-box;
   width: 100%;
   height: 40px;
@@ -66,7 +68,24 @@
   border-radius: 12px;
   border: 1px solid var(--dsw-alias-brand-primary);
   background-color: var(--dsw-specific-input-major);
+  box-shadow: 0 0 0 2px rgba(57, 100, 254, 0.16);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 16%, transparent);
+
+  [data-ds-dark-theme] & {
+    box-shadow: 0 0 0 2px rgba(86, 134, 254, 0.16);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 16%, transparent);
+  }
+}
+
+.renameInput {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: none;
   color: var(--dsw-alias-label-primary);
+  caret-color: var(--dsw-alias-brand-text);
   font: inherit;
   font-size: 14px;
   outline: none;
@@ -84,10 +103,14 @@
     line-height: 22px;
   }
 
-  .renameInput {
+  .renameBox {
     height: 44px;
     padding: 0 12px;
     border-radius: 16px;
+  }
+
+  .renameInput {
     font-size: 16px;
+    line-height: 22px;
   }
 }

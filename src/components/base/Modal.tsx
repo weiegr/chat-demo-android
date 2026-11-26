@@ -1,5 +1,12 @@
 import clsx from 'clsx'
-import { useEffect, useId, useLayoutEffect, useRef, type ReactNode } from 'react'
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  type MutableRefObject,
+  type ReactNode,
+} from 'react'
 import { createPortal } from 'react-dom'
 import { getImeMotionState, hasNativeImeMotion, subscribeImeMotion } from '../../app/imeMotion.js'
 import { useIsMobile } from '../../app/viewport.js'
@@ -19,6 +26,7 @@ export const Modal = ({
   closable = false,
   visible,
   fullscreen = false,
+  dialogRef,
   overlayClassName,
   className,
   mainClassName,
@@ -33,6 +41,8 @@ export const Modal = ({
   visible?: boolean
   /** 全屏覆盖弹层（如移动端设置页）不随软键盘整体平移 */
   fullscreen?: boolean
+  /** 可选指向弹窗内容容器的 ref（便于调用方在动效期直接切换 DOM 状态） */
+  dialogRef?: MutableRefObject<HTMLDivElement | null>
   /** 遮罩层的额外 class */
   overlayClassName?: string
   className?: string
@@ -43,7 +53,13 @@ export const Modal = ({
   const t = useTranslate()
   const isMobile = useIsMobile()
   const titleId = useId()
-  const contentRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  const setContentEl = (node: HTMLDivElement | null) => {
+    contentRef.current = node
+    if (dialogRef) {
+      dialogRef.current = node
+    }
+  }
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   const controlled = visible !== undefined
@@ -160,8 +176,12 @@ export const Modal = ({
       }}
     >
       <div
-        ref={contentRef}
-        className={clsx(styles.content, className)}
+        ref={setContentEl}
+        className={clsx(
+          styles.content,
+          controlled && (visible ? styles.contentVisible : styles.contentHidden),
+          className
+        )}
         role={active ? 'dialog' : undefined}
         aria-modal={active ? 'true' : undefined}
         aria-labelledby={titleId}

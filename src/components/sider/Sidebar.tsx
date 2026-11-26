@@ -9,6 +9,6 @@ import styles from './Sider.module.css'
  */
 export const Sidebar = ({ collapsed }: { collapsed: boolean }) => (
   <div className={clsx(styles.shell, collapsed && styles.shellCollapsed)}>
-    <Sider />
+    <Sider showRpContext={!collapsed} />
   </div>
 )

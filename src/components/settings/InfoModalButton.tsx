@@ -3,6 +3,7 @@ import { useState, type ReactNode } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { IconWarningOutline16 } from '../base/icons.js'
 import { Modal } from '../base/Modal.js'
+import { usePresence } from '../base/usePresence.js'
 import styles from './Settings.module.css'
 
 /** 感叹号提示按钮与居中提示弹窗，供设置项与移动端卡片共用 */
@@ -21,6 +22,7 @@ export const InfoModalButton = ({
 }) => {
   const t = useTranslate()
   const [open, setOpen] = useState(false)
+  const presence = usePresence(open, 220)
 
   return (
     <>
@@ -35,8 +37,13 @@ export const InfoModalButton = ({
       >
         <IconWarningOutline16 />
       </button>
-      {open ? (
-        <Modal title="" className={styles.infoModal} onClose={() => setOpen(false)}>
+      {presence.mounted ? (
+        <Modal
+          title=""
+          visible={presence.visible}
+          className={styles.infoModal}
+          onClose={() => setOpen(false)}
+        >
           <div className={styles.infoModalText}>{description}</div>
           {actionLabel && onAction ? (
             <div className={styles.infoModalActions}>

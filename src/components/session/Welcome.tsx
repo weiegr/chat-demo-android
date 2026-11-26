@@ -7,13 +7,19 @@ import {
   useState,
   type KeyboardEvent,
   type MouseEvent,
+  type MutableRefObject,
 } from 'react'
 import { getImeMotionState, hasNativeImeMotion, subscribeImeMotion } from '../../app/imeMotion.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
+import { subscribeDeviceTilt } from '../../services/deviceTilt.js'
 import { setChatMode, useSettings, type ChatMode } from '../../services/settings.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
+import { useChatSearch } from '../search/chatSearchState.js'
+import { useSettingsDialog } from '../settings/settingsDialogState.js'
+import { useMobileSider } from '../sider/mobileSiderState.js'
 import { CHAT_MODE_OPTIONS } from './chatModeMeta.js'
+import { runComposerTransition } from './composerTransition.js'
 import { MobileHeader } from './MobileHeader.js'
 import styles from './Welcome.module.css'
 
@@ -842,13 +848,66 @@ const ModeSwitch = ({
   )
 }
 
+interface WelcomeParallaxTargets {
+  bg: HTMLElement | null
+  header: HTMLElement | null
+  greeting: HTMLElement | null
+  modeSwitch: HTMLElement | null
+  modeHint: HTMLElement | null
+  input: HTMLElement | null
+  inputControls: HTMLElement | null
+}
+
+/**
+ * 新对话界面分层 2D GPU 视差映射（纯 translate3d 保持磨砂玻璃与文字像素级锐利）：
+ * 自定义背景图向反方向微退，顶栏按钮、说明、标题、文本框与三模式滑块/功能按钮逐层前移。
+ */
+const applyWelcomeParallax = (targets: WelcomeParallaxTargets, x: number, y: number) => {
+  const settledZero = Math.abs(x) < 0.0005 && Math.abs(y) < 0.0005
+  const setShift = (el: HTMLElement | null, dx: number, dy: number) => {
+    if (!el) {
+      return
+    }
+    if (settledZero) {
+      el.style.removeProperty('transform')
+      return
+    }
+    el.style.transform = `translate3d(${dx.toFixed(2)}px, ${dy.toFixed(2)}px, 0)`
+  }
+
+  setShift(targets.bg, -x * 10, -y * 8)
+  setShift(targets.header, x * 4.5, y * 3.5)
+  setShift(targets.greeting, x * 6.5, y * 5)
+  setShift(targets.modeSwitch, x * 9, y * 7)
+  setShift(targets.modeHint, x * 5.5, y * 4.2)
+  setShift(targets.input, x * 6.5, y * 5)
+  setShift(targets.inputControls, x * 2.2, y * 1.6)
+}
+
 /** 新对话：模式标题 + 物理弹性三模式滑块 + 模式说明 + 输入框。桌面端居中；移动端输入框吸底 */
-export const Welcome = ({ onStartCall }: { onStartCall?: (sessionId: string | null) => void }) => {
+export const Welcome = ({
+  onStartCall,
+  bgParallaxRef,
+}: {
+  onStartCall?: (sessionId: string | null) => void
+  bgParallaxRef?: MutableRefObject<HTMLDivElement | null>
+}) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
   const chatMode = useSettings((state) => state.chatMode)
+  const chatParallaxEnabled = useSettings((state) => state.chatParallaxEnabled)
+  const mobileSiderOpen = useMobileSider((state) => state.open)
+  const chatSearchOpen = useChatSearch((state) => state.open)
+  const settingsOpen = useSettingsDialog((state) => state.open)
 
+  const containerRef = useRef<HTMLDivElement>(null)
   const heroRef = useRef<HTMLDivElement>(null)
+  const headerParallaxRef = useRef<HTMLDivElement | null>(null)
+  const greetingParallaxRef = useRef<HTMLDivElement>(null)
+  const modeSwitchParallaxRef = useRef<HTMLDivElement>(null)
+  const modeHintParallaxRef = useRef<HTMLDivElement>(null)
+  const inputParallaxRef = useRef<HTMLDivElement>(null)
+  const inputControlsParallaxRef = useRef<HTMLDivElement | null>(null)
   const cameraShortcutRef = useRef<(() => void) | null>(null)
   const inputSlotRef = useRef<HTMLDivElement>(null)
   const maxHeroLiftRef = useRef(0)
@@ -862,6 +921,129 @@ export const Welcome = ({ onStartCall }: { onStartCall?: (sessionId: string | nu
     direct: null,
   })
 
+  const [heroEntering, setHeroEntering] = useState(false)
+  const [inputParallaxPaused, setInputParallaxPaused] = useState(false)
+  const [modeMotionActive, setModeMotionActive] = useState(false)
+  const [imeParallaxPaused, setImeParallaxPaused] = useState(() => {
+    const ime = getImeMotionState()
+    return ime.animating || ime.raise > 0.5 || ime.settled > 0.5
+  })
+
+  const tiltTargetRef = useRef({ x: 0, y: 0 })
+  const tiltCurrentRef = useRef({ x: 0, y: 0 })
+  const tiltRafRef = useRef(0)
+  const tiltLastFrameRef = useRef(0)
+
+  const getParallaxTargets = useCallback(
+    (): WelcomeParallaxTargets => ({
+      bg: bgParallaxRef?.current ?? null,
+      header: headerParallaxRef.current,
+      greeting: greetingParallaxRef.current,
+      modeSwitch: modeSwitchParallaxRef.current,
+      modeHint: modeHintParallaxRef.current,
+      input: inputParallaxRef.current,
+      inputControls: inputControlsParallaxRef.current,
+    }),
+    [bgParallaxRef]
+  )
+
+  const wakeTiltLoop = useCallback(() => {
+    if (tiltRafRef.current) {
+      return
+    }
+    tiltLastFrameRef.current = performance.now()
+    const tick = (now: number) => {
+      const dt = Math.min(Math.max((now - tiltLastFrameRef.current) / 1000, 0), 0.05)
+      tiltLastFrameRef.current = now
+      const alpha = 1 - Math.exp(-dt * 10)
+      const reduced = prefersReducedMotion()
+      const targetX = reduced ? 0 : tiltTargetRef.current.x
+      const targetY = reduced ? 0 : tiltTargetRef.current.y
+      const curr = tiltCurrentRef.current
+      curr.x += (targetX - curr.x) * alpha
+      curr.y += (targetY - curr.y) * alpha
+      const settled = Math.abs(targetX - curr.x) < 0.001 && Math.abs(targetY - curr.y) < 0.001
+      if (settled) {
+        curr.x = targetX
+        curr.y = targetY
+      }
+      applyWelcomeParallax(getParallaxTargets(), curr.x, curr.y)
+      if (settled) {
+        tiltRafRef.current = 0
+        return
+      }
+      tiltRafRef.current = requestAnimationFrame(tick)
+    }
+    tiltRafRef.current = requestAnimationFrame(tick)
+  }, [getParallaxTargets])
+
+  // 监听原生软键盘进退场，保证键盘弹起或动画期间立即停止视差
+  useEffect(() => {
+    if (!hasNativeImeMotion()) {
+      return
+    }
+    const syncIme = () => {
+      const ime = getImeMotionState()
+      setImeParallaxPaused(ime.animating || ime.raise > 0.5 || ime.settled > 0.5)
+    }
+    syncIme()
+    return subscribeImeMotion((phase, ime) => {
+      if (phase === 'prepare') {
+        setImeParallaxPaused(true)
+        return
+      }
+      setImeParallaxPaused(ime.animating || ime.raise > 0.5 || ime.settled > 0.5)
+    })
+  }, [])
+
+  const parallaxActive =
+    chatParallaxEnabled &&
+    !mobileSiderOpen &&
+    !chatSearchOpen &&
+    !settingsOpen &&
+    !imeParallaxPaused &&
+    !inputParallaxPaused &&
+    !modeMotionActive
+
+  // 仅在新对话页处于静置可读态时订阅陀螺仪；打开文本框/附件/弹窗/侧栏或关闭开关后立即停感并平滑归零
+  useEffect(() => {
+    if (!parallaxActive || prefersReducedMotion()) {
+      tiltTargetRef.current.x = 0
+      tiltTargetRef.current.y = 0
+      if (
+        Math.abs(tiltCurrentRef.current.x) >= 0.001 ||
+        Math.abs(tiltCurrentRef.current.y) >= 0.001
+      ) {
+        wakeTiltLoop()
+      } else {
+        applyWelcomeParallax(getParallaxTargets(), 0, 0)
+      }
+      return
+    }
+    if (!isMobile) {
+      return
+    }
+    return subscribeDeviceTilt((tilt) => {
+      tiltTargetRef.current.x = tilt.x
+      tiltTargetRef.current.y = tilt.y
+      wakeTiltLoop()
+    })
+  }, [parallaxActive, isMobile, wakeTiltLoop, getParallaxTargets])
+
+  // 离开新对话页（开始对话进入 SessionView）时彻底停止循环并将共享背景图层归零
+  useEffect(
+    () => () => {
+      cancelAnimationFrame(tiltRafRef.current)
+      tiltRafRef.current = 0
+      tiltTargetRef.current.x = 0
+      tiltTargetRef.current.y = 0
+      tiltCurrentRef.current.x = 0
+      tiltCurrentRef.current.y = 0
+      applyWelcomeParallax(getParallaxTargets(), 0, 0)
+    },
+    [getParallaxTargets]
+  )
+
   const handleMotionFrame = useCallback((frame: ModeMotionFrame) => {
     motionFrameRef.current = frame
     positionTitleItems(titleItemRefs.current, frame.progress, frame.direct)
@@ -870,6 +1052,7 @@ export const Welcome = ({ onStartCall }: { onStartCall?: (sessionId: string | nu
 
   const handleMotionActiveChange = useCallback((active: boolean) => {
     heroRef.current?.classList.toggle(styles.heroAnimating, active)
+    setModeMotionActive(active)
   }, [])
 
   // 手指刚触碰输入框时（早于系统 IME onPrepare ~50ms）提前预热两个小合成层，消除冷启动首帧上传尖峰
@@ -929,7 +1112,10 @@ export const Welcome = ({ onStartCall }: { onStartCall?: (sessionId: string | nu
       maxHeroLiftRef.current = Math.max(0, hero.offsetTop - 8)
     }
 
+    let lifted = false
+
     const applyShift = (shift: number, animating: boolean, smoothSettle = false) => {
+      lifted = shift > 0.05
       clearSmoothTransition()
       if (smoothSettle && !prefersReducedMotion()) {
         hero.style.willChange = 'transform'
@@ -976,12 +1162,18 @@ export const Welcome = ({ onStartCall }: { onStartCall?: (sessionId: string | nu
 
     cacheMaxHeroLift()
     const initial = getImeMotionState()
-    applyShift(initial.shift, initial.animating)
+    if (!useMobileSider.getState().open) {
+      applyShift(initial.shift, initial.animating)
+    }
 
     const unsubscribe = subscribeImeMotion((phase, ime) => {
       if (prewarmTimerRef.current !== null) {
         window.clearTimeout(prewarmTimerRef.current)
         prewarmTimerRef.current = null
+      }
+      // 移动端侧边栏打开期间（如侧栏重命名会话）弹起键盘时，保持右侧露出的欢迎页静止
+      if (useMobileSider.getState().open && !lifted) {
+        return
       }
       if (phase === 'prepare') {
         clearSmoothTransition()
@@ -1009,6 +1201,23 @@ export const Welcome = ({ onStartCall }: { onStartCall?: (sessionId: string | nu
       inputSlot.style.removeProperty('will-change')
     }
   }, [isMobile])
+
+  // 置于原生键盘定位同步之后：从会话页切回新对话时平滑过渡输入框位置，并驱动欢迎区柔和浮现
+  useLayoutEffect(() => {
+    const { fromOtherView, cleanup } = runComposerTransition(containerRef.current, 'welcome')
+    if (fromOtherView) {
+      setHeroEntering(true)
+    }
+    return cleanup
+  }, [])
+
+  useEffect(() => {
+    if (!heroEntering) {
+      return
+    }
+    const timer = window.setTimeout(() => setHeroEntering(false), 300)
+    return () => window.clearTimeout(timer)
+  }, [heroEntering])
 
   // 测量视口及三条提示语的实际宽度与最大高度，仅在布局/语言变动时执行，拖拽期间零布局读取
   useLayoutEffect(() => {
@@ -1068,46 +1277,86 @@ export const Welcome = ({ onStartCall }: { onStartCall?: (sessionId: string | nu
   }, [t])
 
   return (
-    <div className={styles.container}>
-      {isMobile ? <MobileHeader onTakePhoto={() => cameraShortcutRef.current?.()} /> : null}
+    <div
+      ref={containerRef}
+      className={styles.container}
+      onPointerMove={(event) => {
+        if (
+          isMobile ||
+          !parallaxActive ||
+          event.pointerType !== 'mouse' ||
+          prefersReducedMotion()
+        ) {
+          return
+        }
+        const rect = event.currentTarget.getBoundingClientRect()
+        if (rect.width <= 0 || rect.height <= 0) {
+          return
+        }
+        const nx = Math.max(-1, Math.min(1, ((event.clientX - rect.left) / rect.width - 0.5) * 2))
+        const ny = Math.max(-1, Math.min(1, ((event.clientY - rect.top) / rect.height - 0.5) * 2))
+        tiltTargetRef.current.x = nx * 0.75
+        tiltTargetRef.current.y = ny * 0.75
+        wakeTiltLoop()
+      }}
+      onPointerLeave={() => {
+        if (isMobile) {
+          return
+        }
+        tiltTargetRef.current.x = 0
+        tiltTargetRef.current.y = 0
+        wakeTiltLoop()
+      }}
+    >
+      {isMobile ? (
+        <MobileHeader
+          memorySession={null}
+          parallaxRef={headerParallaxRef}
+          onTakePhoto={() => cameraShortcutRef.current?.()}
+        />
+      ) : null}
       <div className={styles.welcome}>
         <div ref={heroRef} className={styles.hero}>
-          <div className={styles.greeting}>
-            {CHAT_MODE_OPTIONS.map((option, index) => (
-              <span
-                key={option.value}
-                ref={(el) => {
-                  titleItemRefs.current[index] = el
-                }}
-                aria-hidden={option.value !== chatMode}
-                className={styles.greetingText}
-              >
-                {t(option.titleKey)}
-              </span>
-            ))}
-          </div>
-
-          <ModeSwitch
-            mode={chatMode}
-            onMotionFrame={handleMotionFrame}
-            onMotionActiveChange={handleMotionActiveChange}
-            onCommit={setChatMode}
-          />
-
-          <div className={styles.modeHintViewport}>
-            <div ref={hintStageRef} className={styles.modeHintStage}>
+          <div className={clsx(styles.heroInner, heroEntering && styles.heroEntering)}>
+            <div ref={greetingParallaxRef} className={styles.greeting}>
               {CHAT_MODE_OPTIONS.map((option, index) => (
-                <p
+                <span
                   key={option.value}
                   ref={(el) => {
-                    hintItemRefs.current[index] = el
+                    titleItemRefs.current[index] = el
                   }}
                   aria-hidden={option.value !== chatMode}
-                  className={clsx(styles.modeHintItem, HINT_ALIGN_CLASS[option.value])}
+                  className={styles.greetingText}
                 >
-                  {t(option.hintKey)}
-                </p>
+                  {t(option.titleKey)}
+                </span>
               ))}
+            </div>
+
+            <div ref={modeSwitchParallaxRef} className={styles.modeSwitchParallax}>
+              <ModeSwitch
+                mode={chatMode}
+                onMotionFrame={handleMotionFrame}
+                onMotionActiveChange={handleMotionActiveChange}
+                onCommit={setChatMode}
+              />
+            </div>
+
+            <div ref={modeHintParallaxRef} className={styles.modeHintViewport}>
+              <div ref={hintStageRef} className={styles.modeHintStage}>
+                {CHAT_MODE_OPTIONS.map((option, index) => (
+                  <p
+                    key={option.value}
+                    ref={(el) => {
+                      hintItemRefs.current[index] = el
+                    }}
+                    aria-hidden={option.value !== chatMode}
+                    className={clsx(styles.modeHintItem, HINT_ALIGN_CLASS[option.value])}
+                  >
+                    {t(option.hintKey)}
+                  </p>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -1118,11 +1367,15 @@ export const Welcome = ({ onStartCall }: { onStartCall?: (sessionId: string | nu
           onTouchStartCapture={prewarmImeLayers}
           onFocusCapture={prewarmImeLayers}
         >
-          <ChatInput
-            sessionId={null}
-            onStartCall={onStartCall}
-            cameraShortcutRef={cameraShortcutRef}
-          />
+          <div ref={inputParallaxRef} className={styles.inputParallax}>
+            <ChatInput
+              sessionId={null}
+              onStartCall={onStartCall}
+              cameraShortcutRef={cameraShortcutRef}
+              controlsParallaxRef={inputControlsParallaxRef}
+              onParallaxPauseChange={setInputParallaxPaused}
+            />
+          </div>
         </div>
       </div>
     </div>

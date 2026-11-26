@@ -26,6 +26,7 @@ export const ApiKeySetting = () => {
     setOpen(false)
   })
   const sheetPresence = usePresence(open && isMobile, 280)
+  const modalPresence = usePresence(open && !isMobile, 220)
   const showInput = !apiKey || editing
   const loading = storageMode === 'loading'
   const loadFailed = storageMode === 'error'
@@ -173,9 +174,10 @@ export const ApiKeySetting = () => {
             </button>
           </Modal>
         ) : null
-      ) : open ? (
+      ) : modalPresence.mounted ? (
         <Modal
           title={t('apiKeyLabel')}
+          visible={modalPresence.visible}
           className={styles.urlModal}
           onClose={closeModal}
           footer={
@@ -186,7 +188,7 @@ export const ApiKeySetting = () => {
               <Button
                 variant="primary"
                 size="m"
-                disabled={submitDisabled}
+                disabled={submitDisabled || !open}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={handleConfirm}
               >

@@ -22,6 +22,7 @@
 }
 
 .sider {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -31,6 +32,11 @@
   padding: 6px 12px var(--safe-bottom);
   border-right: 1px solid var(--dsw-alias-border-l1);
   background-color: var(--dsw-specific-sidebar-fill);
+}
+
+/* 无昵称悬浮纯头像模式：列表一路延展到底部边缘，头像悬浮于左下角、右侧完全透明可透视并操作历史会话 */
+.siderAvatarOnly {
+  padding-bottom: 0;
 }
 
 .top {
@@ -97,14 +103,20 @@
   color: var(--dsw-alias-label-caption);
 }
 
+.newChatRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .newChat {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  flex: 1;
   box-sizing: border-box;
-  width: 100%;
+  min-width: 0;
   height: 40px;
   padding: 0 16px;
   border-radius: 100px;
@@ -170,6 +182,7 @@
 }
 
 .list {
+  box-sizing: border-box;
   height: 100%;
   margin: 0 -2px;
   padding: 0 2px;
@@ -180,6 +193,11 @@
 
 .listTrack {
   position: relative;
+}
+
+.listBottomSpacer {
+  height: calc(72px + var(--safe-bottom));
+  flex-shrink: 0;
 }
 
 .section,
@@ -225,6 +243,22 @@
   background: linear-gradient(to bottom, transparent, var(--dsw-specific-sidebar-fill));
 }
 
+/* 无昵称时底部不占位、不铺底色与遮罩，右侧完全透明透出历史会话且点击/滑动全穿透 */
+.bottomFloating {
+  position: absolute;
+  right: 12px;
+  bottom: calc(var(--safe-bottom) + 12px);
+  left: 12px;
+  z-index: 25;
+  height: auto;
+  padding: 0;
+  pointer-events: none;
+
+  &::before {
+    display: none;
+  }
+}
+
 .settings {
   display: flex;
   align-items: center;
@@ -241,8 +275,10 @@
   user-select: none;
   outline: none;
 
-  &:hover {
-    background-color: var(--dsw-specific-sidebar-nav-item-hover);
+  @media (hover: hover) {
+    &:hover {
+      background-color: var(--dsw-specific-sidebar-nav-item-hover);
+    }
   }
 
   &:focus-visible {
@@ -265,6 +301,85 @@
   margin-left: 4px;
   overflow: hidden;
   font-size: 14px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--dsw-alias-label-primary);
+}
+
+.accountEntry {
+  gap: 10px;
+  padding: 6px 10px 6px 8px;
+}
+
+/* 无昵称时仅在左下角保留独立磨砂玻璃圆形底座包裹头像，右侧完全透明透出历史会话 */
+.accountEntryAvatarOnly {
+  width: auto;
+  margin-block: 0;
+  padding: 6px;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.74);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.88),
+    0 3px 12px rgba(15, 23, 42, 0.09);
+  -webkit-backdrop-filter: blur(8px) saturate(1.3);
+  backdrop-filter: blur(8px) saturate(1.3);
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    transform 0.15s ease,
+    background-color 0.18s ease;
+
+  [data-ds-dark-theme] & {
+    background-color: rgba(34, 36, 44, 0.72);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+      0 3px 14px rgba(0, 0, 0, 0.36);
+    -webkit-backdrop-filter: blur(8px) saturate(1.25);
+    backdrop-filter: blur(8px) saturate(1.25);
+  }
+
+  @media (hover: hover) {
+    &:hover {
+      background-color: rgba(255, 255, 255, 0.9);
+    }
+
+    [data-ds-dark-theme] &:hover {
+      background-color: rgba(44, 47, 58, 0.88);
+    }
+  }
+
+  &:active {
+    transform: scale(0.93);
+  }
+
+  .accountAvatar {
+    width: 32px;
+    height: 32px;
+  }
+
+  .accountAvatarIcon svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+.accountAvatar {
+  width: 30px;
+  height: 30px;
+}
+
+.accountAvatarIcon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.accountLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
   white-space: nowrap;
   text-overflow: ellipsis;
   color: var(--dsw-alias-label-primary);
@@ -310,8 +425,8 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
 }
 
-/* 抽屉留在下层，由对话界面右移露出；宽度与 App 里的推入距离共用同一个变量。
-   常驻可见（被对话界面完全盖住），露出时内容早已绘制完成，不会先白一帧。 */
+/* 抽屉外框留在下层且尺寸稳定，内部 .drawerMotion 仅做纯 GPU 单轴水平微视差，
+   杜绝非 1:1 缩放与整层透明度重栅格化，确保高刷屏满帧跟手。 */
 .drawer {
   position: absolute;
   top: 0;
@@ -319,9 +434,22 @@
   left: 0;
   z-index: 1;
   width: var(--mobile-sider-width, 76vw);
+  overflow: hidden;
   background-color: var(--dsw-specific-sidebar-fill);
-  /* 独立层：右移的是对话界面，抽屉不参与重绘 */
   contain: layout paint style;
+  isolation: isolate;
+}
+
+.drawerMotion {
+  width: 100%;
+  height: 100%;
+  transform: translate3d(-24px, 0, 0);
+  will-change: transform;
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.drawer[data-open='true'] .drawerMotion {
+  transform: translate3d(0, 0, 0);
 }
 
 .mobile {
@@ -349,10 +477,6 @@
     margin-top: 4px;
   }
 
-  .list {
-    padding-bottom: var(--ime-settled, 0px);
-  }
-
   .listWrap,
   .bottom {
     transition: opacity 0.2s cubic-bezier(0.22, 1, 0.36, 1) 0.06s;
@@ -367,6 +491,10 @@
   .bottom {
     height: auto;
     padding: 10px 0;
+  }
+
+  .bottomFloating {
+    padding: 0;
   }
 
   .settings {
@@ -388,12 +516,52 @@
     font-size: 16px;
     line-height: 22px;
   }
+
+  .accountEntry {
+    gap: 12px;
+    padding: 8px 12px;
+  }
+
+  .accountEntryAvatarOnly {
+    margin-left: 2px;
+    padding: 6px;
+
+    .accountAvatar {
+      width: 36px;
+      height: 36px;
+    }
+
+    .accountAvatarIcon svg {
+      width: 20px;
+      height: 20px;
+    }
+  }
+
+  .accountAvatar {
+    width: 34px;
+    height: 34px;
+  }
+
+  .accountAvatarIcon svg {
+    width: 19px;
+    height: 19px;
+  }
+
+  .accountLabel {
+    font-size: 15px;
+    line-height: 22px;
+  }
+}
+
+.mobile.siderAvatarOnly {
+  padding-bottom: 0;
 }
 
 /* 移动端进入全屏搜索态时，侧边栏列表与底部设置原地柔和淡出，不改宽度、不触发布局重排 */
 .searchOpen {
   .listWrap,
-  .bottom {
+  .bottom,
+  .accountEntryAvatarOnly {
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.14s ease-out 0s;
@@ -416,6 +584,13 @@
 
   .collapsed,
   .collapsedHidden {
+    transition: none;
+  }
+
+  .drawerMotion,
+  .drawer[data-open='true'] .drawerMotion {
+    transform: none;
+    opacity: 1;
     transition: none;
   }
 

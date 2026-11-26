@@ -164,27 +164,14 @@ export const AiLocationSetting = () => {
   )
 }
 
-/** 移动端主设置卡片里的「位置信息」导航行，点击进入单独的位置信息页面 */
+/** 移动端主设置卡片里的「位置」导航行，点击进入单独的位置页面 */
 export const MobileLocationNavRow = ({ onOpen }: { onOpen: () => void }) => {
   const t = useTranslate()
-  const locale = useSettings((state) => state.locale)
-  const location = useSettings((state) => state.location)
-  const locationEnabled = useSettings((state) => state.locationEnabled)
-  const allowAiLocation = useSettings((state) => state.allowAiLocation)
-  const area = locationEnabled ? formatSelectedArea(location, locale) : null
-  const summary =
-    area ??
-    (locationEnabled
-      ? t('settingsLocationStatusOn')
-      : allowAiLocation
-        ? t('settingsLocationStatusAi')
-        : t('settingsLocationStatusOff'))
 
   return (
     <button type="button" className={styles.mobileNavRow} onClick={onOpen}>
       <span className={styles.label}>{t('settingsLocation')}</span>
       <span className={styles.mobileNavRight}>
-        <span className={styles.mobileNavValue}>{summary}</span>
         <IconChevronRightOutline14 />
       </span>
     </button>

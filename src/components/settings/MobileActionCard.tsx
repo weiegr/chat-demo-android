@@ -5,8 +5,8 @@ import styles from './Settings.module.css'
 
 /**
  * 移动端整行/整卡可点击动作条：
- * - `embedded = false` 时作为独立圆角卡片（数据管理、系统提示词顶栏）
- * - `embedded = true` 时作为卡片内部 44px 单行（API Key、工具提示词条目）
+ * - `embedded = false` 时作为独立圆角卡片（数据管理、系统提示词、RP 模式设置）
+ * - `embedded = true` 时作为卡片内部 44px 单行（API Key 等条目）
  * 使用铺满底部的 hit button 与 pointer-events 穿透层，避免 button 嵌套 button。
  */
 export const MobileActionCard = ({

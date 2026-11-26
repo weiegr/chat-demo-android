@@ -177,12 +177,36 @@ export const ChatSearchView = () => {
       return
     }
     const barRect = barInner.getBoundingClientRect()
-    const entryRect = entry.getBoundingClientRect()
-    if (barRect.width <= 0 || entryRect.width <= 0) {
+    const drawer = entry.closest<HTMLElement>('[data-mobile-sider-drawer="true"]')
+    let entryLeft: number
+    let entryRight: number
+    if (drawer) {
+      // 以未做 transform 的抽屉外框为基准累加纯布局偏移，避免抽屉浮入过渡期间测偏搜索胶囊起点
+      const drawerRect = drawer.getBoundingClientRect()
+      let leftInDrawer = 0
+      let cursor: HTMLElement | null = entry
+      while (cursor && cursor !== drawer) {
+        leftInDrawer += cursor.offsetLeft
+        cursor = cursor.offsetParent instanceof HTMLElement ? cursor.offsetParent : null
+      }
+      if (cursor === drawer) {
+        entryLeft = drawerRect.left + leftInDrawer
+        entryRight = entryLeft + entry.offsetWidth
+      } else {
+        const entryRect = entry.getBoundingClientRect()
+        entryLeft = entryRect.left
+        entryRight = entryRect.right
+      }
+    } else {
+      const entryRect = entry.getBoundingClientRect()
+      entryLeft = entryRect.left
+      entryRight = entryRect.right
+    }
+    if (barRect.width <= 0 || entryRight <= entryLeft) {
       return
     }
-    const rightInset = Math.max(0, barRect.right - entryRect.right)
-    const leftInset = Math.max(0, entryRect.left - barRect.left)
+    const rightInset = Math.max(0, barRect.right - entryRight)
+    const leftInset = Math.max(0, entryLeft - barRect.left)
     lastMeasuredWidthRef.current = window.innerWidth
     page.style.setProperty('--search-collapsed-right', `${rightInset}px`)
     page.style.setProperty('--search-collapsed-left', `${leftInset}px`)

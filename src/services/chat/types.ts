@@ -9,6 +9,7 @@ import type {
   TextCitation,
 } from '../api/types.js'
 import type { ChatMode } from '../settings.js'
+import type { AudioAttachmentData } from '../audio/metadata.js'
 
 /**
  * 消息附件。id 是本地标识（IndexedDB files 表的主键，原件按它存储，所有引用同一 id 的消息共用一份），
@@ -29,6 +30,8 @@ export type FileAttachment = {
   mimeType: string
   /** 经 DeepSeek OCR 提取的纯文本缓存（空串表示已识别但无文字） */
   ocrText?: string
+  /** 音频原件只在本地播放，模型使用分析结果与配套频谱图片。 */
+  audio?: AudioAttachmentData
 }
 
 /** 视频原件用于本地预览。模型使用 frameIds 对应的图片，并在可用时结合对白。 */
@@ -55,6 +58,8 @@ export type UserMessage = MessageBranch & {
   files: FileAttachment[]
   video?: VideoAttachment
   createdAt: number
+  /** 允许重新生成或续写当前的新提问时，沿用当轮的记忆授权。本地字段。 */
+  memoryConsent?: { epoch: number; sourceRevision: number }
 }
 
 /** 思考块：thinking_delta 累积，签名随 signature_delta 到达；历史轮次的思考服务端会丢弃，不回传 */
@@ -98,6 +103,16 @@ export type ClientToolResultBlock = {
   is_error?: boolean
   summary?: string
   errorCode?: string
+  matchCount?: number
+}
+
+/** 本地时间线只保存历史工具的动作和状态。 */
+export type MemoryToolStepBlock = {
+  type: 'memory_tool_step'
+  id: string
+  action: 'search' | 'read'
+  status: 'wip' | 'done' | 'failed' | 'stopped'
+  matchCount?: number
 }
 
 /** 服务端与客户端工具调用及结果块：read_link 与配对客户端工具会进入多轮上下文 */
@@ -107,12 +122,24 @@ export type ReplyBlock =
   | ServerToolBlock
   | ClientToolUseBlock
   | ClientToolResultBlock
+  | MemoryToolStepBlock
 
 /**
  * pending：已发出请求，还没收到事件；streaming：正在接收；
  * done：收到 message_stop；stopped：用户停止或页面关闭；error：请求或流出错
  */
 export type ReplyStatus = 'pending' | 'streaming' | 'done' | 'stopped' | 'error'
+
+/** 用实际请求的消息前缀匹配服务端用量，编辑或切换分支后重新估算变动部分。 */
+export type RpContextSample = {
+  fingerprint: number
+  messageCount: number
+  estimate: number
+  projected: number
+  prefillLength: number
+  inputTokens?: number
+  window: number
+}
 
 export type AssistantMessage = MessageBranch & {
   id: string
@@ -135,6 +162,9 @@ export type AssistantMessage = MessageBranch & {
   stopDetails?: StopDetails
   /** 最近一次请求的用量，续写后更新 */
   usage?: MessageUsage
+  /** 剧情摘要覆盖当前回答及其相同分支上的所有较早轮次。 */
+  rpSummary?: string
+  rpContext?: RpContextSample
   error?: {
     /** upload：发送前补传附件失败，请求没有发出 */
     kind: ApiErrorKind | 'upload'
@@ -148,6 +178,12 @@ export type AssistantMessage = MessageBranch & {
 
 export type Message = UserMessage | AssistantMessage
 
+export type SessionMemoryState = {
+  enabled: boolean
+  active: boolean
+  processed?: string[]
+}
+
 export type Session = {
   id: string
   title: string
@@ -155,6 +191,10 @@ export type Session = {
   updatedAt: number
   /** 对话模式：快速 / 专家 / RP；旧会话与导入会话缺省按快速模式处理。 */
   mode?: ChatMode
+  /** 会话来源。旧归档可能缺失。 */
+  origin?: 'chat' | 'live'
+  /** 导入暂存附带的状态，提交时转入独立的记忆存储。 */
+  memoryRestore?: SessionMemoryState
   /** 包含所有分支的消息，按创建顺序存储。 */
   messages: Message[]
   /** undefined 表示线性消息列表；null 表示空会话。 */
@@ -162,7 +202,10 @@ export type Session = {
 }
 
 /** 会话列表元数据；消息只在打开会话时加载。 */
-export type SessionSummary = Pick<Session, 'id' | 'title' | 'createdAt' | 'updatedAt'>
+export type SessionSummary = Pick<
+  Session,
+  'id' | 'title' | 'createdAt' | 'updatedAt' | 'mode' | 'origin'
+>
 
 /** 显式提取字段，避免将完整会话的消息带进列表。 */
 export const toSessionSummary = (session: SessionSummary): SessionSummary => ({
@@ -170,4 +213,6 @@ export const toSessionSummary = (session: SessionSummary): SessionSummary => ({
   title: session.title,
   createdAt: session.createdAt,
   updatedAt: session.updatedAt,
+  ...(__BETA__ && session.mode !== undefined ? { mode: session.mode } : {}),
+  ...(__BETA__ && session.origin !== undefined ? { origin: session.origin } : {}),
 })
