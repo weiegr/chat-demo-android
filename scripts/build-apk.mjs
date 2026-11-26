@@ -208,7 +208,7 @@ if (!existsSync(keystorePath)) {
   ])
 }
 
-const finalApk = path.join(outDir, beta ? 'abyss-beta.apk' : 'chat-demo.apk')
+const finalApk = path.join(outDir, beta ? 'abyss-beta.apk' : 'abyss.apk')
 run(apksigner, [
   'sign',
   '--ks',

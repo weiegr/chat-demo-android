@@ -8,7 +8,7 @@ An **Android WebView app and static chat client (`API demo`)** built on top of [
 - **Current Version**: `2.1.1`
 - **Android Package Name**: `xyz.app566512.apidemo`
 - **Minimum / Target SDK**: Android 8.0+ (`minSdkVersion 26`, `targetSdkVersion 34`)
-- **Signing**: Gradle-free build using `~/.android/debug.keystore`, outputting `dist-apk/chat-demo.apk`
+- **Signing**: Gradle-free build using `~/.android/debug.keystore`, outputting `dist-apk/abyss.apk`
 
 Enter your DeepSeek API key in **Settings → Data** before starting your first chat.
 
@@ -27,7 +27,7 @@ pnpm install
 pnpm build:apk
 ```
 
-[scripts/build-apk.mjs](scripts/build-apk.mjs) builds without Gradle by directly invoking `aapt2`, `javac`, `d8`, `jar`, `zipalign`, and `apksigner`, packaging `dist/` into `assets/web/` and producing the signed `dist-apk/chat-demo.apk`.
+[scripts/build-apk.mjs](scripts/build-apk.mjs) builds without Gradle by directly invoking `aapt2`, `javac`, `d8`, `jar`, `zipalign`, and `apksigner`, packaging `dist/` into `assets/web/` and producing the signed `dist-apk/abyss.apk`.
 
 ## Web Development & Builds
 

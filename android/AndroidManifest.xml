@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="xyz.app566512.apidemo"
-    android:versionCode="15"
+    android:versionCode="16"
     android:versionName="3.0.0">
 
     <uses-sdk

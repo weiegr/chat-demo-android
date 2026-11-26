@@ -8,7 +8,7 @@
 - **当前版本**：`2.1.1`
 - **Android 包名**：`xyz.app566512.apidemo`
 - **系统要求**：Android 8.0+（`minSdkVersion 26`，`targetSdkVersion 34`）
-- **签名方式**：免 Gradle 构建，自动使用本地 `~/.android/debug.keystore` 签名，输出 `dist-apk/chat-demo.apk`
+- **签名方式**：免 Gradle 构建，自动使用本地 `~/.android/debug.keystore` 签名，输出 `dist-apk/abyss.apk`
 
 首次使用时，请在应用内 **设置 → 数据管理** 中填写 DeepSeek API Key。
 
@@ -27,7 +27,7 @@ pnpm install
 pnpm build:apk
 ```
 
-构建脚本 [scripts/build-apk.mjs](scripts/build-apk.mjs) 不依赖 Gradle，会直接调用 `aapt2`、`javac`、`d8`、`jar`、`zipalign` 与 `apksigner`，将前端 `dist/` 打包进 `assets/web/` 并生成已签名的 `dist-apk/chat-demo.apk`。
+构建脚本 [scripts/build-apk.mjs](scripts/build-apk.mjs) 不依赖 Gradle，会直接调用 `aapt2`、`javac`、`d8`、`jar`、`zipalign` 与 `apksigner`，将前端 `dist/` 打包进 `assets/web/` 并生成已签名的 `dist-apk/abyss.apk`。
 
 ## 网页运行与构建
 
