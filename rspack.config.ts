@@ -109,7 +109,8 @@ export const createConfig = ({
     new rspack.DefinePlugin({
       __API_ORIGIN__: JSON.stringify(apiOrigin),
       __SINGLE_FILE__: singleFile,
-      __BETA__: JSON.stringify(process.env.BETA === '1'),
+      // 3.0.0 起正式版默认包含全部功能；仅在需要临时关闭 Beta 功能时显式传 BETA=0
+      __BETA__: JSON.stringify(process.env.BETA !== '0'),
     }),
     new rspack.CopyRspackPlugin({
       patterns: [{ from: path.resolve(root, 'LICENSE'), to: 'LICENSE', toType: 'file' }],
