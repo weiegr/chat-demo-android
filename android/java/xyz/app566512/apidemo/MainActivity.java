@@ -10,12 +10,14 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Insets;
+import android.graphics.drawable.GradientDrawable;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -38,7 +40,9 @@ import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
 import android.util.Size;
+import android.util.TypedValue;
 import android.view.Display;
+import android.view.Gravity;
 import android.view.Surface;
 import android.view.View;
 import android.view.Window;
@@ -57,7 +61,10 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONArray;
@@ -307,6 +314,7 @@ public class MainActivity extends Activity {
         settings.setSupportMultipleWindows(true);
         settings.setSupportZoom(false);
         settings.setTextZoom(100);
+        disableWebViewForceDark(settings);
         cachedUserAgent = settings.getUserAgentString();
 
         apiKeyStorage = new ApiKeyStorage(getNoBackupFilesDir());
@@ -396,7 +404,7 @@ public class MainActivity extends Activity {
                 if (renderCrashCount <= 2) {
                     recreate();
                 } else {
-                    Toast.makeText(MainActivity.this, "页面渲染异常，请重启应用", Toast.LENGTH_LONG).show();
+                    showRenderCrashFallback(detail);
                 }
                 return true;
             }
@@ -502,6 +510,127 @@ public class MainActivity extends Activity {
         });
 
         webView.loadUrl(APP_PAGE);
+    }
+
+    @SuppressWarnings("deprecation")
+    private void disableWebViewForceDark(WebSettings settings) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            settings.setAlgorithmicDarkeningAllowed(false);
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            settings.setForceDark(WebSettings.FORCE_DARK_OFF);
+        }
+    }
+
+    private int dpToPx(int dp) {
+        return Math.round(dp * getDisplayDensity());
+    }
+
+    private String buildRenderCrashDiagnostics(RenderProcessGoneDetail detail) {
+        String appVersion = "unknown";
+        try {
+            PackageInfo appPkg = getPackageManager().getPackageInfo(getPackageName(), 0);
+            if (appPkg != null && appPkg.versionName != null) {
+                appVersion = appPkg.versionName;
+            }
+        } catch (Throwable ignored) {
+        }
+        String webViewInfo = "unknown";
+        try {
+            PackageInfo wvPkg = WebView.getCurrentWebViewPackage();
+            if (wvPkg != null) {
+                webViewInfo = wvPkg.packageName + " " + (wvPkg.versionName != null ? wvPkg.versionName : "?");
+            }
+        } catch (Throwable ignored) {
+        }
+        String reason = detail == null ? "unknown" : (detail.didCrash() ? "renderer crashed" : "killed by system");
+        return "App: v" + appVersion
+                + "\nDevice: " + Build.MANUFACTURER + " " + Build.MODEL
+                + " (Android " + Build.VERSION.RELEASE + ", API " + Build.VERSION.SDK_INT + ")"
+                + "\nWebView: " + webViewInfo
+                + "\nReason: " + reason;
+    }
+
+    private void showRenderCrashFallback(RenderProcessGoneDetail detail) {
+        if (rootContainer == null || isFinishing() || isDestroyed()) {
+            return;
+        }
+        boolean isDark = (getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        int bgColor = isDark ? Color.BLACK : Color.WHITE;
+        int titleColor = isDark ? Color.WHITE : 0xFF1F2329;
+        int descColor = isDark ? 0xFFA3A7B0 : 0xFF646A73;
+        int cardBgColor = isDark ? 0xFF1C1D22 : 0xFFF5F6F7;
+        int cardTextColor = isDark ? 0xFFC8CCD4 : 0xFF4E5969;
+
+        rootContainer.removeAllViews();
+        rootContainer.setBackgroundColor(bgColor);
+
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setGravity(Gravity.CENTER);
+        int padH = dpToPx(24);
+        int padV = dpToPx(32);
+        panel.setPadding(padH, padV, padH, padV);
+
+        TextView titleView = new TextView(this);
+        titleView.setText("页面渲染异常");
+        titleView.setTextColor(titleColor);
+        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        titleView.setGravity(Gravity.CENTER);
+        panel.addView(titleView);
+
+        TextView descView = new TextView(this);
+        descView.setText("系统 WebView 渲染进程多次异常退出，请点击下方按钮重新加载；若仍复现，请截图下方信息反馈给开发者：");
+        descView.setTextColor(descColor);
+        descView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        descView.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams descLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        descLp.topMargin = dpToPx(10);
+        panel.addView(descView, descLp);
+
+        TextView infoView = new TextView(this);
+        infoView.setText(buildRenderCrashDiagnostics(detail));
+        infoView.setTextColor(cardTextColor);
+        infoView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        infoView.setTextIsSelectable(true);
+        int cardPad = dpToPx(12);
+        infoView.setPadding(cardPad, cardPad, cardPad, cardPad);
+        GradientDrawable cardBg = new GradientDrawable();
+        cardBg.setColor(cardBgColor);
+        cardBg.setCornerRadius(dpToPx(12));
+        infoView.setBackground(cardBg);
+        LinearLayout.LayoutParams infoLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        infoLp.topMargin = dpToPx(14);
+        panel.addView(infoView, infoLp);
+
+        Button retryBtn = new Button(this);
+        retryBtn.setText("重新加载");
+        retryBtn.setAllCaps(false);
+        retryBtn.setTextColor(Color.WHITE);
+        retryBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        retryBtn.setPadding(dpToPx(28), dpToPx(10), dpToPx(28), dpToPx(10));
+        GradientDrawable btnBg = new GradientDrawable();
+        btnBg.setColor(0xFF4D6BFE);
+        btnBg.setCornerRadius(dpToPx(999));
+        retryBtn.setBackground(btnBg);
+        retryBtn.setOnClickListener(v -> {
+            renderCrashCount = 0;
+            lastRenderCrashAt = 0L;
+            recreate();
+        });
+        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        btnLp.topMargin = dpToPx(18);
+        panel.addView(retryBtn, btnLp);
+
+        rootContainer.addView(panel, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
     }
 
     @Override

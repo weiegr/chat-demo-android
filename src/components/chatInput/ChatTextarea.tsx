@@ -63,7 +63,14 @@ export const ChatTextarea = ({
           }
         }}
         onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+          // 桌面端 Enter 发送 / Shift+Enter 换行；移动端软键盘"换行"键就是
+          // Enter（key === 'Enter'），不能拦截，否则手机上无法换行直接发送。
+          if (
+            !isMobile &&
+            event.key === 'Enter' &&
+            !event.shiftKey &&
+            !event.nativeEvent.isComposing
+          ) {
             event.preventDefault()
             onSend()
           }

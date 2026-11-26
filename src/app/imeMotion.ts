@@ -145,7 +145,13 @@ const ensureBridgeInstalled = () => {
   window.__imeBridge = bridge
   const host = window.AndroidHost
   if (host?.getCurrentImeRaiseCss) {
-    const initialRaise = Math.max(0, Number(host.getCurrentImeRaiseCss()) || 0)
+    let rawRaise = 0
+    try {
+      rawRaise = Number(host.getCurrentImeRaiseCss()) || 0
+    } catch {
+      rawRaise = 0
+    }
+    const initialRaise = Number.isFinite(rawRaise) ? Math.max(0, rawRaise) : 0
     if (initialRaise > 0) {
       const initialShift = computeImeShift(initialRaise)
       state.raise = initialRaise
@@ -165,8 +171,12 @@ export const getLastKnownImeRaiseCss = (): number => {
   if (typeof window === 'undefined') {
     return 0
   }
-  const height = Number(window.AndroidHost?.getKeyboardHeightCss?.()) || 0
-  return height > 0 ? height : 0
+  try {
+    const height = Number(window.AndroidHost?.getKeyboardHeightCss?.()) || 0
+    return Number.isFinite(height) && height > 0 ? height : 0
+  } catch {
+    return 0
+  }
 }
 
 export const getImeMotionState = (): Readonly<ImeMotionState> => {

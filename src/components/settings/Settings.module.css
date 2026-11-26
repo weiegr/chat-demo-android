@@ -14,7 +14,6 @@
   padding: 19px 24px 22px;
   opacity: 0;
   transform: translate3d(0, 12px, 0) scale(0.96);
-  will-change: transform, opacity;
   transition:
     opacity 0.18s ease-out,
     transform 0.2s var(--ds-ease-in-out);
@@ -628,8 +627,11 @@
     opacity: 1;
     box-shadow: -4px 0 14px rgba(0, 0, 0, 0.12);
     transform: translate3d(100%, 0, 0);
-    will-change: transform;
     transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+
+    &[data-animating='true'] {
+      will-change: transform;
+    }
 
     [data-ds-dark-theme] & {
       --settings-page-bg: #000000;
@@ -757,26 +759,33 @@
     background-color: var(--settings-page-bg);
     contain: layout style paint;
     isolation: isolate;
+  }
+
+  .dialog.dialog[data-animating='true'] .mobileMainPage,
+  .dialog.dialog[data-animating='true'] .mobileSubPage {
     will-change: transform;
+  }
 
-    &::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      z-index: 10;
-      background-color: rgba(0, 0, 0, 0.08);
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  .mobileMainPage::after,
+  .mobileSubPage::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    background-color: rgba(0, 0, 0, 0.08);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  }
 
-      [data-ds-dark-theme] & {
-        background-color: rgba(0, 0, 0, 0.32);
-      }
-    }
+  [data-ds-dark-theme] .mobileMainPage::after,
+  [data-ds-dark-theme] .mobileSubPage::after {
+    background-color: rgba(0, 0, 0, 0.32);
+  }
 
-    > .content {
-      margin: 0;
-    }
+  .mobileMainPage > .content,
+  .mobileSubPage > .content {
+    margin: 0;
   }
 
   .mobileMainPage {
@@ -1090,10 +1099,11 @@
     border-radius: 40px;
     background-color: var(--dsw-specific-login-input);
     font-size: 15px;
+  }
 
-    [data-ds-dark-theme] & {
-      background-color: var(--dsw-alias-bg-layer-3);
-    }
+  [data-ds-dark-theme] .apiKeySaved,
+  [data-ds-dark-theme] .apiKeyInput {
+    background-color: var(--dsw-alias-bg-layer-3);
   }
 
   .apiKeySaved {
@@ -1138,7 +1148,6 @@
   overflow: hidden;
   opacity: 0;
   transform: scale(0.94);
-  will-change: transform, opacity;
   transition:
     opacity 0.18s ease-out,
     transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
@@ -1259,6 +1268,11 @@
   font-weight: 400;
 }
 
+/*
+ * 底部抽屉样式全部采用扁平选择器，避免多选择器嵌套经 LightningCSS 降级后产出
+ * `:-webkit-any(.urlSheet.urlSheet, ...).sheetVisible`，在低版本 WebView（< Chrome 88）
+ * 上失效导致抽屉永久停留在屏幕底部之外、页面只剩半透明遮罩。
+ */
 .ttsSheet.ttsSheet,
 .locationSheet.locationSheet,
 .urlSheet.urlSheet {
@@ -1267,33 +1281,42 @@
   max-width: none;
   padding: 20px 24px calc(24px + var(--safe-bottom));
   border-radius: 28px 28px 0 0;
+  opacity: 1;
   transform: translate3d(0, 100%, 0);
-  will-change: transform;
   transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
 
-  &.sheetVisible {
-    transform: translate3d(0, 0, 0);
-  }
+.ttsSheet.ttsSheet.sheetVisible,
+.locationSheet.locationSheet.sheetVisible,
+.urlSheet.urlSheet.sheetVisible {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
 
-  > div:first-child {
-    position: relative;
-    justify-content: center;
-    min-height: 36px;
-    margin-bottom: 0;
+.ttsSheet.ttsSheet > div:first-child,
+.locationSheet.locationSheet > div:first-child,
+.urlSheet.urlSheet > div:first-child {
+  position: relative;
+  justify-content: center;
+  min-height: 36px;
+  margin-bottom: 0;
+}
 
-    > div {
-      font-size: 18px;
-      font-weight: 600;
-    }
+.ttsSheet.ttsSheet > div:first-child > div,
+.locationSheet.locationSheet > div:first-child > div,
+.urlSheet.urlSheet > div:first-child > div {
+  font-size: 18px;
+  font-weight: 600;
+}
 
-    > button {
-      position: absolute;
-      right: 0;
-      margin-right: 0;
-      border-radius: 50%;
-      background-color: var(--dsw-alias-interactive-bg-hover);
-    }
-  }
+.ttsSheet.ttsSheet > div:first-child > button,
+.locationSheet.locationSheet > div:first-child > button,
+.urlSheet.urlSheet > div:first-child > button {
+  position: absolute;
+  right: 0;
+  margin-right: 0;
+  border-radius: 50%;
+  background-color: var(--dsw-alias-interactive-bg-hover);
 }
 
 .urlSheet {

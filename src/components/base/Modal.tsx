@@ -17,6 +17,11 @@ import styles from './Modal.module.css'
 
 /** 当前打开的弹窗，后打开的在末尾；叠放时 Esc 只关闭最上层 */
 const openModals: object[] = []
+/** 已挂载弹窗的 z-index 分配表：确保嵌套打开的二级抽屉层级严格高于下层全屏设置页，且不超过下拉菜单（1050） */
+const BASE_MODAL_Z_INDEX = 1000
+const MAX_MODAL_Z_INDEX = 1040
+const MODAL_Z_STEP = 5
+const mountedModalLayers = new Map<object, number>()
 
 /** 遮罩 + 居中卡片，Esc / 点遮罩关闭 */
 export const Modal = ({
@@ -62,8 +67,33 @@ export const Modal = ({
   }
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
+  const layerTokenRef = useRef<object | null>(null)
+  if (!layerTokenRef.current) {
+    layerTokenRef.current = {}
+  }
+  const zIndexRef = useRef<number | null>(null)
+  if (zIndexRef.current === null) {
+    let maxZ = BASE_MODAL_Z_INDEX - MODAL_Z_STEP
+    for (const z of mountedModalLayers.values()) {
+      if (z > maxZ) {
+        maxZ = z
+      }
+    }
+    zIndexRef.current = Math.min(MAX_MODAL_Z_INDEX, maxZ + MODAL_Z_STEP)
+  }
   const controlled = visible !== undefined
   const active = visible ?? true
+
+  useLayoutEffect(() => {
+    const token = layerTokenRef.current
+    if (!token) {
+      return
+    }
+    mountedModalLayers.set(token, zIndexRef.current ?? BASE_MODAL_Z_INDEX)
+    return () => {
+      mountedModalLayers.delete(token)
+    }
+  }, [])
 
   // 受控弹层首次以隐藏初始态挂载时主动提交一次布局，确保 WebView 锁定过渡起点（before-change style）
   useLayoutEffect(() => {
@@ -104,7 +134,8 @@ export const Modal = ({
     }
 
     const applyLift = (raise: number) => {
-      const lift = raise > 0.05 ? Math.min(raise * factor, maxLift) : 0
+      const safeRaise = Number.isFinite(raise) ? raise : 0
+      const lift = safeRaise > 0.05 ? Math.min(safeRaise * factor, maxLift) : 0
       currentLift = lift > 0.05 ? lift : 0
       if (supportsTranslate) {
         if (currentLift > 0) {
@@ -120,8 +151,12 @@ export const Modal = ({
       }
     }
 
-    cacheMetrics()
-    applyLift(getImeMotionState().raise)
+    try {
+      cacheMetrics()
+      applyLift(getImeMotionState().raise)
+    } catch {
+      // 忽略异常宿主返回值，避免阻断二级抽屉正常展示
+    }
 
     const unsubscribe = subscribeImeMotion((phase, ime) => {
       if (phase === 'prepare') {
@@ -168,6 +203,7 @@ export const Modal = ({
         overlayClassName,
         controlled && (visible ? styles.overlayVisible : styles.overlayHidden)
       )}
+      style={{ zIndex: zIndexRef.current }}
       aria-hidden={controlled && !visible ? true : undefined}
       onMouseDown={(event) => {
         if (active && event.target === event.currentTarget) {
