@@ -17,14 +17,20 @@ export type UserLocation = {
 }
 
 const regions = new Set(regionCodes)
+/** Intl.DisplayNames 需要 Chromium 81+，低版本 WebView 退回内置地区名表。 */
+const createRegionNames = (locale: 'zh-CN' | 'en-US'): Intl.DisplayNames | null =>
+  typeof Intl.DisplayNames === 'function'
+    ? new Intl.DisplayNames([locale], { type: 'region' })
+    : null
+
 const regionNames = {
-  'zh-CN': new Intl.DisplayNames(['zh-CN'], { type: 'region' }),
-  'en-US': new Intl.DisplayNames(['en-US'], { type: 'region' }),
+  'zh-CN': createRegionNames('zh-CN'),
+  'en-US': createRegionNames('en-US'),
 }
 
 export const getRegionName = (code: string, locale: 'zh-CN' | 'en-US'): string =>
   regions.has(code)
-    ? (regionNameOverrides[locale][code] ?? regionNames[locale].of(code) ?? code)
+    ? (regionNameOverrides[locale][code] ?? regionNames[locale]?.of(code) ?? code)
     : ''
 
 export const normalizeLocation = (value: unknown): UserLocation | null => {

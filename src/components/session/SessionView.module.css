@@ -161,11 +161,13 @@
     position: relative;
     bottom: auto;
     flex-shrink: 0;
-    margin: 0 auto;
-    padding-bottom: calc(12px + var(--safe-bottom));
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0 12px calc(16px + var(--safe-bottom));
 
     [data-ime-open='true'] & {
-      padding-bottom: calc(6px + var(--safe-bottom));
+      padding-bottom: calc(8px + var(--safe-bottom));
     }
   }
 }

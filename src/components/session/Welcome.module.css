@@ -7,6 +7,10 @@
 
 @media (min-width: 768px) {
   .container {
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-gutter: stable both-edges;
+    scrollbar-color: var(--scroll-color) transparent;
     padding-bottom: var(--safe-bottom);
   }
 }
@@ -18,10 +22,10 @@
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
-  width: 100%;
-  max-width: var(--message-list-max-width);
+  width: calc(var(--message-list-max-width) - 64px);
+  max-width: calc(100% - 32px);
   margin: auto;
-  padding: 0 32px 64px;
+  padding: 0 0 64px;
 }
 
 .inputSlot {
@@ -45,6 +49,57 @@
   align-items: center;
   width: 100%;
   margin-bottom: 24px;
+}
+
+.heroInner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+.heroEntering {
+  animation: hero-enter 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
+
+  /* 自定义背景下 .modeThumb 含 backdrop-filter，父层改 opacity 会隔离 Backdrop Root 引起磨砂闪变；
+     因此自定义背景时仅做纯 GPU 位移，由文字子层各自柔滑淡入 */
+  [data-chat-bg='true'] & {
+    animation: hero-enter-slide 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
+
+    .greeting,
+    .modeHintViewport {
+      animation: hero-fade 0.22s ease-out both;
+    }
+  }
+}
+
+@keyframes hero-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes hero-enter-slide {
+  from {
+    transform: translate3d(0, 12px, 0);
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes hero-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* 三条标题共用同一网格槽位自然撑开最大高度，零空白帧交叉淡入淡出 */
@@ -418,6 +473,7 @@
     flex: 1;
     min-height: 0;
     justify-content: flex-end;
+    width: 100%;
     max-width: none;
     margin: 0;
     padding: 0 12px calc(16px + var(--safe-bottom));
@@ -446,7 +502,11 @@
     transition: none;
   }
 
-  .modeIconPop {
+  .modeIconPop,
+  .heroEntering,
+  [data-chat-bg='true'] .heroEntering,
+  [data-chat-bg='true'] .heroEntering .greeting,
+  [data-chat-bg='true'] .heroEntering .modeHintViewport {
     animation: none;
   }
 }

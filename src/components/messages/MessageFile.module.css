@@ -89,6 +89,7 @@ button.image {
   align-items: flex-end;
   justify-content: center;
   box-sizing: border-box;
+  min-height: 60px;
   min-height: min(60px, 100%);
   padding: 0 4px 8px;
   font-size: 11px;

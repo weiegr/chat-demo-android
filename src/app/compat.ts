@@ -320,6 +320,43 @@ if (typeof Blob !== 'undefined' && typeof Blob.prototype.arrayBuffer !== 'functi
   })
 }
 
+// Blob.text / Blob.stream 在 Chromium 76 才加入；旧内核的会话导入与分片导出依赖它们。
+if (typeof Blob !== 'undefined' && typeof Blob.prototype.text !== 'function') {
+  Object.defineProperty(Blob.prototype, 'text', {
+    value(this: Blob): Promise<string> {
+      return this.arrayBuffer().then((buffer) => new TextDecoder().decode(buffer))
+    },
+    configurable: true,
+    writable: true,
+  })
+}
+
+if (typeof Blob !== 'undefined' && typeof Blob.prototype.stream !== 'function') {
+  Object.defineProperty(Blob.prototype, 'stream', {
+    value(this: Blob): ReadableStream<Uint8Array> {
+      let offset = 0
+      const chunkSize = 64 * 1024
+      return new ReadableStream<Uint8Array>({
+        pull: async (controller) => {
+          if (offset >= this.size) {
+            controller.close()
+            return
+          }
+          const chunk = this.slice(offset, offset + chunkSize)
+          const buffer = await chunk.arrayBuffer()
+          offset += chunk.size
+          controller.enqueue(new Uint8Array(buffer))
+          if (offset >= this.size) {
+            controller.close()
+          }
+        },
+      })
+    },
+    configurable: true,
+    writable: true,
+  })
+}
+
 if (typeof globalObj.structuredClone !== 'function') {
   const cloneValue = (value: unknown, seen: WeakMap<object, unknown>): unknown => {
     if (value === null || typeof value !== 'object') {

@@ -8,7 +8,7 @@ import {
   NewChatIcon,
 } from '../base/icons.js'
 import { getAccountDisplayLabel, useMockAccount } from '../../services/account.js'
-import { setSiderCollapsed } from '../../services/settings.js'
+import { setSiderCollapsed, useSettings } from '../../services/settings.js'
 import { loadSession } from '../../services/chat/db.js'
 import { isMemorySession } from '../../services/chat/memoryModel.js'
 import { newChat, removeSession, useChatStore } from '../../services/chat/store.js'
@@ -48,9 +48,11 @@ export const Sider = memo(function Sider({
   showRpContext?: boolean
 }) {
   const t = useTranslate()
+  const personalCenterEnabled = useSettings((state) => state.personalCenterEnabled)
+  const showPersonalCenter = __BETA__ && personalCenterEnabled
   const account = useMockAccount()
   const accountLabel = getAccountDisplayLabel(account)
-  const floatingAvatarOnly = __BETA__ && !accountLabel
+  const floatingAvatarOnly = showPersonalCenter && !accountLabel
   const chatSearchOpen = useChatSearch((state) => mobile && state.open)
   const chatSearchPresenting = useChatSearch((state) => mobile && state.presenting)
   const chatSearchClosingToSession = useChatSearch((state) => mobile && state.closingToSession)
@@ -160,7 +162,7 @@ export const Sider = memo(function Sider({
       )}
       <SessionList mobile={mobile} floatingBottom={floatingAvatarOnly} onDelete={requestDelete} />
       <div className={clsx(styles.bottom, floatingAvatarOnly && styles.bottomFloating)}>
-        {__BETA__ ? (
+        {showPersonalCenter ? (
           <button
             type="button"
             className={clsx(

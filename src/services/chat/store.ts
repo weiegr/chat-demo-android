@@ -2,6 +2,14 @@ import { create } from 'zustand'
 import { getAbortReason, throwIfAborted } from '../../utils/abort.js'
 import { formatDate } from '../../utils/format.js'
 import { createId } from '../../utils/id.js'
+import {
+  buildAppGuideContext,
+  isAppGuideOverviewQuery,
+  searchAppGuide,
+  toAppGuideMatch,
+  toAppGuideOverview,
+} from '../appGuide.js'
+import { fetchAccountBalance, formatBalanceSummary } from '../api/balance.js'
 import { ApiError, streamMessage } from '../api/client.js'
 import { isOcrSupportedAttachment, recognizeFileText } from '../api/ocr.js'
 import {
@@ -173,6 +181,66 @@ const LOCATION_TOOL: ClientToolDefinition = {
   },
 }
 
+const BALANCE_TOOL: ClientToolDefinition = {
+  name: 'get_balance',
+  description:
+    "Get the current DeepSeek API account balance for the API key in use. Call this tool only when the user asks about their remaining balance, credit, quota, whether the account can still be used, or how much they have topped up. The result contains is_available plus per-currency total, granted, and topped-up balances.",
+  input_schema: {
+    type: 'object',
+    properties: {},
+  },
+}
+
+const APP_GUIDE_TOOL: ClientToolDefinition = {
+  name: 'get_app_guide',
+  description:
+    "Look up this app's user-facing feature guide when the user asks what a feature does, how to use it, or where its setting is. Returns matching entries with a short purpose description, the in-app path, and a settings link. Always call this tool for questions about this app's features or settings instead of answering from memory.",
+  input_schema: {
+    type: 'object',
+    properties: {
+      topic: {
+        type: 'string',
+        description: "The feature or setting the user is asking about, using the user's own words.",
+      },
+    },
+    required: ['topic'],
+  },
+}
+
+/** 余额工具可用时的提示词；金额只来自工具结果，避免模型猜测。 */
+const BALANCE_TOOL_PROMPT =
+  '本轮可以调用 get_balance 查询当前 API Key 的账户余额。用户询问余额、额度、是否够用或充值情况时，先调用工具获取真实金额再回答；不要猜测具体金额，也不要在无关话题中主动提及余额。'
+
+/** 未声明余额工具时收紧回答，避免模型编造余额或给出错误的开启路径。 */
+const BALANCE_TOOL_UNAVAILABLE_PROMPT =
+  '本轮没有余额查询工具。用户询问账户余额或额度时，不要猜测金额，提示对方在快速模式下开启深度思考与智能搜索后再问。'
+
+/** 专家模式不支持客户端工具，直接说明无法查询，避免误导用户去找开关。 */
+const BALANCE_TOOL_UNSUPPORTED_PROMPT =
+  '当前模式不支持查询账户余额。用户问到时，不要猜测金额，直接说明该模式无法查询真实余额。'
+
+/** 功能文档工具可用时的提示词；只讲用途和入口，不讲实现细节。 */
+const APP_GUIDE_TOOL_PROMPT =
+  '本轮可以调用 get_app_guide 查阅应用功能文档。用户询问软件功能、某个设置在哪、怎么使用时，先调用工具，再按返回的说明回答；只讲用途和入口，不讲实现细节。返回带 settings_url 时，用 Markdown 链接给出，链接文字用「打开设置」，地址必须原样使用 settings_url，不要自己拼页面名。'
+
+/** 未声明工具时把命中的文档直接注入 system，保证默认设置下也能准确回答。 */
+const APP_GUIDE_CONTEXT_PROMPT =
+  '以下是本轮问题相关的应用功能资料（可能是功能总览或具体条目）。回答功能或设置位置问题时按资料说明，只讲用途和入口，不讲实现细节；有设置链接时用 Markdown 链接给出，不要编造资料里没有的功能。'
+
+/**
+ * 思考链语言约束：模型偶尔会用英文推理。
+ * 不硬编码中文，因为用户可能用英文提问；要求跟随用户最新消息的语言。
+ */
+const LANGUAGE_PROMPT = [
+  '思考过程和最终回答都使用与用户最新一条消息相同的语言。',
+  '用户用中文提问时，即使消息里夹着英文单词、代码、链接或专有名词，也要用中文思考和回答，不要整段切换成英文。',
+  '用户用其他语言提问时跟随该语言，不要因为系统提示或工具说明是中文就改用中文。',
+].join('\n')
+
+/** RP 模式只约束思考语言，不干扰角色设定指定的语言。 */
+const RP_LANGUAGE_PROMPT =
+  '思考过程使用与你当前角色回复相同的语言。角色设定明确指定语言时以设定为准，不要无故切换成英文。'
+
 /**
  * 组装本轮请求的 system 提示词：
  * - RP 模式使用角色设定里的时间；
@@ -185,21 +253,34 @@ const buildRequestSystem = (
     now,
     search,
     hasLink,
+    balance,
+    isV4Pro,
+    guide,
   }: {
     isRpMode: boolean
     now: Date
     search: boolean
     hasLink: boolean
+    balance: boolean
+    isV4Pro: boolean
+    guide: string
   }
 ): string => {
   if (isRpMode) {
-    return basePrompt.trim()
+    return [basePrompt.trim(), RP_LANGUAGE_PROMPT].filter(Boolean).join('\n\n')
   }
   const date = formatDate(now)
   return [
     basePrompt.trim(),
+    LANGUAGE_PROMPT,
     search ? SEARCH_TOOL_PROMPT : '',
     hasLink ? READ_LINK_TOOL_PROMPT : '',
+    balance
+      ? BALANCE_TOOL_PROMPT
+      : isV4Pro
+        ? BALANCE_TOOL_UNSUPPORTED_PROMPT
+        : BALANCE_TOOL_UNAVAILABLE_PROMPT,
+    guide,
     date
       ? `当前设备本地日期为 ${date}。回答现实中的「今天」「今年」等时间问题时以此为准。知识截止仅说明知识范围，历史消息日期仅说明当时的背景。没有明确依据时，不要自行声称具体的知识截止日期。`
       : '',
@@ -215,7 +296,8 @@ const buildRequestSystem = (
  * 声明本轮可用工具：
  * - RP 模式与专家模式（v4-pro）不声明任何工具；
  * - 快速模式下，read_url 仅在本轮正文含链接时声明，search 开关控制 deepseek_web_search；
- *   客户端定位工具仅在快速模式、思考 + 搜索均开启时声明（服务端约束，且缺少推理时模型无法正确安排调用顺序）。
+ *   客户端定位工具仅在快速模式、思考 + 搜索均开启且允许 AI 定位时声明（服务端约束，且缺少推理时模型无法正确安排调用顺序）；
+ *   余额与功能文档工具沿用同一约束，思考 + 搜索均开启时声明，不额外要求定位权限。
  */
 const requestTools = (
   isRpMode: boolean,
@@ -236,8 +318,12 @@ const requestTools = (
     tools.push({ type: 'deepseek_web_search', name: 'deepseek_web_search' })
   }
   // 服务端约束：客户端工具只能在思考模式下与 deepseek_web_search 一同声明，缺一返回 400
-  if (allowAiLocation && thinking && search) {
-    tools.push(LOCATION_TOOL)
+  if (thinking && search) {
+    if (allowAiLocation) {
+      tools.push(LOCATION_TOOL)
+    }
+    tools.push(BALANCE_TOOL)
+    tools.push(APP_GUIDE_TOOL)
   }
   return tools
 }
@@ -394,7 +480,13 @@ const pendingMemoryExclusions = new Set<string>()
 /** 通话会话复制了来源会话的上下文时，记忆检索排除该来源会话以免重复召回。 */
 const liveSourceSessions = new Map<string, string>()
 
-export type LiveToolActivity = 'search' | 'read_link' | 'location' | 'memory'
+export type LiveToolActivity =
+  | 'search'
+  | 'read_link'
+  | 'location'
+  | 'balance'
+  | 'guide'
+  | 'memory'
 
 export const loadSessionAttachment = async (sessionId: string, id: string) =>
   pendingFiles.get(sessionId)?.find((file) => file.id === id)?.blob ?? (await db.loadFile(id))
@@ -1700,10 +1792,134 @@ const waitForRetry = (attempt: number, signal: AbortSignal) =>
     signal.addEventListener('abort', onAbort, { once: true })
   })
 
+const executeAppGuideTool = (block: ClientToolUseBlock): ClientToolResultBlock => {
+  const topic = typeof block.input.topic === 'string' ? block.input.topic.trim() : ''
+  if (!topic) {
+    return {
+      type: 'client_tool_result',
+      tool_use_id: block.id,
+      name: block.name,
+      status: 'failed',
+      is_error: true,
+      errorCode: 'missing_topic',
+      content: JSON.stringify({
+        error: 'missing_topic',
+        message: 'A feature or setting topic is required',
+      }),
+    }
+  }
+  if (isAppGuideOverviewQuery(topic)) {
+    return {
+      type: 'client_tool_result',
+      tool_use_id: block.id,
+      name: block.name,
+      status: 'done',
+      summary: '功能总览',
+      content: JSON.stringify({
+        query: topic,
+        overview: toAppGuideOverview(),
+        matches: [],
+      }),
+    }
+  }
+  const matches = searchAppGuide(topic, 4).map(toAppGuideMatch)
+  return {
+    type: 'client_tool_result',
+    tool_use_id: block.id,
+    name: block.name,
+    status: 'done',
+    summary: matches.length > 0 ? `${matches.length} 条功能说明` : '未找到相关功能说明',
+    content: JSON.stringify({ query: topic, matches }),
+  }
+}
+
+const balanceErrorCode = (error: unknown) => {
+  if (error instanceof ApiError) {
+    if (error.status === 401) {
+      return 'unauthorized'
+    }
+    if (error.status === 402) {
+      return 'insufficient_balance'
+    }
+    if (error.status === 429) {
+      return 'rate_limited'
+    }
+    if (error.kind === 'network') {
+      return 'network'
+    }
+  }
+  return 'unavailable'
+}
+
+/** 查询账户余额：只读接口，不产生费用；金额原样回传给模型与时间线。 */
+const executeBalanceTool = async (
+  block: ClientToolUseBlock,
+  signal: AbortSignal
+): Promise<ClientToolResultBlock> => {
+  const { apiKey } = useSettings.getState()
+  if (!apiKey) {
+    return {
+      type: 'client_tool_result',
+      tool_use_id: block.id,
+      name: block.name,
+      status: 'failed',
+      is_error: true,
+      errorCode: 'missing_api_key',
+      content: JSON.stringify({
+        error: 'missing_api_key',
+        message: 'API key is not configured',
+      }),
+    }
+  }
+  try {
+    const balance = await fetchAccountBalance(apiKey, signal)
+    return {
+      type: 'client_tool_result',
+      tool_use_id: block.id,
+      name: block.name,
+      status: 'done',
+      summary: formatBalanceSummary(balance),
+      content: JSON.stringify({
+        is_available: balance.available,
+        balances: balance.entries.map((entry) => ({
+          currency: entry.currency,
+          total_balance: entry.total,
+          granted_balance: entry.granted,
+          topped_up_balance: entry.toppedUp,
+        })),
+        fetched_at: new Date().toISOString(),
+      }),
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw error
+    }
+    const code = balanceErrorCode(error)
+    return {
+      type: 'client_tool_result',
+      tool_use_id: block.id,
+      name: block.name,
+      status: 'failed',
+      is_error: true,
+      errorCode: code,
+      content: JSON.stringify({
+        error: code,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    }
+  }
+}
+
 const executeClientTool = async (
   block: ClientToolUseBlock,
   signal: AbortSignal
 ): Promise<ClientToolResultBlock> => {
+  if (block.name === 'get_app_guide') {
+    return executeAppGuideTool(block)
+  }
+  if (block.name === 'get_balance') {
+    return executeBalanceTool(block, signal)
+  }
   if (block.name !== 'get_location') {
     return {
       type: 'client_tool_result',
@@ -2119,10 +2335,20 @@ const streamReply = async (
           .filter(Boolean)
           .join('\n\n')
         // 服务端约束：v4-pro 不支持 server-side 工具（web_search/read_url）与 title 生成，
-        // 请求携带任一项即整体报错，因此连同依赖 search 的定位工具一并停用，标题走本地兜底
+        // 请求携带任一项即整体报错，因此连同依赖 search 的定位/余额工具一并停用，标题走本地兜底
         const serverToolsAllowed = !isRpMode && !isV4Pro
         const hasLink = serverToolsAllowed && LINK_PATTERN.test(prepared.question.content)
         const searchEnabled = serverToolsAllowed && (initial.search ?? false)
+        const balanceEnabled = serverToolsAllowed && (initial.thinking ?? false) && searchEnabled
+        const guideEnabled = serverToolsAllowed && (initial.thinking ?? false) && searchEnabled
+        // 未声明工具时（默认快速模式、专家模式）把命中的功能文档直接注入，避免只能回答“无法查询”
+        const guideContext =
+          !guideEnabled && !isRpMode ? buildAppGuideContext(prepared.question.content) : ''
+        const guidePrompt = guideEnabled
+          ? APP_GUIDE_TOOL_PROMPT
+          : guideContext
+            ? `${APP_GUIDE_CONTEXT_PROMPT}\n\n${guideContext}`
+            : ''
         const safety = safetyCheck(isRpMode)
         const tools = requestTools(
           isRpMode,
@@ -2140,6 +2366,9 @@ const streamReply = async (
           now: turnStartedAt,
           search: searchEnabled,
           hasLink,
+          balance: balanceEnabled,
+          isV4Pro,
+          guide: guidePrompt,
         })
         let body: CreateMessageRequest = {
           model,
@@ -2230,6 +2459,10 @@ const streamReply = async (
                 notifyLiveTool('memory')
               } else if (block.name === 'get_location') {
                 notifyLiveTool('location')
+              } else if (block.name === 'get_balance') {
+                notifyLiveTool('balance')
+              } else if (block.name === 'get_app_guide') {
+                notifyLiveTool('guide')
               }
             } else if (block.type === 'text' && liveToolActive) {
               notifyLiveTool(null)

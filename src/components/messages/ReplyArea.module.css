@@ -392,6 +392,13 @@
   cursor: pointer;
 }
 
+/* 功能文档的设置入口：沿用芯片外观，去掉按钮默认边框 */
+.guideChip {
+  appearance: none;
+  border: 0;
+  color: var(--dsw-alias-brand-primary);
+}
+
 .chipFailed {
   color: var(--dsw-alias-label-caption);
   cursor: not-allowed;

@@ -8,6 +8,7 @@ import { ChatInput } from '../chatInput/ChatInput.js'
 import { MessageList } from '../messages/MessageList.js'
 import { useUserEdit } from '../messages/userEditState.js'
 import { getChatModeMeta } from './chatModeMeta.js'
+import { runComposerTransition } from './composerTransition.js'
 import { MobileHeader } from './MobileHeader.js'
 import { SessionMemoryButton } from './SessionMemoryButton.js'
 import styles from './SessionView.module.css'
@@ -33,6 +34,8 @@ export const SessionView = ({
   const title = session.title || t('untitledChat')
   const mode = session.mode ?? 'fast'
   const modeMeta = getChatModeMeta(mode)
+
+  useLayoutEffect(() => runComposerTransition(viewRef.current, 'session').cleanup, [])
 
   // 同步实测顶栏高度，供自定义背景模式下悬浮顶栏、列表顶部留白与思考标题精确吸顶使用
   useLayoutEffect(() => {

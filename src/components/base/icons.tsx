@@ -917,6 +917,23 @@ export const IconLocationWarningOutline16 = () => (
   </svg>
 )
 
+/** 账户余额：线性钱包图标，与工具时间线图标保持统一线宽 */
+export const IconWalletOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect
+      x="2.1"
+      y="3.7"
+      width="11.8"
+      height="8.9"
+      rx="2.1"
+      stroke="currentColor"
+      strokeWidth={1.35}
+    />
+    <path d="M2.6 6.35H13.4" stroke="currentColor" strokeWidth={1.35} strokeLinecap="round" />
+    <path d="M9.55 9.55H11.2" stroke="currentColor" strokeWidth={1.35} strokeLinecap="round" />
+  </svg>
+)
+
 /** 快速模式：线性闪电图标 */
 export const IconBoltOutline16 = () => (
   <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">

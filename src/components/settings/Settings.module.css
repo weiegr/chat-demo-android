@@ -436,6 +436,7 @@
 }
 
 .regionSelect {
+  max-width: 285px;
   max-width: min(285px, 100%);
 }
 
@@ -1918,6 +1919,17 @@
     min-height: 0;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
+  }
+
+  /* 关闭个人中心后的纯设置主页滚动区：与 56px 悬停顶栏对齐，切换开关时子页零位移 */
+  .mobilePlainScroll {
+    box-sizing: border-box;
+    padding: calc(var(--safe-top) + 64px) 16px
+      calc(28px + var(--safe-bottom) + var(--ime-settled, 0px));
+
+    > .mobileGroupTitle:first-child {
+      margin-top: 4px;
+    }
   }
 
   .mobileHeroSpacer {

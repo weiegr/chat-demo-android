@@ -123,7 +123,7 @@
   backdrop-filter: blur(20px) saturate(1.4);
 }
 
-[data-chat-bg='true'] .topFrost[data-scrolled='true']::before,
+[data-chat-bg='true'] .topFrost[data-scrolled='true']:not([data-read-only='true'])::before,
 [data-chat-bg='true'] .topFrost[data-think-stuck='true']::before {
   opacity: 1;
 }
@@ -183,10 +183,10 @@
   max-width: calc(100% - 40px);
   margin: 0 auto;
   padding-bottom: 24px;
+}
 
-  [data-chat-bg='true'] & {
-    padding-top: var(--message-list-inset-top, 0px);
-  }
+[data-chat-bg='true'] .column[data-inset-header='true'] {
+  padding-top: var(--message-list-inset-top, 0px);
 }
 
 .editMask {

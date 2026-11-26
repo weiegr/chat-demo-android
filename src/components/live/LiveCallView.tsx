@@ -3,6 +3,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from
 import { getImeMotionState, hasNativeImeMotion, subscribeImeMotion } from '../../app/imeMotion.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
+import { useActiveChatBackgroundUrl } from '../../services/chatBackground.js'
 import { useChatStore, type LiveToolActivity } from '../../services/chat/store.js'
 import { getAudioLevel } from '../../services/speech/voiceActivity.js'
 import { IconButton } from '../base/IconButton.js'
@@ -41,6 +42,8 @@ const TOOL_LABELS = {
   search: 'liveToolSearch',
   read_link: 'liveToolReadLink',
   location: 'liveToolLocation',
+  balance: 'liveToolBalance',
+  guide: 'liveToolGuide',
 } as const satisfies Record<LiveToolActivity, TranslationKey>
 
 const LIVE_TITLE = 'DeepSeek Live'
@@ -48,6 +51,7 @@ const LIVE_TITLE = 'DeepSeek Live'
 export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () => void }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
+  const activeChatBgUrl = useActiveChatBackgroundUrl()
   const [text, setText] = useState('')
   const [transcriptOpen, setTranscriptOpen] = useState(false)
   const panelId = useId()
@@ -285,12 +289,24 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
     <section
       ref={rootRef}
       className={clsx(styles.call, transcriptOpen && styles.historyOpen)}
+      data-chat-bg={activeChatBgUrl ? 'true' : undefined}
       {...(__BETA__ ? { 'data-beta-live-ime': '' } : {})}
       role="dialog"
       aria-modal="true"
       aria-label={LIVE_TITLE}
       tabIndex={-1}
     >
+      {activeChatBgUrl ? (
+        <div className={styles.chatBackgroundLayer} aria-hidden="true">
+          <img
+            src={activeChatBgUrl}
+            alt=""
+            draggable={false}
+            className={styles.chatBackgroundImage}
+          />
+          <div className={styles.chatBackgroundScrim} />
+        </div>
+      ) : null}
       <header className={styles.header}>
         <IconButton
           size="xl"

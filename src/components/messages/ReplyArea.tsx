@@ -10,6 +10,7 @@ import {
   IconChevronRightOutline14,
   IconCheckedOutline14,
   IconCloseFill14,
+  IconDocumentOutline16,
   IconFileOutline16,
   IconLinkOutline16,
   IconLocationOutline16,
@@ -18,13 +19,17 @@ import {
   IconSearchOutline16,
   IconSearchWarningOutline16,
   IconThinkOutline16,
+  IconWalletOutline16,
+  IconWarningOutline16,
 } from '../base/icons.js'
 import type { AssistantMessage, MemoryToolStepBlock } from '../../services/chat/types.js'
 import {
   getAreaTitle,
   isDeepSearchKind,
   isImageSearchKind,
+  type BalanceStep,
   type FindStep,
+  type GuideStep,
   type LocationStep,
   type OpenStep,
   type PageItem,
@@ -35,6 +40,10 @@ import {
   type Step,
 } from '../../services/chat/view.js'
 import { Tooltip } from '../base/Tooltip.js'
+import {
+  openSettingsPage,
+  readSettingsPageFromUrl,
+} from '../settings/settingsDialogState.js'
 import { Markdown } from '../markdown/Markdown.js'
 import { SiteThumbnails } from '../search/SiteLogo.js'
 import { toggleSearchPanel, useSearchPanel } from '../search/searchPanelState.js'
@@ -126,7 +135,32 @@ export const ReplyArea = memo(function ReplyArea({
       { root: scroller, rootMargin: `${-inset}px 0px 0px`, threshold: [0, 1] }
     )
     observer.observe(sentinel)
-    return () => observer.disconnect()
+
+    // 自定义背景时滚动层延伸至顶栏背后：思考区滚完推走标题时平滑淡出，避免与悬浮顶栏叠字
+    if (!hasChatBg || inset <= 0) {
+      titleElement.style.removeProperty('opacity')
+      return () => observer.disconnect()
+    }
+    const syncExitFade = () => {
+      const topLimit = scroller.getBoundingClientRect().top + inset
+      const rect = titleElement.getBoundingClientRect()
+      if (rect.top >= topLimit - 0.5) {
+        if (titleElement.style.opacity) {
+          titleElement.style.removeProperty('opacity')
+        }
+        return
+      }
+      const height = Math.max(rect.height, 1)
+      const visible = Math.max(0, Math.min(1, (rect.bottom - topLimit) / height))
+      titleElement.style.opacity = visible.toFixed(3)
+    }
+    syncExitFade()
+    scroller.addEventListener('scroll', syncExitFade, { passive: true })
+    return () => {
+      observer.disconnect()
+      scroller.removeEventListener('scroll', syncExitFade)
+      titleElement.style.removeProperty('opacity')
+    }
   }, [activeSticky, isMobile, hasChatBg])
 
   // 同步当前思考区吸顶态给列表顶部连续渐进模糊层，卸载时自动清理
@@ -210,9 +244,13 @@ const stepKey = (step: Step, index: number) =>
     ? step.key
     : step.type === 'location'
       ? `location-${step.id}`
-      : step.type === 'memory_tool_step'
-        ? `memory-${step.id}`
-        : `${step.type}-${index}`
+      : step.type === 'balance'
+        ? `balance-${step.id}`
+        : step.type === 'guide'
+          ? `guide-${step.id}`
+          : step.type === 'memory_tool_step'
+            ? `memory-${step.id}`
+            : `${step.type}-${index}`
 
 const StepItem = ({
   step,
@@ -265,6 +303,10 @@ const StepItem = ({
       return <ReadLinkRow step={step} isLast={isLast} />
     case 'location':
       return <LocationRow step={step} message={message} streaming={streaming} isLast={isLast} />
+    case 'balance':
+      return <BalanceRow step={step} message={message} streaming={streaming} isLast={isLast} />
+    case 'guide':
+      return <GuideRow step={step} message={message} streaming={streaming} isLast={isLast} />
     case 'memory_tool_step':
       return <HistoryToolRow step={step} isLast={isLast} />
     default:
@@ -613,6 +655,164 @@ const LocationRow = ({
           <span className={styles.chipText}>{step.summary}</span>
         </span>
       ) : null}
+    </ToolRow>
+  )
+}
+
+const balanceErrorKey = (code?: string) => {
+  switch (code) {
+    case 'missing_api_key':
+      return 'toolBalanceMissingKey'
+    case 'unauthorized':
+      return 'toolBalanceUnauthorized'
+    case 'insufficient_balance':
+      return 'toolBalanceInsufficient'
+    case 'rate_limited':
+      return 'toolBalanceRateLimited'
+    case 'network':
+      return 'toolBalanceNetwork'
+    default:
+      return 'toolBalanceUnavailable'
+  }
+}
+
+/** 账户余额工具行：与定位工具共用时间线样式，金额以芯片展示 */
+const BalanceRow = ({
+  step,
+  message,
+  streaming,
+  isLast,
+}: {
+  step: BalanceStep
+  message: AssistantMessage
+  streaming: boolean
+  isLast: boolean
+}) => {
+  const t = useTranslate()
+  const wip = step.status === 'wip'
+  const failed = step.status === 'failed'
+  const interrupted = failed && !streaming && message.status === 'stopped'
+
+  if (wip) {
+    return (
+      <ToolRow icon={<IconWalletOutline16 />} isLast={isLast}>
+        <span className={clsx(styles.intro, styles.shimmer)}>{t('toolBalancePending')}</span>
+      </ToolRow>
+    )
+  }
+  if (interrupted) {
+    return (
+      <ToolRow icon={<IconWalletOutline16 />} isLast={isLast}>
+        <span className={styles.intro}>{t('toolBalanceStopped')}</span>
+      </ToolRow>
+    )
+  }
+  if (failed) {
+    return (
+      <ToolRow icon={<IconWarningOutline16 />} isLast={isLast}>
+        <span className={styles.intro}>
+          {t('toolBalanceFail')} · {t(balanceErrorKey(step.errorCode))}
+        </span>
+      </ToolRow>
+    )
+  }
+  return (
+    <ToolRow icon={<IconWalletOutline16 />} isLast={isLast}>
+      <span className={styles.intro}>{t('toolBalanceDone')}</span>
+      {step.summary ? (
+        <span className={styles.chip}>
+          <span className={styles.chipText}>
+            {step.available === false
+              ? `${step.summary} · ${t('toolBalanceInsufficient')}`
+              : step.summary}
+          </span>
+        </span>
+      ) : null}
+    </ToolRow>
+  )
+}
+
+/** 功能文档工具行：每个命中项一个可点击设置入口，模型正文里也会给出同样的链接 */
+const GuideRow = ({
+  step,
+  message,
+  streaming,
+  isLast,
+}: {
+  step: GuideStep
+  message: AssistantMessage
+  streaming: boolean
+  isLast: boolean
+}) => {
+  const t = useTranslate()
+  const wip = step.status === 'wip'
+  const failed = step.status === 'failed'
+  const interrupted = failed && !streaming && message.status === 'stopped'
+
+  if (wip) {
+    return (
+      <ToolRow icon={<IconDocumentOutline16 />} isLast={isLast}>
+        <span className={clsx(styles.intro, styles.shimmer)}>{t('toolGuidePending')}</span>
+      </ToolRow>
+    )
+  }
+  if (interrupted) {
+    return (
+      <ToolRow icon={<IconDocumentOutline16 />} isLast={isLast}>
+        <span className={styles.intro}>{t('toolGuideStopped')}</span>
+      </ToolRow>
+    )
+  }
+  if (failed) {
+    return (
+      <ToolRow icon={<IconWarningOutline16 />} isLast={isLast}>
+        <span className={styles.intro}>
+          {t('toolGuideFail')}
+          {step.errorCode === 'missing_topic' ? ` · ${t('toolGuideMissingTopic')}` : ''}
+        </span>
+      </ToolRow>
+    )
+  }
+  if (!step.overview && step.items.length === 0) {
+    return (
+      <ToolRow icon={<IconDocumentOutline16 />} isLast={isLast}>
+        <span className={styles.intro}>{t('toolGuideEmpty')}</span>
+      </ToolRow>
+    )
+  }
+  return (
+    <ToolRow icon={<IconDocumentOutline16 />} isLast={isLast}>
+      <span className={styles.intro}>
+        {t(step.overview ? 'toolGuideOverview' : 'toolGuideDone')}
+      </span>
+      {step.overview?.categories.map((category) => (
+        <span key={category} className={styles.chip}>
+          <span className={styles.chipText}>{category}</span>
+        </span>
+      ))}
+      {step.items.map((item, index) => {
+        const page = item.settingsUrl ? readSettingsPageFromUrl(item.settingsUrl) : null
+        return page ? (
+          <button
+            key={`${item.id}-${index}`}
+            type="button"
+            className={clsx(styles.chip, styles.guideChip)}
+            onClick={(event) => {
+              event.stopPropagation()
+              openSettingsPage(page)
+            }}
+            title={item.summary}
+          >
+            <span className={styles.chipText}>
+              {item.title} · {t('guideOpenSettings')}
+            </span>
+          </button>
+        ) : (
+          <span key={`${item.id}-${index}`} className={styles.chip} title={item.summary}>
+            <span className={styles.chipText}>{item.title}</span>
+          </span>
+        )
+      })}
     </ToolRow>
   )
 }

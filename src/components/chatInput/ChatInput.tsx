@@ -713,7 +713,7 @@ const Input = ({
   ]
 
   return (
-    <div className={clsx(styles.root, activeEdit && styles.rootEditing)}>
+    <div data-composer-shell="true" className={clsx(styles.root, activeEdit && styles.rootEditing)}>
       <div
         className={clsx(
           styles.wrapper,

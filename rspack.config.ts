@@ -5,8 +5,10 @@ import { defineConfig } from '@rspack/cli'
 import { rspack, type Configuration } from '@rspack/core'
 
 const dev = process.env.NODE_ENV !== 'production'
-// 覆盖 Android 8.0+（含 Magic UI 3.1 / EMUI 10.1 常见内置 Chromium 74~79）的全量系统 WebView
-const targets = ['chrome >= 61', 'edge >= 79', 'safari >= 14', 'firefox >= 78']
+// 覆盖 Android 8.0+ 且 WebView 已更新到 Chromium 66 以上的设备（含 Magic UI 3.1 / EMUI 10.1 常见内置 Chromium 74~79）。
+// 注意：async generator / for await 需要 Chromium 63+，AbortController 需要 66+，ResizeObserver 需要 64+；
+// 出厂 WebView 58~61 的机型必须先更新 Android System WebView，否则会在解析主包时报语法错误。
+const targets = ['chrome >= 66', 'edge >= 79', 'safari >= 14', 'firefox >= 78']
 const root = path.dirname(fileURLToPath(import.meta.url))
 const { version } = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8')

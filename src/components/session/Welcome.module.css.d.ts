@@ -5,6 +5,8 @@ declare const styles: {
   readonly inputParallax: string
   readonly modeSwitchParallax: string
   readonly hero: string
+  readonly heroInner: string
+  readonly heroEntering: string
   readonly heroAnimating: string
   readonly greeting: string
   readonly greetingText: string

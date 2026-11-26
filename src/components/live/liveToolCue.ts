@@ -11,12 +11,16 @@ const TOOL_CUES: Record<Locale, Record<LiveToolActivity, string>> = {
     search: '稍等，我帮你查一下。',
     read_link: '稍等，我帮你看一下这个链接。',
     location: '稍等，我获取一下你的位置。',
+    balance: '稍等，我查一下你的账户余额。',
+    guide: '稍等，我查一下功能说明。',
   },
   'en-US': {
     memory: 'One moment, let me check our earlier chats.',
     search: 'One moment, let me look that up.',
     read_link: 'One moment, let me check that link.',
     location: 'One moment, let me check your location.',
+    balance: 'One moment, let me check your account balance.',
+    guide: 'One moment, let me check the app guide.',
   },
 }
 

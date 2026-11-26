@@ -487,8 +487,18 @@ export const MessageList = ({
     }
 
     const initial = getImeMotionState()
-    if (!useMobileSider.getState().open && !initial.animating && initial.settled > 0.5) {
-      settle(initial.settled)
+    if (!useMobileSider.getState().open) {
+      if (!initial.animating && initial.settled > 0.5) {
+        settle(initial.settled)
+      } else if (initial.animating && initial.shift > 0.5) {
+        if (initial.opening) {
+          beginOpening()
+          applyOpeningTransforms(initial.shift)
+        } else {
+          beginClosing(initial.shift)
+          applyClosingTransforms(initial.shift)
+        }
+      }
     }
 
     const isLifted = () =>
@@ -555,11 +565,13 @@ export const MessageList = ({
               <div
                 ref={topFrostRef}
                 className={clsx(styles.topFrost, editingUserMessage && styles.topFrostHidden)}
+                data-read-only={readOnly ? 'true' : undefined}
                 aria-hidden="true"
               />
               <div
                 ref={contentRef}
                 className={styles.column}
+                data-inset-header={readOnly ? undefined : 'true'}
                 data-long={messages.length > LONG_LIST_THRESHOLD ? 'true' : undefined}
               >
                 {editingUserMessage ? (

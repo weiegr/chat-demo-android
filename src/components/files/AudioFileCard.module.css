@@ -1,5 +1,6 @@
 .modal {
   width: 440px;
+  max-height: calc(100vh - 32px - var(--safe-top, 0px) - var(--safe-bottom, 0px));
   max-height: calc(100dvh - 32px - var(--safe-top, 0px) - var(--safe-bottom, 0px));
 }
 

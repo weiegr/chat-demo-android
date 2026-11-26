@@ -59,6 +59,8 @@ type Settings = {
   siderCollapsed: boolean
   /** 新对话界面是否启用陀螺仪动态视差效果 */
   chatParallaxEnabled: boolean
+  /** 是否开启个人中心（设置页顶部背景图、头像、昵称及侧边栏账号入口） */
+  personalCenterEnabled: boolean
 }
 
 /** 按会话模式取出对应的基础系统提示词配置 */
@@ -96,6 +98,7 @@ const KEYS = {
   search: 'chat-demo:search',
   siderCollapsed: 'chat-demo:sider-collapsed',
   chatParallaxEnabled: 'chat-demo:chat-parallax',
+  personalCenterEnabled: 'chat-demo:personal-center-enabled',
 } as const
 
 const read = (key: string) => {
@@ -204,6 +207,7 @@ export const useSettings = create<Settings>(() => ({
   search: read(KEYS.search) !== 'false',
   siderCollapsed: read(KEYS.siderCollapsed) === 'true',
   chatParallaxEnabled: read(KEYS.chatParallaxEnabled) === 'true',
+  personalCenterEnabled: read(KEYS.personalCenterEnabled) === 'true',
 }))
 
 export const setLocale = (locale: Locale) => {
@@ -329,4 +333,9 @@ export const setSiderCollapsed = (siderCollapsed: boolean) => {
 export const setChatParallaxEnabled = (chatParallaxEnabled: boolean) => {
   write(KEYS.chatParallaxEnabled, String(chatParallaxEnabled))
   useSettings.setState({ chatParallaxEnabled })
+}
+
+export const setPersonalCenterEnabled = (personalCenterEnabled: boolean) => {
+  write(KEYS.personalCenterEnabled, String(personalCenterEnabled))
+  useSettings.setState({ personalCenterEnabled })
 }

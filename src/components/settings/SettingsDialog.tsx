@@ -41,6 +41,7 @@ import {
   setAutoReadAloud,
   setAllowVideoUpload,
   setLocale,
+  setPersonalCenterEnabled,
   setThemePreference,
   setTtsVoice,
   setVideoAudioEnabled,
@@ -82,10 +83,16 @@ import {
   SystemPromptSetting,
 } from './SystemPromptSettings.js'
 import { closeSettings, useSettingsDialog, type SettingsSection } from './settingsDialogState.js'
+import {
+  desktopSettingsPage,
+  mobileSettingsPath,
+  settingsPageSection,
+} from '../../services/settingsPages.js'
 import styles from './Settings.module.css'
 
 type MobileRootSubPage =
   | 'data'
+  | 'personalCenter'
   | 'nickname'
   | 'appBackground'
   | 'importSessions'
@@ -97,7 +104,7 @@ type MobileRootSubPage =
   | 'globalMemory'
 type MemoryPage = 'globalMemory' | 'memoryFile'
 type MobileL2SubPage = MemoryPage | 'chatBackground'
-type DesktopSubPage = MemoryPage | 'appBackground' | 'chatBackground'
+type DesktopSubPage = MemoryPage | 'personalCenter' | 'appBackground' | 'chatBackground'
 type MobileSubPage = MobileRootSubPage | MobileL2SubPage
 
 /** Beta 移动端头图完全折叠为顶栏所需的滑动距离（px）：头图高度 340 - 顶栏高度 56 */
@@ -368,6 +375,7 @@ const readSafeTop = () => {
 
 const MOBILE_SUB_TITLE_KEY: Record<MobileSubPage, TranslationKey> = {
   data: 'settingDialogAsideDataOptionLabel',
+  personalCenter: 'settingsPersonalCenter',
   nickname: 'settingsNickname',
   appBackground: 'settingsAppBackground',
   chatBackground: 'settingsChatBackground',
@@ -471,13 +479,16 @@ const sections: { value: SettingsSection; label: TranslationKey; icon: ReactNode
 const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
-  const immersiveMobile = __BETA__ && isMobile
+  const personalCenterEnabled = useSettings((state) => state.personalCenterEnabled)
+  const betaMobile = __BETA__ && isMobile
+  const immersiveMobile = betaMobile && personalCenterEnabled
   const account = useMockAccount()
   const accountLabel = getAccountDisplayLabel(account)
   const hasAccountLabel = accountLabel.length > 0
   const avatarPicker = useAvatarPicker()
   const coverPicker = useCoverPicker()
   const storeSection = useSettingsDialog((state) => state.section)
+  const storePage = useSettingsDialog((state) => state.page)
   // 打开时按调用方指定的分组选中，之后在弹窗内切换；退场未结束时快速重开同步复位
   const [section, setSection] = useState<SettingsSection>(storeSection)
   const [mobileStack, setMobileStack] = useState<MobileSubPage[]>([])
@@ -490,6 +501,7 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
   const dialogRef = useRef<HTMLDivElement | null>(null)
   const mobileMainRef = useRef<HTMLDivElement>(null)
   const mobileScrollRef = useRef<HTMLDivElement>(null)
+  const mobilePlainScrollRef = useRef<HTMLDivElement>(null)
   const heroBgRef = useRef<HTMLDivElement>(null)
   const heroBgParallaxRef = useRef<HTMLDivElement>(null)
   const heroIdentityRef = useRef<HTMLDivElement>(null)
@@ -729,22 +741,58 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
 
   useEffect(() => {
     if (open && !prevOpenRef.current) {
-      setSection(storeSection)
-      setMobileStack([])
-      setDesktopSubPage(null)
+      const page = storePage
+      setSection(page ? settingsPageSection(page, isMobile) : storeSection)
+      if (page) {
+        const path = isMobile ? mobileSettingsPath(page) : []
+        setMobileStack(path as MobileSubPage[])
+        setRenderedL1((path[0] as MobileRootSubPage | undefined) ?? null)
+        setRenderedL2((path[1] as MobileL2SubPage | undefined) ?? null)
+        setRenderedL3(path[2] === 'memoryFile' ? 'memoryFile' : null)
+        setDesktopSubPage(
+          isMobile ? null : ((desktopSettingsPage(page) as DesktopSubPage | null) ?? null)
+        )
+        useSettingsDialog.setState({ page: null })
+      } else {
+        setMobileStack([])
+        setDesktopSubPage(null)
+      }
       if (mobileScrollRef.current) {
         mobileScrollRef.current.scrollTop = 0
       }
+      if (mobilePlainScrollRef.current) {
+        mobilePlainScrollRef.current.scrollTop = 0
+      }
+      layerScrolledRef.current[0] = false
+      syncHeaderDivider()
       if (immersiveMobile) {
         refreshHeroMetrics()
         applyHeroScroll(0, true)
       }
     }
     prevOpenRef.current = open
-  }, [open, storeSection, immersiveMobile, refreshHeroMetrics, applyHeroScroll])
+  }, [
+    open,
+    storeSection,
+    storePage,
+    isMobile,
+    immersiveMobile,
+    refreshHeroMetrics,
+    applyHeroScroll,
+    syncHeaderDivider,
+  ])
 
   useLayoutEffect(() => {
     if (!immersiveMobile) {
+      lastHeroScrollTopRef.current = -1
+      collapseProgressRef.current = 0
+      headerBgRef.current?.style.removeProperty('opacity')
+      backButtonRef.current?.classList.remove(styles.mobileBackButtonSolid)
+      if (mobilePlainScrollRef.current) {
+        mobilePlainScrollRef.current.scrollTop = 0
+      }
+      layerScrolledRef.current[0] = false
+      syncHeaderDivider()
       return
     }
     refreshHeroMetrics()
@@ -761,7 +809,7 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
-  }, [immersiveMobile, refreshHeroMetrics, applyHeroScroll])
+  }, [immersiveMobile, refreshHeroMetrics, applyHeroScroll, syncHeaderDivider])
 
   // 设置页滑入/滑出及子页进退栈期间（320ms）同步挂载 data-animating，暂停巨幅实时模糊以保障高刷满帧
   useLayoutEffect(() => {
@@ -926,6 +974,112 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
     avatarPicker.openPickerOrMenu()
   }
 
+  const renderBetaMobileGroups = (glassDataCard: boolean) => (
+    <>
+      <div className={styles.mobileGroupTitle}>{t('settingDialogAsideDataOptionLabel')}</div>
+      <div
+        ref={glassDataCard ? dataCardRef : undefined}
+        className={clsx(styles.mobileCard, glassDataCard && styles.mobileGlassCard)}
+      >
+        <ApiKeySetting />
+        <MobileActionCard
+          embedded
+          label={t('globalMemory')}
+          right={
+            <span className={styles.mobileNavRight}>
+              <IconChevronRightOutline14 />
+            </span>
+          }
+          onAction={openMobileMemory}
+        />
+        <MobileActionCard
+          embedded
+          label={t('importChatsEntry')}
+          right={
+            <span className={styles.mobileNavRight}>
+              <IconChevronRightOutline14 />
+            </span>
+          }
+          onAction={() => openMobileSubPage('importSessions')}
+        />
+        <MobileActionCard
+          embedded
+          label={t('exportInfoTitle')}
+          right={
+            <span className={styles.mobileNavRight}>
+              <IconChevronRightOutline14 />
+            </span>
+          }
+          onAction={() => openMobileSubPage('exportInfo')}
+        />
+      </div>
+      <div className={styles.mobileGroupTitle}>{t('settingsPersonalization')}</div>
+      <div className={styles.mobileCard}>
+        <button
+          type="button"
+          className={styles.mobileNavRow}
+          onClick={() => openMobileSubPage('personalCenter')}
+        >
+          <span className={styles.label}>{t('settingsPersonalCenter')}</span>
+          <span className={styles.mobileNavRight}>
+            <IconChevronRightOutline14 />
+          </span>
+        </button>
+        <button
+          type="button"
+          className={styles.mobileNavRow}
+          onClick={() => openMobileSubPage('nickname')}
+        >
+          <span className={styles.label}>{t('settingsNickname')}</span>
+          <span className={styles.mobileNavRight}>
+            <IconChevronRightOutline14 />
+          </span>
+        </button>
+        <button
+          type="button"
+          className={styles.mobileNavRow}
+          onClick={() => openMobileSubPage('appBackground')}
+        >
+          <span className={styles.label}>{t('settingsAppBackground')}</span>
+          <span className={styles.mobileNavRight}>
+            <IconChevronRightOutline14 />
+          </span>
+        </button>
+      </div>
+      <div className={styles.mobileGroupTitle}>{t('settingGroupChat')}</div>
+      <div className={styles.mobileCard}>
+        <MobileSystemPromptNavRow onOpen={() => openMobileSubPage('systemPrompt')} />
+        <button
+          type="button"
+          className={styles.mobileNavRow}
+          onClick={() => openMobileSubPage('voiceBroadcast')}
+        >
+          <span className={styles.label}>{t('settingsVoiceBroadcast')}</span>
+          <span className={styles.mobileNavRight}>
+            <IconChevronRightOutline14 />
+          </span>
+        </button>
+        <button
+          type="button"
+          className={styles.mobileNavRow}
+          onClick={() => openMobileSubPage('videoUpload')}
+        >
+          <span className={styles.label}>{t('settingsVideoUpload')}</span>
+          <span className={styles.mobileNavRight}>
+            <IconChevronRightOutline14 />
+          </span>
+        </button>
+      </div>
+      <div className={styles.mobileGroupTitle}>{t('settingGroupApp')}</div>
+      <div className={styles.mobileCard}>
+        <MobileLocaleSetting />
+        <MobileThemeSetting />
+        <MobileLocationNavRow onOpen={() => openMobileSubPage('location')} />
+      </div>
+      {APP_VERSION ? <div className={styles.version}>{`v${APP_VERSION}`}</div> : null}
+    </>
+  )
+
   return (
     <>
       <Modal
@@ -933,14 +1087,14 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
         title={
           isMobile ? (
             <div className={styles.mobileSubHeader}>
-              {immersiveMobile ? (
+              {betaMobile ? (
                 <>
                   <div
                     ref={headerBgRef}
                     aria-hidden="true"
                     className={clsx(
                       styles.mobileHeaderBackdrop,
-                      l1Presence.visible && styles.mobileHeaderBackdropSolid
+                      (l1Presence.visible || !immersiveMobile) && styles.mobileHeaderBackdropSolid
                     )}
                   />
                   <div
@@ -1038,7 +1192,7 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
         className={clsx(
           styles.dialog,
           visible && styles.dialogVisible,
-          immersiveMobile && styles.dialogImmersive
+          betaMobile && styles.dialogImmersive
         )}
         mainClassName={styles.dialogMain}
         onClose={() => {
@@ -1186,109 +1340,27 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
                         aria-hidden="true"
                       />
                       <div className={styles.mobileSettingsSheetContent}>
-                        <div className={styles.mobileGroupTitle}>
-                          {t('settingDialogAsideDataOptionLabel')}
-                        </div>
-                        <div
-                          ref={dataCardRef}
-                          className={clsx(styles.mobileCard, styles.mobileGlassCard)}
-                        >
-                          <ApiKeySetting />
-                          <MobileActionCard
-                            embedded
-                            label={t('globalMemory')}
-                            right={
-                              <span className={styles.mobileNavRight}>
-                                <IconChevronRightOutline14 />
-                              </span>
-                            }
-                            onAction={openMobileMemory}
-                          />
-                          <MobileActionCard
-                            embedded
-                            label={t('importChatsEntry')}
-                            right={
-                              <span className={styles.mobileNavRight}>
-                                <IconChevronRightOutline14 />
-                              </span>
-                            }
-                            onAction={() => openMobileSubPage('importSessions')}
-                          />
-                          <MobileActionCard
-                            embedded
-                            label={t('exportInfoTitle')}
-                            right={
-                              <span className={styles.mobileNavRight}>
-                                <IconChevronRightOutline14 />
-                              </span>
-                            }
-                            onAction={() => openMobileSubPage('exportInfo')}
-                          />
-                        </div>
-                        <div className={styles.mobileGroupTitle}>
-                          {t('settingsPersonalization')}
-                        </div>
-                        <div className={styles.mobileCard}>
-                          <button
-                            type="button"
-                            className={styles.mobileNavRow}
-                            onClick={() => openMobileSubPage('nickname')}
-                          >
-                            <span className={styles.label}>{t('settingsNickname')}</span>
-                            <span className={styles.mobileNavRight}>
-                              <IconChevronRightOutline14 />
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.mobileNavRow}
-                            onClick={() => openMobileSubPage('appBackground')}
-                          >
-                            <span className={styles.label}>{t('settingsAppBackground')}</span>
-                            <span className={styles.mobileNavRight}>
-                              <IconChevronRightOutline14 />
-                            </span>
-                          </button>
-                        </div>
-                        <div className={styles.mobileGroupTitle}>{t('settingGroupChat')}</div>
-                        <div className={styles.mobileCard}>
-                          <MobileSystemPromptNavRow
-                            onOpen={() => openMobileSubPage('systemPrompt')}
-                          />
-                          <button
-                            type="button"
-                            className={styles.mobileNavRow}
-                            onClick={() => openMobileSubPage('voiceBroadcast')}
-                          >
-                            <span className={styles.label}>{t('settingsVoiceBroadcast')}</span>
-                            <span className={styles.mobileNavRight}>
-                              <IconChevronRightOutline14 />
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.mobileNavRow}
-                            onClick={() => openMobileSubPage('videoUpload')}
-                          >
-                            <span className={styles.label}>{t('settingsVideoUpload')}</span>
-                            <span className={styles.mobileNavRight}>
-                              <IconChevronRightOutline14 />
-                            </span>
-                          </button>
-                        </div>
-                        <div className={styles.mobileGroupTitle}>{t('settingGroupApp')}</div>
-                        <div className={styles.mobileCard}>
-                          <MobileLocaleSetting />
-                          <MobileThemeSetting />
-                          <MobileLocationNavRow onOpen={() => openMobileSubPage('location')} />
-                        </div>
-                        {APP_VERSION ? (
-                          <div className={styles.version}>{`v${APP_VERSION}`}</div>
-                        ) : null}
+                        {renderBetaMobileGroups(true)}
                       </div>
                     </div>
                   </div>
                 </>
+              ) : betaMobile ? (
+                <div
+                  ref={mobilePlainScrollRef}
+                  className={clsx(styles.content, styles.mobilePlainScroll)}
+                  onScroll={(event) => {
+                    const target = event.currentTarget
+                    const scrolled =
+                      target.scrollTop > 2 && target.scrollHeight > target.clientHeight + 1
+                    if (layerScrolledRef.current[0] !== scrolled) {
+                      layerScrolledRef.current[0] = scrolled
+                      syncHeaderDivider()
+                    }
+                  }}
+                >
+                  {renderBetaMobileGroups(false)}
+                </div>
               ) : (
                 <div className={styles.content}>
                   <div className={styles.mobileGroupTitle}>
@@ -1371,6 +1443,8 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
                       onAction={historyDelete.open}
                     />
                   </div>
+                ) : renderedL1 === 'personalCenter' ? (
+                  <PersonalCenterPage />
                 ) : renderedL1 === 'nickname' ? (
                   <MobileNicknamePage />
                 ) : renderedL1 === 'appBackground' ? (
@@ -1491,6 +1565,8 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
                   />
                 ) : desktopSubPage === 'memoryFile' ? (
                   <MemoryFilePage disabled={historyBusy} />
+                ) : desktopSubPage === 'personalCenter' ? (
+                  <PersonalCenterPage />
                 ) : desktopSubPage === 'appBackground' ? (
                   <AppBackgroundPage
                     onOpenChatBackground={() => setDesktopSubPage('chatBackground')}
@@ -1516,14 +1592,30 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
                   <>
                     {__BETA__ ? (
                       <>
-                        <DesktopAccountHero
-                          avatarDataUrl={account.avatarDataUrl}
-                          coverDataUrl={account.coverDataUrl}
-                          accountLabel={accountLabel}
-                          avatarAriaLabel={t('accountChangeAvatar')}
-                          coverAriaLabel={t('accountChangeCover')}
-                          onEditAvatar={avatarPicker.openPickerOrMenu}
-                          onEditCover={coverPicker.openPickerOrMenu}
+                        {personalCenterEnabled ? (
+                          <DesktopAccountHero
+                            avatarDataUrl={account.avatarDataUrl}
+                            coverDataUrl={account.coverDataUrl}
+                            accountLabel={accountLabel}
+                            avatarAriaLabel={t('accountChangeAvatar')}
+                            coverAriaLabel={t('accountChangeCover')}
+                            onEditAvatar={avatarPicker.openPickerOrMenu}
+                            onEditCover={coverPicker.openPickerOrMenu}
+                          />
+                        ) : null}
+                        <SettingCell
+                          label={t('settingsPersonalCenter')}
+                          status={null}
+                          action={
+                            <Button
+                              variant="outlined"
+                              size="m"
+                              className={styles.cellButton}
+                              onClick={() => setDesktopSubPage('personalCenter')}
+                            >
+                              {t('memoryManage')}
+                            </Button>
+                          }
                         />
                         <NicknameSetting />
                         <NicknameForReplySetting />
@@ -1855,6 +1947,50 @@ const NicknameForReplySetting = () => {
         />
       }
     />
+  )
+}
+
+/** 独立的「个人中心」页面：开启或关闭顶部背景图、头像、昵称展示与侧边栏账号入口 */
+const PersonalCenterPage = () => {
+  const t = useTranslate()
+  const isMobile = useIsMobile()
+  const personalCenterEnabled = useSettings((state) => state.personalCenterEnabled)
+  const label = t('settingsPersonalCenter')
+  const description = t('settingsPersonalCenterDesc')
+
+  if (isMobile) {
+    return (
+      <div className={clsx(styles.content, styles.mobileLocationContent)}>
+        <div className={styles.mobileCard}>
+          <div className={clsx(styles.cell, styles.switchHeader)}>
+            <span className={styles.label}>{label}</span>
+            <Switch
+              checked={personalCenterEnabled}
+              ariaLabel={label}
+              onChange={setPersonalCenterEnabled}
+            />
+          </div>
+        </div>
+        <p className={styles.mobileCardHint}>{description}</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className={styles.desktopSubScroll}>
+      <SettingCell
+        label={label}
+        description={description}
+        status={null}
+        action={
+          <Switch
+            checked={personalCenterEnabled}
+            ariaLabel={label}
+            onChange={setPersonalCenterEnabled}
+          />
+        }
+      />
+    </div>
   )
 }
 

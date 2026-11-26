@@ -164,6 +164,7 @@ declare const styles: {
   readonly mobileHeroCoverScrim: string
   readonly heroLabelOnCover: string
   readonly mobileImmersiveScroll: string
+  readonly mobilePlainScroll: string
   readonly mobileHeroSpacer: string
   readonly mobileHeroIdentity: string
   readonly mobileHeroAccountLabel: string

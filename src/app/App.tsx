@@ -18,6 +18,10 @@ import { closeSearchPanel } from '../components/search/searchPanelState.js'
 import { ChatSearchView } from '../components/search/ChatSearchView.js'
 import { openChatSearch, useChatSearch } from '../components/search/chatSearchState.js'
 import { SessionView } from '../components/session/SessionView.js'
+import {
+  ComposerSnapshotBridge,
+  type ComposerViewKind,
+} from '../components/session/composerTransition.js'
 import { LiveCallView } from '../components/live/LiveCallView.js'
 import type { LiveCall } from '../components/live/useLiveCall.js'
 import { createSpeechOutput, type SpeechOutput } from '../services/speech/pcmPlayback.js'
@@ -53,6 +57,7 @@ export const App = () => {
   const chatMode = useSettings((state) => state.chatMode)
   const chatParallaxEnabled = useSettings((state) => state.chatParallaxEnabled)
   const activeChatBgUrl = useActiveChatBackgroundUrl()
+  const contentRef = useRef<HTMLDivElement | null>(null)
   const chatBgParallaxRef = useRef<HTMLDivElement | null>(null)
   // 移动端侧边栏以独立抽屉管理开合状态
   const siderCollapsed = useSettings((state) => state.siderCollapsed) && !isMobile
@@ -216,6 +221,8 @@ export const App = () => {
   }
 
   const currentChatMode = session ? (session.mode ?? 'fast') : chatMode
+  const viewKind: ComposerViewKind | null =
+    !ready || (activeId !== null && !session) ? null : session ? 'session' : 'welcome'
   const showChatBackground =
     Boolean(activeChatBgUrl) &&
     (currentChatMode === 'fast' || currentChatMode === 'expert' || currentChatMode === 'rp')
@@ -259,9 +266,11 @@ export const App = () => {
                 </div>
               ) : null}
               <div
+                ref={contentRef}
                 className={styles.content}
                 data-chat-bg={showChatBackground ? 'true' : undefined}
               >
+                <ComposerSnapshotBridge viewKind={viewKind} containerRef={contentRef} />
                 {showChatBackground && activeChatBgUrl ? (
                   <div className={styles.chatBackgroundLayer} aria-hidden="true">
                     <div

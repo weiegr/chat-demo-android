@@ -19,6 +19,7 @@ import { useChatSearch } from '../search/chatSearchState.js'
 import { useSettingsDialog } from '../settings/settingsDialogState.js'
 import { useMobileSider } from '../sider/mobileSiderState.js'
 import { CHAT_MODE_OPTIONS } from './chatModeMeta.js'
+import { runComposerTransition } from './composerTransition.js'
 import { MobileHeader } from './MobileHeader.js'
 import styles from './Welcome.module.css'
 
@@ -899,6 +900,7 @@ export const Welcome = ({
   const chatSearchOpen = useChatSearch((state) => state.open)
   const settingsOpen = useSettingsDialog((state) => state.open)
 
+  const containerRef = useRef<HTMLDivElement>(null)
   const heroRef = useRef<HTMLDivElement>(null)
   const headerParallaxRef = useRef<HTMLDivElement | null>(null)
   const greetingParallaxRef = useRef<HTMLDivElement>(null)
@@ -919,6 +921,7 @@ export const Welcome = ({
     direct: null,
   })
 
+  const [heroEntering, setHeroEntering] = useState(false)
   const [inputParallaxPaused, setInputParallaxPaused] = useState(false)
   const [modeMotionActive, setModeMotionActive] = useState(false)
   const [imeParallaxPaused, setImeParallaxPaused] = useState(() => {
@@ -1199,6 +1202,23 @@ export const Welcome = ({
     }
   }, [isMobile])
 
+  // 置于原生键盘定位同步之后：从会话页切回新对话时平滑过渡输入框位置，并驱动欢迎区柔和浮现
+  useLayoutEffect(() => {
+    const { fromOtherView, cleanup } = runComposerTransition(containerRef.current, 'welcome')
+    if (fromOtherView) {
+      setHeroEntering(true)
+    }
+    return cleanup
+  }, [])
+
+  useEffect(() => {
+    if (!heroEntering) {
+      return
+    }
+    const timer = window.setTimeout(() => setHeroEntering(false), 300)
+    return () => window.clearTimeout(timer)
+  }, [heroEntering])
+
   // 测量视口及三条提示语的实际宽度与最大高度，仅在布局/语言变动时执行，拖拽期间零布局读取
   useLayoutEffect(() => {
     const stage = hintStageRef.current
@@ -1258,6 +1278,7 @@ export const Welcome = ({
 
   return (
     <div
+      ref={containerRef}
       className={styles.container}
       onPointerMove={(event) => {
         if (
@@ -1296,44 +1317,46 @@ export const Welcome = ({
       ) : null}
       <div className={styles.welcome}>
         <div ref={heroRef} className={styles.hero}>
-          <div ref={greetingParallaxRef} className={styles.greeting}>
-            {CHAT_MODE_OPTIONS.map((option, index) => (
-              <span
-                key={option.value}
-                ref={(el) => {
-                  titleItemRefs.current[index] = el
-                }}
-                aria-hidden={option.value !== chatMode}
-                className={styles.greetingText}
-              >
-                {t(option.titleKey)}
-              </span>
-            ))}
-          </div>
-
-          <div ref={modeSwitchParallaxRef} className={styles.modeSwitchParallax}>
-            <ModeSwitch
-              mode={chatMode}
-              onMotionFrame={handleMotionFrame}
-              onMotionActiveChange={handleMotionActiveChange}
-              onCommit={setChatMode}
-            />
-          </div>
-
-          <div ref={modeHintParallaxRef} className={styles.modeHintViewport}>
-            <div ref={hintStageRef} className={styles.modeHintStage}>
+          <div className={clsx(styles.heroInner, heroEntering && styles.heroEntering)}>
+            <div ref={greetingParallaxRef} className={styles.greeting}>
               {CHAT_MODE_OPTIONS.map((option, index) => (
-                <p
+                <span
                   key={option.value}
                   ref={(el) => {
-                    hintItemRefs.current[index] = el
+                    titleItemRefs.current[index] = el
                   }}
                   aria-hidden={option.value !== chatMode}
-                  className={clsx(styles.modeHintItem, HINT_ALIGN_CLASS[option.value])}
+                  className={styles.greetingText}
                 >
-                  {t(option.hintKey)}
-                </p>
+                  {t(option.titleKey)}
+                </span>
               ))}
+            </div>
+
+            <div ref={modeSwitchParallaxRef} className={styles.modeSwitchParallax}>
+              <ModeSwitch
+                mode={chatMode}
+                onMotionFrame={handleMotionFrame}
+                onMotionActiveChange={handleMotionActiveChange}
+                onCommit={setChatMode}
+              />
+            </div>
+
+            <div ref={modeHintParallaxRef} className={styles.modeHintViewport}>
+              <div ref={hintStageRef} className={styles.modeHintStage}>
+                {CHAT_MODE_OPTIONS.map((option, index) => (
+                  <p
+                    key={option.value}
+                    ref={(el) => {
+                      hintItemRefs.current[index] = el
+                    }}
+                    aria-hidden={option.value !== chatMode}
+                    className={clsx(styles.modeHintItem, HINT_ALIGN_CLASS[option.value])}
+                  >
+                    {t(option.hintKey)}
+                  </p>
+                ))}
+              </div>
             </div>
           </div>
         </div>
