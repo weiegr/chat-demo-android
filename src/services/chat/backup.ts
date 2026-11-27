@@ -384,15 +384,36 @@ export const openExportFolder = (): boolean => {
   }
 }
 
+export type HistoryImportProgress =
+  | { stage: 'preparing' }
+  | { stage: 'reading'; bytesRead: number; percent: number; sessionCount: number }
+  | { stage: 'saving'; sessionCount: number }
+
 /**
  * 确认覆盖后调用：先检查 ZIP 格式与版本，校验失败时保留正在生成的回答；
  * 通过后从 ZIP 流式写入暂存，成功才替换原有会话与图片原件。返回导入的会话数。
  */
-export const importHistory = (file: File, onRead?: (bytesRead: number) => void): Promise<number> =>
+export const importHistory = (
+  file: File,
+  onProgress?: (progress: HistoryImportProgress) => void
+): Promise<number> =>
   enqueueBackup(async () => {
-    const { checkArchiveFormat, importArchive } = await import('./history/importArchive.js')
-    await checkArchiveFormat(file)
-    return replaceHistory(() => importArchive(file, onRead))
+    onProgress?.({ stage: 'preparing' })
+    const { prepareArchiveImport } = await import('./history/importArchive.js')
+    let latestSessionCount = 0
+    const totalSize = Math.max(1, file.size)
+    const importToStaging = await prepareArchiveImport(file, ({ bytesRead, sessionCount }) => {
+      latestSessionCount = sessionCount
+      onProgress?.({
+        stage: 'reading',
+        bytesRead,
+        percent: Math.min(99, Math.floor((bytesRead / totalSize) * 100)),
+        sessionCount,
+      })
+    })
+    return replaceHistory(importToStaging, () =>
+      onProgress?.({ stage: 'saving', sessionCount: latestSessionCount })
+    )
   })
 
 interface AndroidDownloadBridge {
@@ -514,13 +535,18 @@ export const importHistoryFromUrl = async (
   const count = await importHistory(
     file,
     onProgress &&
-      ((bytesRead) => {
-        reportPercent(
-          Math.min(
-            99,
-            downloadWeight + Math.floor((bytesRead / file.size) * (100 - downloadWeight))
+      ((progress) => {
+        if (progress.stage === 'reading') {
+          reportPercent(
+            Math.min(
+              99,
+              downloadWeight +
+                Math.floor((progress.bytesRead / Math.max(1, file.size)) * (100 - downloadWeight))
+            )
           )
-        )
+        } else if (progress.stage === 'saving') {
+          reportPercent(99)
+        }
       })
   )
   reportPercent(100)

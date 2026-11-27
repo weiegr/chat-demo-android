@@ -14,6 +14,28 @@ export type AccountBalance = {
   entries: BalanceEntry[]
 }
 
+/** 明确询问当前 API 余额时可以直接查，其他账务问题继续走对话。 */
+export const isBalanceQuery = (text: string) => {
+  const question = text
+    .trim()
+    .replace(/[。？！?.!]+$/u, '')
+    .trim()
+  const account = question
+    .replace(/\s+/g, '')
+    .replace(/^(?:请)?(?:帮我|给我)?(?:查(?:询|看|一下|下)?|看(?:看|一下)|告诉我)/u, '')
+    .replace(/^(?:我)?(?:现在|目前)?还(?:有|剩)多少/u, '')
+    .replace(/(?:还(?:有|剩)?|是)?多少(?:钱)?$/u, '')
+  return (
+    /^(?:我(?:的)?|当前|现在)?(?:deepseek(?:的)?)?(?:api(?:key)?(?:的)?)?(?:账户|账号)?(?:剩余)?(?:余额|额度)$/i.test(
+      account
+    ) ||
+    /^(?:(?:please )?(?:check|show)(?: me)? )?(?:(?:my|the|current) )?(?:deepseek )?(?:api )?(?:account )?balance$/i.test(
+      question
+    ) ||
+    /^how much (?:api )?balance do i have(?: left)?$/i.test(question)
+  )
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
 
@@ -86,6 +108,4 @@ const currencySymbol = (currency: string) => {
 
 /** 时间线摘要：多币种时用「 / 」连接，例如「¥110.00 / $2.50」。 */
 export const formatBalanceSummary = (balance: AccountBalance): string =>
-  balance.entries
-    .map((entry) => `${currencySymbol(entry.currency)}${entry.total}`)
-    .join(' / ')
+  balance.entries.map((entry) => `${currencySymbol(entry.currency)}${entry.total}`).join(' / ')

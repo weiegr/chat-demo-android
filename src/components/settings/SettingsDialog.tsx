@@ -1,5 +1,6 @@
 import clsx from 'clsx'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { create } from 'zustand'
 import {
   IconChevronRightOutline14,
   IconDarkOutline16,
@@ -23,6 +24,7 @@ import {
   openExportFolder,
   parseArchiveDownloadUrl,
   type ExportRecord,
+  type HistoryImportProgress,
   type HistoryUrlImportProgress,
 } from '../../services/chat/backup.js'
 import { formatSize } from '../../services/attachments.js'
@@ -67,6 +69,7 @@ import {
 } from './AccountAvatar.js'
 import { ApiKeySetting } from './ApiKeyField.js'
 import { AppBackgroundPage, ChatBackgroundPage } from './ChatBackgroundSettings.js'
+import { LiveAvatarPage } from './LiveAvatarSettings.js'
 import { GlobalMemoryPage, MemoryFilePage } from './GlobalMemorySettings.js'
 import { InfoModalButton } from './InfoModalButton.js'
 import {
@@ -83,6 +86,7 @@ import {
   SystemPromptSetting,
 } from './SystemPromptSettings.js'
 import { closeSettings, useSettingsDialog, type SettingsSection } from './settingsDialogState.js'
+import { useHeroMagneticSnap } from './useHeroMagneticSnap.js'
 import {
   desktopSettingsPage,
   mobileSettingsPath,
@@ -95,6 +99,7 @@ type MobileRootSubPage =
   | 'personalCenter'
   | 'nickname'
   | 'appBackground'
+  | 'liveAvatar'
   | 'importSessions'
   | 'exportInfo'
   | 'voiceBroadcast'
@@ -104,7 +109,12 @@ type MobileRootSubPage =
   | 'globalMemory'
 type MemoryPage = 'globalMemory' | 'memoryFile'
 type MobileL2SubPage = MemoryPage | 'chatBackground'
-type DesktopSubPage = MemoryPage | 'personalCenter' | 'appBackground' | 'chatBackground'
+type DesktopSubPage =
+  | MemoryPage
+  | 'personalCenter'
+  | 'appBackground'
+  | 'chatBackground'
+  | 'liveAvatar'
 type MobileSubPage = MobileRootSubPage | MobileL2SubPage
 
 /** Beta 移动端头图完全折叠为顶栏所需的滑动距离（px）：头图高度 340 - 顶栏高度 56 */
@@ -379,6 +389,7 @@ const MOBILE_SUB_TITLE_KEY: Record<MobileSubPage, TranslationKey> = {
   nickname: 'settingsNickname',
   appBackground: 'settingsAppBackground',
   chatBackground: 'settingsChatBackground',
+  liveAvatar: 'settingsLiveAvatar',
   importSessions: 'importSessionsTitle',
   exportInfo: 'exportInfoTitle',
   voiceBroadcast: 'settingsVoiceBroadcast',
@@ -464,6 +475,11 @@ const MobileSubLayer = ({
 export const SettingsDialog = () => {
   const open = useSettingsDialog((state) => state.open)
   const presence = usePresence(open, 280)
+  useEffect(() => {
+    if (!presence.mounted && !useHistoryImportState.getState().busy) {
+      useHistoryImportState.setState({ status: null })
+    }
+  }, [presence.mounted])
   return presence.mounted ? <SettingsContent open={open} visible={presence.visible} /> : null
 }
 
@@ -497,7 +513,7 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
   const [renderedL3, setRenderedL3] = useState<'memoryFile' | null>(null)
   const [desktopSubPage, setDesktopSubPage] = useState<DesktopSubPage | null>(null)
   const memoryEnabled = useGlobalMemory((state) => state.profile.enabled)
-  const prevOpenRef = useRef(open)
+  const prevOpenRef = useRef(false)
   const dialogRef = useRef<HTMLDivElement | null>(null)
   const mobileMainRef = useRef<HTMLDivElement>(null)
   const mobileScrollRef = useRef<HTMLDivElement>(null)
@@ -691,10 +707,15 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
         const startY = safeTop + (hasAccountLabel ? 180 : 194)
         const endX = containerWidth - 16 - HERO_AVATAR_END_SIZE / 2
         const endY = safeTop + 28
-        const cx = startX + (endX - startX) * progress
-        const cy = startY + (endY - startY) * progress
+        // 混合轻微 smoothstep 磁滞曲线：贴近展开态与顶栏槽位时带磁极粘滞，中段轻快穿梭落槽
+        const smooth = progress * progress * (3 - 2 * progress)
+        const avatarXProgress = progress * 0.52 + smooth * 0.48
+        const avatarYProgress = progress * 0.66 + smooth * 0.34
+        const avatarScaleProgress = progress * 0.6 + smooth * 0.4
+        const cx = startX + (endX - startX) * avatarXProgress
+        const cy = startY + (endY - startY) * avatarYProgress
         const endScale = HERO_AVATAR_END_SIZE / startSize
-        const scale = 1 + (endScale - 1) * progress
+        const scale = 1 + (endScale - 1) * avatarScaleProgress
         floatingAvatarRef.current.style.transform = `translate3d(${(cx - startSize / 2).toFixed(2)}px, ${(cy - startSize / 2).toFixed(2)}px, 0) scale(${scale.toFixed(4)})`
       }
 
@@ -717,8 +738,25 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
     [getMobileParallaxTargets, hasAccountLabel, refreshHeroMetrics, syncHeaderDivider]
   )
 
+  const {
+    isSnapAnimatingRef: isHeroSnapAnimatingRef,
+    notifyScroll: notifyHeroScroll,
+    snapTo: snapHeroTo,
+    cancelSnap: cancelHeroSnap,
+  } = useHeroMagneticSnap({
+    scrollRef: mobileScrollRef,
+    enabled: immersiveMobile && open && mobileStack.length === 0,
+    collapseDistance: HERO_COLLAPSE_DISTANCE,
+    onFrame: applyHeroScroll,
+    prefersReducedMotion,
+  })
+
   const handleImmersiveScroll = useCallback(
     (scrollTop: number) => {
+      notifyHeroScroll(scrollTop)
+      if (isHeroSnapAnimatingRef.current) {
+        return
+      }
       pendingHeroScrollTopRef.current = scrollTop
       if (heroScrollRafRef.current) {
         return
@@ -728,7 +766,7 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
         applyHeroScroll(pendingHeroScrollTopRef.current)
       })
     },
-    [applyHeroScroll]
+    [applyHeroScroll, isHeroSnapAnimatingRef, notifyHeroScroll]
   )
 
   useEffect(
@@ -739,8 +777,8 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
     []
   )
 
-  useEffect(() => {
-    if (open && !prevOpenRef.current) {
+  useLayoutEffect(() => {
+    if (open && (!prevOpenRef.current || storePage !== null)) {
       const page = storePage
       setSection(page ? settingsPageSection(page, isMobile) : storeSection)
       if (page) {
@@ -757,6 +795,7 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
         setMobileStack([])
         setDesktopSubPage(null)
       }
+      cancelHeroSnap()
       if (mobileScrollRef.current) {
         mobileScrollRef.current.scrollTop = 0
       }
@@ -779,6 +818,7 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
     immersiveMobile,
     refreshHeroMetrics,
     applyHeroScroll,
+    cancelHeroSnap,
     syncHeaderDivider,
   ])
 
@@ -968,7 +1008,7 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
 
   const handleFloatingAvatarClick = () => {
     if (collapseProgressRef.current > 0.55) {
-      mobileScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+      snapHeroTo('expanded')
       return
     }
     avatarPicker.openPickerOrMenu()
@@ -1041,6 +1081,16 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
           onClick={() => openMobileSubPage('appBackground')}
         >
           <span className={styles.label}>{t('settingsAppBackground')}</span>
+          <span className={styles.mobileNavRight}>
+            <IconChevronRightOutline14 />
+          </span>
+        </button>
+        <button
+          type="button"
+          className={styles.mobileNavRow}
+          onClick={() => openMobileSubPage('liveAvatar')}
+        >
+          <span className={styles.label}>{t('settingsLiveAvatar')}</span>
           <span className={styles.mobileNavRight}>
             <IconChevronRightOutline14 />
           </span>
@@ -1449,6 +1499,8 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
                   <MobileNicknamePage />
                 ) : renderedL1 === 'appBackground' ? (
                   <AppBackgroundPage onOpenChatBackground={openMobileChatBackground} />
+                ) : renderedL1 === 'liveAvatar' ? (
+                  <LiveAvatarPage />
                 ) : renderedL1 === 'importSessions' ? (
                   <div className={clsx(styles.content, styles.mobileDataContent)}>
                     <ImportHistory historyImport={historyImport} disabled={historyBusy} />
@@ -1571,6 +1623,8 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
                   <AppBackgroundPage
                     onOpenChatBackground={() => setDesktopSubPage('chatBackground')}
                   />
+                ) : desktopSubPage === 'liveAvatar' ? (
+                  <LiveAvatarPage />
                 ) : (
                   <ChatBackgroundPage />
                 )}
@@ -1628,6 +1682,20 @@ const SettingsContent = ({ open, visible }: { open: boolean; visible: boolean })
                               size="m"
                               className={styles.cellButton}
                               onClick={() => setDesktopSubPage('appBackground')}
+                            >
+                              {t('memoryManage')}
+                            </Button>
+                          }
+                        />
+                        <SettingCell
+                          label={t('settingsLiveAvatar')}
+                          status={null}
+                          action={
+                            <Button
+                              variant="outlined"
+                              size="m"
+                              className={styles.cellButton}
+                              onClick={() => setDesktopSubPage('liveAvatar')}
                             >
                               {t('memoryManage')}
                             </Button>
@@ -2564,36 +2632,101 @@ const SettingCell = ({
   )
 }
 
-/** 选文件后先提示覆盖；确认后才检查文件并执行导入，任何错误都提示导入失败。 */
+const formatFileImportStatus = (progress: HistoryImportProgress): Status => {
+  if (progress.stage === 'preparing') {
+    return { key: 'historyImportingPreparing' }
+  }
+  const { sessionCount } = progress
+  if (progress.stage === 'saving') {
+    if (sessionCount === 1) {
+      return { key: 'historyImportingSavingWithCountOne' }
+    }
+    if (sessionCount > 1) {
+      return { key: 'historyImportingSavingWithCount', params: { count: sessionCount } }
+    }
+    return { key: 'historyImportingSaving' }
+  }
+  const { percent } = progress
+  if (sessionCount === 1) {
+    return { key: 'historyImportingProgressWithCountOne', params: { percent } }
+  }
+  if (sessionCount > 1) {
+    return {
+      key: 'historyImportingProgressWithCount',
+      params: { percent, count: sessionCount },
+    }
+  }
+  return { key: 'historyImportingProgress', params: { percent } }
+}
+
+const renderStatusText = (t: ReturnType<typeof useTranslate>, status: Status): string | null =>
+  status ? t(status.key, status.reason ? { message: t(status.reason) } : status.params) : null
+
+/** 跨弹窗挂载保留正在进行中的 ZIP 导入进度，防止关掉设置页后重开丢失进度展示 */
+const useHistoryImportState = create(() => ({
+  busy: false,
+  status: null as Status,
+}))
+
+/** 选文件后先提示覆盖；确认后才检查文件并执行导入，实时汇报读取与保存进度。 */
 const useHistoryImport = () => {
   const [file, setFile] = useState<File | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [status, setStatus] = useState<Status>(null)
-  const importing = useRef(false)
+  const busy = useHistoryImportState((state) => state.busy)
+  const status = useHistoryImportState((state) => state.status)
 
   const confirm = async () => {
-    if (!file || importing.current) {
+    if (!file || useHistoryImportState.getState().busy) {
       return
     }
-    importing.current = true
+    const targetFile = file
     setFile(null)
-    setBusy(true)
-    setStatus(null)
+    useHistoryImportState.setState({
+      busy: true,
+      status: { key: 'historyImportingPreparing' },
+    })
+
+    let lastStage: HistoryImportProgress['stage'] | null = null
+    let lastPercent = -1
+    let lastSessionCount = -1
+    let lastEmitAt = 0
+
     try {
-      const count = await importHistory(file)
-      setStatus({ key: count === 1 ? 'historyImportedOne' : 'historyImported', params: { count } })
+      const count = await importHistory(targetFile, (progress) => {
+        if (progress.stage === 'reading') {
+          const now = performance.now()
+          const stageChanged = lastStage !== 'reading'
+          const percentChanged = progress.percent !== lastPercent
+          const countChangedDue =
+            progress.sessionCount !== lastSessionCount && now - lastEmitAt >= 100
+          if (!stageChanged && !percentChanged && !countChangedDue) {
+            return
+          }
+          lastStage = 'reading'
+          lastPercent = progress.percent
+          lastSessionCount = progress.sessionCount
+          lastEmitAt = now
+        } else {
+          lastStage = progress.stage
+          lastEmitAt = performance.now()
+        }
+        useHistoryImportState.setState({ status: formatFileImportStatus(progress) })
+      })
+      useHistoryImportState.setState({
+        status: { key: count === 1 ? 'historyImportedOne' : 'historyImported', params: { count } },
+      })
     } catch {
-      setStatus({ key: 'historyImportFailed', error: true })
+      useHistoryImportState.setState({
+        status: { key: 'historyImportFailed', error: true },
+      })
     } finally {
-      importing.current = false
-      setBusy(false)
+      useHistoryImportState.setState({ busy: false })
     }
   }
 
   return { file, busy, status, select: setFile, cancel: () => setFile(null), confirm }
 }
 
-/** 导入 = 覆盖：用选中文件替换本地全部会话与附件。 */
+/** 导入 = 覆盖：用选中文件替换本地全部会话与附件；导入进度与结果展示在卡片/标题下方。 */
 const ImportHistory = ({
   historyImport,
   disabled,
@@ -2623,26 +2756,59 @@ const ImportHistory = ({
   )
 
   if (isMobile) {
-    const statusText = historyImport.status
-      ? t(
-          historyImport.status.key,
-          historyImport.status.reason
-            ? { message: t(historyImport.status.reason) }
-            : historyImport.status.params
-        )
-      : null
+    const hintText = renderStatusText(t, historyImport.status)
+
+    if (embedded) {
+      return (
+        <>
+          <MobileActionCard
+            embedded
+            label={t('historyImport')}
+            description={t('historyImportDescription')}
+            disabled={disabled}
+            onAction={() => inputRef.current?.click()}
+          >
+            {fileInput}
+          </MobileActionCard>
+          {hintText ? (
+            <div
+              role="status"
+              aria-live="polite"
+              className={clsx(
+                styles.mobileEmbeddedHint,
+                historyImport.status?.error && styles.mobileCardHintError
+              )}
+            >
+              {hintText}
+            </div>
+          ) : null}
+        </>
+      )
+    }
+
     return (
-      <MobileActionCard
-        embedded={embedded}
-        label={t('historyImport')}
-        description={t('historyImportDescription')}
-        statusText={statusText}
-        statusError={historyImport.status?.error}
-        disabled={disabled}
-        onAction={() => inputRef.current?.click()}
-      >
-        {fileInput}
-      </MobileActionCard>
+      <div className={styles.mobileActionGroup}>
+        <MobileActionCard
+          label={t('historyImport')}
+          description={t('historyImportDescription')}
+          disabled={disabled}
+          onAction={() => inputRef.current?.click()}
+        >
+          {fileInput}
+        </MobileActionCard>
+        {hintText ? (
+          <div
+            role="status"
+            aria-live="polite"
+            className={clsx(
+              styles.mobileCardHint,
+              historyImport.status?.error && styles.mobileCardHintError
+            )}
+          >
+            {hintText}
+          </div>
+        ) : null}
+      </div>
     )
   }
 

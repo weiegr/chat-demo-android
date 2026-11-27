@@ -37,25 +37,23 @@ const toFileBlocks = (files: FileAttachment[]): FileBlockParam[] =>
       : []
   )
 
-const toInputRecord = (value: unknown): Record<string, unknown> =>
-  value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {}
+const isInputRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
 
 const parseToolJson = (block: ClientToolUseBlock): ClientToolUseBlock => {
   if (block.partialJson === undefined) {
     return block
   }
-  const raw = block.partialJson.trim()
-  let input = block.input
-  if (raw) {
-    try {
-      input = toInputRecord(JSON.parse(raw))
-    } catch {
-      // 增量 JSON 不合法时保留当前 input
+  const { id, name, type, partialJson } = block
+  try {
+    const input: unknown = JSON.parse(partialJson)
+    if (isInputRecord(input)) {
+      return { type, id, name, input }
     }
+  } catch {
+    // 保留调用 ID 以便回传参数错误。
   }
-  return { type: 'tool_use', id: block.id, name: block.name, input }
+  return { type, id, name, input: {}, invalidInput: true }
 }
 
 const toReplyBlock = (block: OutputBlockStart, now: number): ReplyBlock | null => {
@@ -78,7 +76,9 @@ const toReplyBlock = (block: OutputBlockStart, now: number): ReplyBlock | null =
         type: 'tool_use',
         id: block.id,
         name: block.name,
-        input: toInputRecord(block.input),
+        ...(isInputRecord(block.input)
+          ? { input: block.input }
+          : { input: {}, invalidInput: true }),
       }
     default:
       return null
@@ -224,6 +224,7 @@ export const getReplyText = (reply: AssistantMessage) =>
 export const canContinueReply = (reply: AssistantMessage): boolean => {
   if (
     !reply.prefix ||
+    reply.writingLength ||
     reply.stopReason === 'refusal' ||
     reply.stopReason === 'tool_use' ||
     reply.blocks.some(
@@ -256,6 +257,18 @@ const isUsableReply = (message: Message): message is AssistantMessage =>
 
 type UserMessageParam = Extract<MessageParam, { role: 'user' }>
 
+export const RP_PREVIEW_TEXT_PREFIX = '__preview_text__:'
+export const RP_PREVIEW_FILE_PREFIX = '__preview_file__:'
+
+type PreviewPendingFilesOptions = {
+  /** 尚在本地异步读取中的纯文本附件 ID；加载期间用预览估算块，不落入失败占位符 */
+  textIds?: ReadonlySet<string>
+  /** 允许对跨模型（仅有另一个模型的 serverId 或 ocrText）的视觉/文档附件生成预览估算块 */
+  crossModel?: boolean
+  /** 标记本条为用户当前待发提问（尚在上传/OCR 准备阶段） */
+  currentQuestion?: boolean
+}
+
 type UserParamOptions = {
   texts?: Map<string, string>
   ocrTexts?: Map<string, string>
@@ -263,6 +276,8 @@ type UserParamOptions = {
   useOcrForVisual?: boolean
   includeVideo?: boolean
   includeAudio?: boolean
+  /** 仅用于 RP 上下文圆环预览估算，真实 API 请求绝不传入 */
+  previewPendingFiles?: PreviewPendingFilesOptions
   /** 置于正文最前的注入文本（旁路搜索结果），与内联附件、正文按空行连接 */
   prepend?: string
 }
@@ -283,6 +298,7 @@ const toUserParam = (
     useOcrForVisual = false,
     includeVideo,
     includeAudio,
+    previewPendingFiles,
     prepend,
   }: UserParamOptions
 ): { message: UserMessageParam; hasVideo: boolean } => {
@@ -295,11 +311,24 @@ const toUserParam = (
   const requestFiles = files.filter((file) => !isInlinedText(file) && !isInlinedOcr(file))
   const videoSource = includeVideo ? video : undefined
   const frameIds = new Set(videoSource?.frameIds)
-  const blocks: (FileBlockParam | TextBlockParam)[] = toFileBlocks(
-    requestFiles.filter(
-      (file) => !file.audio && !frameIds.has(file.id) && !spectrogramIds.has(file.id)
-    )
+  const regularRequestFiles = requestFiles.filter(
+    (file) => !file.audio && !frameIds.has(file.id) && !spectrogramIds.has(file.id)
   )
+  const blocks: (FileBlockParam | TextBlockParam)[] = toFileBlocks(regularRequestFiles)
+  if (previewPendingFiles) {
+    for (const file of regularRequestFiles) {
+      if (
+        !file.serverId &&
+        ((previewPendingFiles.crossModel && file.ocrText !== undefined) ||
+          previewPendingFiles.currentQuestion)
+      ) {
+        blocks.push({
+          type: file.isImage ? 'image' : 'document',
+          source: { type: 'file', file_id: `${RP_PREVIEW_FILE_PREFIX}${file.id}` },
+        })
+      }
+    }
+  }
   const frames = toFileBlocks(
     (videoSource?.frameIds ?? []).flatMap((id) => {
       const file = requestFiles.find((item) => item.id === id && item.isImage)
@@ -333,6 +362,13 @@ const toUserParam = (
   const inline = files.flatMap((file) => {
     if (isInlinedText(file)) {
       const text = texts?.get(file.id)
+      if (text === undefined && previewPendingFiles?.textIds?.has(file.id)) {
+        blocks.push({
+          type: 'document',
+          source: { type: 'file', file_id: `${RP_PREVIEW_TEXT_PREFIX}${file.id}` },
+        })
+        return []
+      }
       return [
         text === undefined
           ? `【附件：${file.name}｜正文读取失败，未发送】`
@@ -343,6 +379,17 @@ const toUserParam = (
       const ocr = ocrTexts?.get(file.id) ?? file.ocrText
       const kindLabel = file.isImage ? '图片' : '文档'
       if (ocr === undefined) {
+        if (
+          previewPendingFiles &&
+          ((previewPendingFiles.crossModel && Boolean(file.serverId)) ||
+            previewPendingFiles.currentQuestion)
+        ) {
+          blocks.push({
+            type: file.isImage ? 'image' : 'document',
+            source: { type: 'file', file_id: `${RP_PREVIEW_FILE_PREFIX}${file.id}` },
+          })
+          return []
+        }
         return [`【${kindLabel}：${file.name}｜无法读取原件进行文字识别】`]
       }
       if (!ocr.trim()) {
@@ -375,8 +422,8 @@ const toUserParam = (
  * assistant 的内容块按历史、工具循环与续写场景转换为消息数组：
  * - 历史思考及其签名不回传；同一轮工具循环或开启思考时续写保留思考及其签名；
  * - 文本块去掉 citations（服务端忽略）。相邻文本直接拼接，被思考或工具隔开的文本用空行连接；
- * - 服务端块只保留带签名的 read_link 调用和结果（RP 模式 omitServerTools 时省略）；
- * - 已配对结果的客户端 tool_use 会与后续 client_tool_result 切分成交替的 assistant / user(tool_result) 消息。
+ * - 同轮续接回传完整工具块，并把已配对的客户端结果放在紧随其后的 user 消息；
+ * - 普通历史仅回传正文与协议所需的 read_link，客户端工具另用简短记录。
  */
 const toReplyParams = (
   { blocks }: AssistantMessage,
@@ -395,7 +442,9 @@ const toReplyParams = (
     )
   )
   const completedClientToolIds = new Set(
-    blocks.flatMap((block) => (block.type === 'client_tool_result' ? [block.tool_use_id] : []))
+    prefix
+      ? blocks.flatMap((block) => (block.type === 'client_tool_result' ? [block.tool_use_id] : []))
+      : []
   )
   const messages: MessageParam[] = []
   let content: AssistantBlockParam[] = []
@@ -426,21 +475,26 @@ const toReplyParams = (
       continue
     }
     if (block.type === 'client_tool_result') {
-      pendingToolResults.push({
-        type: 'tool_result',
-        tool_use_id: block.tool_use_id,
-        content: block.content,
-        ...(block.is_error ? { is_error: true } : {}),
-      })
+      if (prefix) {
+        pendingToolResults.push({
+          type: 'tool_result',
+          tool_use_id: block.tool_use_id,
+          content: block.content,
+          ...(block.is_error ? { is_error: true } : {}),
+        })
+      }
+      text = null
       continue
     }
     flushToolResults()
 
-    if (prefix && block.type === 'thinking' && !block.thinking.trim()) {
+    if (prefix && block.type === 'thinking' && !block.thinking.trim() && !block.signature) {
       continue
     }
     if (block.type === 'text') {
-      if (text) {
+      if (completedClientToolIds.size > 0) {
+        content.push({ type: 'text', text: block.text })
+      } else if (text) {
         text.text += block.text
       } else {
         const previous = content.at(-1)
@@ -459,19 +513,26 @@ const toReplyParams = (
     } else if (
       !omitServerTools &&
       block.type === 'server_tool_use' &&
-      block.kind === 'read_link' &&
-      !unsignedReadLinks.has(block.id)
+      !block.id.startsWith('bypass-') &&
+      (prefix || (block.kind === 'read_link' && !unsignedReadLinks.has(block.id)))
     ) {
       const { type, id, name, input, kind } = block
-      content.push({ type, id, name, input, kind })
+      content.push(prefix ? block : { type, id, name, input, kind })
+    } else if (
+      prefix &&
+      !omitServerTools &&
+      block.type === 'web_search_tool_result' &&
+      !block.tool_use_id.startsWith('bypass-')
+    ) {
+      content.push(block)
     } else if (
       !omitServerTools &&
       block.type === 'web_fetch_tool_result' &&
-      block.kind === 'read_link' &&
-      !unsignedReadLinks.has(block.tool_use_id)
+      !block.tool_use_id.startsWith('bypass-') &&
+      (prefix || (block.kind === 'read_link' && !unsignedReadLinks.has(block.tool_use_id)))
     ) {
       content.push(block)
-    } else if (block.type === 'tool_use' && completedClientToolIds.has(block.id)) {
+    } else if (prefix && block.type === 'tool_use' && completedClientToolIds.has(block.id)) {
       const parsed = parseToolJson(block)
       content.push({ type: 'tool_use', id: parsed.id, name: parsed.name, input: parsed.input })
     }
@@ -479,6 +540,44 @@ const toReplyParams = (
   flushToolResults()
   flushAssistant()
   return messages
+}
+
+const buildClientToolRecord = (reply: AssistantMessage): string => {
+  const facts = new Map<string, { checked_at?: string; title?: string; size?: string }>()
+  for (const block of reply.blocks) {
+    if (block.type !== 'client_tool_result' || block.status !== 'done' || block.is_error) {
+      continue
+    }
+    if (block.name === 'draw_image' && block.image?.stage === 'refine') {
+      const { title, width, height } = block.image
+      facts.set(block.name, { title: title?.slice(0, 40), size: `${width}×${height}` })
+    } else if (block.name === 'get_balance' || block.name === 'get_location') {
+      try {
+        const result: unknown = JSON.parse(block.content)
+        if (
+          isInputRecord(result) &&
+          typeof result.fetched_at === 'string' &&
+          Number.isFinite(Date.parse(result.fetched_at))
+        ) {
+          facts.set(block.name, { checked_at: new Date(result.fetched_at).toISOString() })
+        }
+      } catch {
+        // 旧记录缺少可校验的时间时无需附加。
+      }
+    }
+  }
+  return facts.size === 0
+    ? ''
+    : `【该轮客户端工具记录】\n${JSON.stringify(Object.fromEntries(facts))}`
+}
+
+const appendRequestContext = (question: UserMessageParam, context: string) => {
+  if (context) {
+    question.content =
+      typeof question.content === 'string'
+        ? `${question.content}\n\n${context}`
+        : [...question.content, { type: 'text', text: context }]
+  }
 }
 
 /** 历史中会进入请求上下文的轮次：提问后紧跟可用回答的才保留 */
@@ -513,6 +612,7 @@ export const toRequestMessages = (
     useOcrForVisual?: boolean
     includeVideo?: boolean
     includeAudio?: boolean
+    previewPendingFiles?: Omit<PreviewPendingFilesOptions, 'currentQuestion'>
     onContextRound?: (reply: AssistantMessage, end: number, reminder?: string) => void
     /** 旁路搜索注入文本，仅置于本轮提问最前（历史轮搜索块不进请求） */
     searchContext?: string
@@ -525,6 +625,7 @@ export const toRequestMessages = (
   const useOcrForVisual = options?.useOcrForVisual ?? false
   const includeVideo = options?.includeVideo ?? false
   const includeAudio = options?.includeAudio ?? false
+  const previewPendingFiles = options?.previewPendingFiles
   const messages: MessageParam[] = []
   let hasVideoContext = false
   let previousReminder: string | undefined
@@ -557,12 +658,29 @@ export const toRequestMessages = (
         !(isTextAttachment(file) && (omitServerTools || texts?.has(file.id))) &&
         !(useOcrForVisual && isOcrSupportedAttachment(file))
     )
+    const hasPreviewFile =
+      Boolean(previewPendingFiles) &&
+      user.files.some((file) => {
+        if (file.audio || spectrogramIds.has(file.id)) {
+          return false
+        }
+        if (isTextAttachment(file) && (omitServerTools || texts?.has(file.id))) {
+          return Boolean(previewPendingFiles?.textIds?.has(file.id))
+        }
+        if (useOcrForVisual && isOcrSupportedAttachment(file)) {
+          return Boolean(previewPendingFiles?.crossModel && file.serverId)
+        }
+        return Boolean(
+          previewPendingFiles?.crossModel && !file.serverId && file.ocrText !== undefined
+        )
+      })
     // 历史提问没有文字、附件也不进请求时，提问为空，连同回答一起省略。
     if (
       !user.content &&
       !remainingFiles.some((file) => file.serverId) &&
       !hasInlineText &&
       !hasOcr &&
+      !hasPreviewFile &&
       !(includeAudio && user.files.some((file) => file.audio)) &&
       !(includeVideo && user.video?.transcript?.trim())
     ) {
@@ -583,9 +701,15 @@ export const toRequestMessages = (
       useOcrForVisual,
       includeVideo,
       includeAudio,
+      previewPendingFiles: previewPendingFiles
+        ? { ...previewPendingFiles, currentQuestion: false }
+        : undefined,
     })
-    if (!omitServerTools && hasWebSearchRecord(reply)) {
-      latestSearch = { reply, question: userParam.message }
+    if (!omitServerTools) {
+      appendRequestContext(userParam.message, buildClientToolRecord(reply))
+      if (hasWebSearchRecord(reply)) {
+        latestSearch = { reply, question: userParam.message }
+      }
     }
     messages.push(userParam.message, ...replyParams)
     options?.onContextRound?.(reply, messages.length, previousReminder)
@@ -593,11 +717,7 @@ export const toRequestMessages = (
   }
   if (latestSearch) {
     const { question: searchedQuestion, reply: searchedReply } = latestSearch
-    const record = buildWebSearchRecord(searchedReply)
-    searchedQuestion.content =
-      typeof searchedQuestion.content === 'string'
-        ? `${searchedQuestion.content}\n\n${record}`
-        : [...searchedQuestion.content, { type: 'text', text: record }]
+    appendRequestContext(searchedQuestion, buildWebSearchRecord(searchedReply))
   }
   appendReminder(latestReminder)
   if (question) {
@@ -608,6 +728,9 @@ export const toRequestMessages = (
       useOcrForVisual,
       includeVideo,
       includeAudio,
+      previewPendingFiles: previewPendingFiles
+        ? { ...previewPendingFiles, currentQuestion: true }
+        : undefined,
       prepend: options?.searchContext,
     })
     messages.push(questionParam.message)

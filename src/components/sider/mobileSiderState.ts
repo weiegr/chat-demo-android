@@ -33,15 +33,12 @@ export const dismissKeyboard = (): { hadNativeIme: boolean; hadFocus: boolean } 
 export const useMobileSider = create(() => ({ open: false }))
 
 /**
- * 抽屉改为把对话界面整体右移，抽屉在下层随进度做纯 GPU 水平微视差迎合。
+ * 移动端推开式侧边栏：侧边栏从屏幕左侧完整滑入，紧贴着把对话界面整体往右推。
  * 这里保存 App 注册进来的 <main> 与抽屉动效层，手势拖动时直接写内联样式，避免每帧触发 React 渲染。
  */
 let mainElement: HTMLElement | null = null
 let drawerMotionElement: HTMLElement | null = null
 let mainInlineTimer: number | undefined
-
-/** 与 Sider.module.css 中 .drawerMotion 收起态保持严格一致（纯水平位移，零重栅格化缩放/透明度合成） */
-const DRAWER_START_X = -24
 
 const prefersReducedMotion = () =>
   typeof window !== 'undefined' &&
@@ -60,14 +57,16 @@ export const bindSiderDrawerMotion = (element: HTMLElement | null) => {
 
 export const getSiderDrawerMotion = () => drawerMotionElement
 
-/** 按抽屉展开进度（0~1）同步设置水平微视差位移 */
-export const applySiderDrawerProgress = (element: HTMLElement, progress: number) => {
+/** 按侧边栏推入像素偏移与宽度，同步让抽屉右缘紧贴对话界面左缘一起平移 */
+export const applySiderDrawerProgress = (element: HTMLElement, offset: number, width: number) => {
+  const safeWidth = Math.max(1, width)
+  const clampedOffset = offset <= 0 ? 0 : offset >= safeWidth ? safeWidth : offset
   if (prefersReducedMotion()) {
-    element.style.transform = 'none'
+    element.style.transform =
+      clampedOffset >= safeWidth * 0.5 ? 'translate3d(0, 0, 0)' : 'translate3d(-100%, 0, 0)'
     return
   }
-  const clamped = progress <= 0 ? 0 : progress >= 1 ? 1 : progress
-  const x = DRAWER_START_X * (1 - clamped)
+  const x = clampedOffset - safeWidth
   element.style.transform = `translate3d(${x.toFixed(2)}px, 0, 0)`
 }
 
@@ -82,7 +81,7 @@ export const clearSiderMainInline = () => {
   if (mainElement) {
     mainElement.style.removeProperty('transition')
     mainElement.style.removeProperty('transform')
-    mainElement.style.removeProperty('box-shadow')
+    mainElement.style.removeProperty('--sider-shadow-opacity')
     delete mainElement.dataset.siderDragging
   }
   if (drawerMotionElement) {

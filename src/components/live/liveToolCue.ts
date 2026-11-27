@@ -13,6 +13,7 @@ const TOOL_CUES: Record<Locale, Record<LiveToolActivity, string>> = {
     location: '稍等，我获取一下你的位置。',
     balance: '稍等，我查一下你的账户余额。',
     guide: '稍等，我查一下功能说明。',
+    image: '稍等，我画一下。',
   },
   'en-US': {
     memory: 'One moment, let me check our earlier chats.',
@@ -21,6 +22,7 @@ const TOOL_CUES: Record<Locale, Record<LiveToolActivity, string>> = {
     location: 'One moment, let me check your location.',
     balance: 'One moment, let me check your account balance.',
     guide: 'One moment, let me check the app guide.',
+    image: 'One moment, let me draw that.',
   },
 }
 

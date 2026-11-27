@@ -12,15 +12,17 @@ import {
 import { getImeMotionState, hasNativeImeMotion, subscribeImeMotion } from '../../app/imeMotion.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
+import type { ChatModel } from '../../services/api/types.js'
 import { subscribeDeviceTilt } from '../../services/deviceTilt.js'
-import { setChatMode, useSettings, type ChatMode } from '../../services/settings.js'
+import { setChatMode, setRpModel, useSettings, type ChatMode } from '../../services/settings.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
 import { useChatSearch } from '../search/chatSearchState.js'
 import { useSettingsDialog } from '../settings/settingsDialogState.js'
 import { useMobileSider } from '../sider/mobileSiderState.js'
-import { CHAT_MODE_OPTIONS } from './chatModeMeta.js'
+import { CHAT_MODE_OPTIONS, getChatModeMeta } from './chatModeMeta.js'
 import { runComposerTransition } from './composerTransition.js'
 import { MobileHeader } from './MobileHeader.js'
+import { RpModelStage } from './RpModelStage.js'
 import styles from './Welcome.module.css'
 
 const OPTION_COUNT = CHAT_MODE_OPTIONS.length
@@ -49,6 +51,39 @@ const TITLE_FADE_SPAN = 0.56
 const TITLE_SHIFT_PX = 16
 const HINT_FADE_SPAN = 0.56
 const HINT_SHIFT_PX = 28
+
+/** 切换至 RP 模式后等待滑块弹簧落位再自动缩小上移到顶部中央的衔接延迟（ms） */
+const RP_AUTO_DOCK_DELAY_MS = 210
+/** 三模式滑块与顶部单胶囊之间的 FLIP 变形飞行时长（ms） */
+const RP_MORPH_DURATION_MS = 420
+const RP_MORPH_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)'
+
+const RP_MODE_META = getChatModeMeta('rp')
+
+interface RectSnapshot {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+interface PendingRpFlip {
+  switchRect: RectSnapshot | null
+  rpTabRect: RectSnapshot | null
+  pillRect: RectSnapshot | null
+  inputTop: number | null
+}
+
+const snapshotRect = (el: HTMLElement | null): RectSnapshot | null => {
+  if (!el) {
+    return null
+  }
+  const rect = el.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) {
+    return null
+  }
+  return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+}
 
 const HINT_ALIGN_CLASS: Record<ChatMode, string> = {
   fast: styles.modeHintStart,
@@ -217,12 +252,16 @@ const ModeSwitch = ({
   mode,
   onMotionFrame,
   onMotionActiveChange,
+  onDraggingChange,
   onCommit,
+  onReselect,
 }: {
   mode: ChatMode
   onMotionFrame: (frame: ModeMotionFrame) => void
   onMotionActiveChange: (active: boolean) => void
+  onDraggingChange: (dragging: boolean) => void
   onCommit: (next: ChatMode) => void
+  onReselect: (current: ChatMode) => void
 }) => {
   const t = useTranslate()
   const switchRef = useRef<HTMLDivElement>(null)
@@ -252,8 +291,24 @@ const ModeSwitch = ({
   const lastFrameTimeRef = useRef(0)
   const motionActiveRef = useRef(false)
 
-  const latestRef = useRef({ activeIndex, mode, onMotionFrame, onMotionActiveChange, onCommit })
-  latestRef.current = { activeIndex, mode, onMotionFrame, onMotionActiveChange, onCommit }
+  const latestRef = useRef({
+    activeIndex,
+    mode,
+    onMotionFrame,
+    onMotionActiveChange,
+    onDraggingChange,
+    onCommit,
+    onReselect,
+  })
+  latestRef.current = {
+    activeIndex,
+    mode,
+    onMotionFrame,
+    onMotionActiveChange,
+    onDraggingChange,
+    onCommit,
+    onReselect,
+  }
 
   const setMotionActive = useCallback((active: boolean) => {
     if (motionActiveRef.current === active) {
@@ -549,6 +604,7 @@ const ModeSwitch = ({
           return
         }
         drag.dragging = true
+        latestRef.current.onDraggingChange(true)
         // 拖拽接管：切回全连续 scrub 模式，以当前实时进度为基准零跳变跟手
         directRef.current = null
         drag.startProgress = clamp(progressRef.current, 0, MAX_INDEX)
@@ -625,6 +681,7 @@ const ModeSwitch = ({
       }
 
       track.classList.remove(styles.modeTrackDragging)
+      latestRef.current.onDraggingChange(false)
       const releaseVelocity = cancelled ? 0 : (drag.velocityX * 1000) / drag.slotWidth
       const changed = CHAT_MODE_OPTIONS[finalIndex]?.value !== latestRef.current.mode
       springTo(finalIndex, {
@@ -776,11 +833,14 @@ const ModeSwitch = ({
       if (nextOption.value !== mode) {
         onCommit(nextOption.value)
         springTo(index, { directFrom: from, triggerPop: true })
-      } else if (Math.abs(progressRef.current - index) > 1e-3) {
-        springTo(index, { directFrom: null })
+      } else {
+        if (Math.abs(progressRef.current - index) > 1e-3) {
+          springTo(index, { directFrom: null })
+        }
+        onReselect(nextOption.value)
       }
     },
-    [activeIndex, mode, onCommit, springTo]
+    [activeIndex, mode, onCommit, onReselect, springTo]
   )
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -895,6 +955,7 @@ export const Welcome = ({
   const t = useTranslate()
   const isMobile = useIsMobile()
   const chatMode = useSettings((state) => state.chatMode)
+  const rpModel = useSettings((state) => state.rpModel)
   const chatParallaxEnabled = useSettings((state) => state.chatParallaxEnabled)
   const mobileSiderOpen = useMobileSider((state) => state.open)
   const chatSearchOpen = useChatSearch((state) => state.open)
@@ -905,13 +966,21 @@ export const Welcome = ({
   const headerParallaxRef = useRef<HTMLDivElement | null>(null)
   const greetingParallaxRef = useRef<HTMLDivElement>(null)
   const modeSwitchParallaxRef = useRef<HTMLDivElement>(null)
+  const modeSwitchShellRef = useRef<HTMLDivElement>(null)
   const modeHintParallaxRef = useRef<HTMLDivElement>(null)
+  const rpPillAnchorRef = useRef<HTMLDivElement>(null)
+  const rpPillMotionRef = useRef<HTMLButtonElement>(null)
   const inputParallaxRef = useRef<HTMLDivElement>(null)
   const inputControlsParallaxRef = useRef<HTMLDivElement | null>(null)
   const cameraShortcutRef = useRef<(() => void) | null>(null)
   const inputSlotRef = useRef<HTMLDivElement>(null)
   const maxHeroLiftRef = useRef(0)
   const prewarmTimerRef = useRef<number | null>(null)
+  const autoDockTimerRef = useRef<number | null>(null)
+  const morphCleanupTimerRef = useRef<number | null>(null)
+  const modeDraggingRef = useRef(false)
+  const pendingFlipRef = useRef<PendingRpFlip | null>(null)
+  const prevChatModeRef = useRef<ChatMode>(chatMode)
   const titleItemRefs = useRef<(HTMLSpanElement | null)[]>([])
   const hintStageRef = useRef<HTMLDivElement>(null)
   const hintItemRefs = useRef<(HTMLParagraphElement | null)[]>([])
@@ -924,10 +993,218 @@ export const Welcome = ({
   const [heroEntering, setHeroEntering] = useState(false)
   const [inputParallaxPaused, setInputParallaxPaused] = useState(false)
   const [modeMotionActive, setModeMotionActive] = useState(false)
+  const [rpDocked, setRpDocked] = useState(() => chatMode === 'rp')
+  const [rpStageReady, setRpStageReady] = useState(
+    () => chatMode !== 'rp' || prefersReducedMotion()
+  )
+  const [rpPreviewModel, setRpPreviewModel] = useState<ChatModel | null>(null)
+  const rpDockedRef = useRef(rpDocked)
+  rpDockedRef.current = rpDocked
+  const prevDockedRef = useRef(rpDocked)
   const [imeParallaxPaused, setImeParallaxPaused] = useState(() => {
     const ime = getImeMotionState()
     return ime.animating || ime.raise > 0.5 || ime.settled > 0.5
   })
+
+  const rpStageOpen = chatMode === 'rp' && rpDocked && rpStageReady
+  const effectiveRpModel = rpPreviewModel ?? rpModel
+  const rpStageLightTop = rpStageOpen && effectiveRpModel !== 'deepseek-v4-pro'
+  const rpStageBottomBlue = rpStageOpen && effectiveRpModel === 'deepseek-v4-pro'
+
+  const cancelAutoDock = useCallback(() => {
+    if (autoDockTimerRef.current !== null) {
+      window.clearTimeout(autoDockTimerRef.current)
+      autoDockTimerRef.current = null
+    }
+  }, [])
+
+  const captureFlipSnapshot = useCallback((): PendingRpFlip => {
+    const shell = modeSwitchShellRef.current
+    const rpTab = shell?.querySelectorAll<HTMLElement>('[role="tab"]')[2] ?? null
+    return {
+      switchRect: snapshotRect(shell),
+      rpTabRect: snapshotRect(rpTab),
+      pillRect: snapshotRect(rpPillAnchorRef.current),
+      inputTop: inputSlotRef.current ? inputSlotRef.current.getBoundingClientRect().top : null,
+    }
+  }, [])
+
+  const transitionRpDocked = useCallback(
+    (next: boolean) => {
+      cancelAutoDock()
+      if (rpDockedRef.current === next) {
+        return
+      }
+      pendingFlipRef.current = captureFlipSnapshot()
+      rpDockedRef.current = next
+      setRpDocked(next)
+    },
+    [cancelAutoDock, captureFlipSnapshot]
+  )
+
+  // 首次即以 RP 模式进入新对话时，下一帧平滑展开整界面模型选择幕布
+  useEffect(() => {
+    if (rpStageReady) {
+      return
+    }
+    const rafId = window.requestAnimationFrame(() => {
+      setRpStageReady(true)
+    })
+    return () => window.cancelAnimationFrame(rafId)
+  }, [rpStageReady])
+
+  // 从快速/专家切入 RP 模式时，待三模式滑块弹簧落位后自动缩小飞往顶部中央；切离 RP 则立即恢复展开态
+  useEffect(() => {
+    const prevMode = prevChatModeRef.current
+    prevChatModeRef.current = chatMode
+    if (chatMode !== 'rp') {
+      cancelAutoDock()
+      setRpDocked(false)
+      return
+    }
+    if (prevMode !== 'rp') {
+      cancelAutoDock()
+      const delay = prefersReducedMotion() ? 0 : RP_AUTO_DOCK_DELAY_MS
+      autoDockTimerRef.current = window.setTimeout(() => {
+        autoDockTimerRef.current = null
+        if (!modeDraggingRef.current) {
+          setRpStageReady(true)
+          transitionRpDocked(true)
+        }
+      }, delay)
+    }
+  }, [cancelAutoDock, chatMode, transitionRpDocked])
+
+  useEffect(() => () => cancelAutoDock(), [cancelAutoDock])
+
+  // 三模式滑块 ↔ 顶部中央单胶囊双向 FLIP 连续形变飞行，桌面端同步平滑移动底部输入框
+  useLayoutEffect(() => {
+    const prevDocked = prevDockedRef.current
+    prevDockedRef.current = rpDocked
+    const snap = pendingFlipRef.current
+    pendingFlipRef.current = null
+    if (prevDocked === rpDocked || prefersReducedMotion()) {
+      return
+    }
+
+    const shell = modeSwitchShellRef.current
+    const pillAnchor = rpPillAnchorRef.current
+    const pillMotion = rpPillMotionRef.current
+    const inputSlot = inputSlotRef.current
+    if (!shell || !pillAnchor || !pillMotion) {
+      return
+    }
+
+    const clearInline = () => {
+      if (morphCleanupTimerRef.current !== null) {
+        window.clearTimeout(morphCleanupTimerRef.current)
+        morphCleanupTimerRef.current = null
+      }
+      for (const el of [shell, pillMotion]) {
+        el.style.removeProperty('transition')
+        el.style.removeProperty('transform')
+        el.style.removeProperty('opacity')
+        el.style.removeProperty('visibility')
+        el.style.removeProperty('will-change')
+      }
+      if (!isMobile && inputSlot) {
+        inputSlot.style.removeProperty('transition')
+        inputSlot.style.removeProperty('transform')
+        inputSlot.style.removeProperty('will-change')
+      }
+    }
+
+    clearInline()
+
+    const currSwitchRect = snapshotRect(shell)
+    const currRpTabRect = snapshotRect(
+      shell.querySelectorAll<HTMLElement>('[role="tab"]')[2] ?? null
+    )
+    const currPillRect = snapshotRect(pillAnchor)
+    const switchRect = rpDocked ? (snap?.switchRect ?? currSwitchRect) : currSwitchRect
+    const rpTabRect = rpDocked ? (snap?.rpTabRect ?? currRpTabRect) : currRpTabRect
+    const pillRect = rpDocked ? currPillRect : (snap?.pillRect ?? currPillRect)
+
+    if (!switchRect || !currSwitchRect || !pillRect) {
+      return
+    }
+
+    const anchorTabRect = rpTabRect ?? switchRect
+    const switchOriginDx =
+      switchRect.left + switchRect.width / 2 - (currSwitchRect.left + currSwitchRect.width / 2)
+    const switchOriginDy =
+      switchRect.top + switchRect.height / 2 - (currSwitchRect.top + currSwitchRect.height / 2)
+    const pillCenterX = pillRect.left + pillRect.width / 2
+    const pillCenterY = pillRect.top + pillRect.height / 2
+    const dxToPill = pillCenterX - (currSwitchRect.left + currSwitchRect.width / 2)
+    const dyToPill = pillCenterY - (currSwitchRect.top + currSwitchRect.height / 2)
+    const sxShell = clamp(pillRect.width / switchRect.width, 0.24, 1)
+    const syShell = clamp(pillRect.height / switchRect.height, 0.55, 1)
+
+    const dxPillFromTab = anchorTabRect.left + anchorTabRect.width / 2 - pillCenterX
+    const dyPillFromTab = anchorTabRect.top + anchorTabRect.height / 2 - pillCenterY
+    const sxPill = clamp(anchorTabRect.width / pillRect.width, 0.72, 1.55)
+    const syPill = clamp(anchorTabRect.height / pillRect.height, 0.72, 1.55)
+
+    const inputDeltaY =
+      !isMobile && inputSlot && snap?.inputTop !== null && snap?.inputTop !== undefined
+        ? snap.inputTop - inputSlot.getBoundingClientRect().top
+        : 0
+
+    shell.style.transition = 'none'
+    shell.style.visibility = 'visible'
+    shell.style.willChange = 'transform, opacity'
+    pillMotion.style.transition = 'none'
+    pillMotion.style.visibility = 'visible'
+    pillMotion.style.willChange = 'transform, opacity'
+
+    if (rpDocked) {
+      shell.style.opacity = '1'
+      shell.style.transform = `translate3d(${switchOriginDx.toFixed(2)}px, ${switchOriginDy.toFixed(2)}px, 0) scale(1, 1)`
+      pillMotion.style.opacity = '0.86'
+      pillMotion.style.transform = `translate3d(${dxPillFromTab.toFixed(2)}px, ${dyPillFromTab.toFixed(2)}px, 0) scale(${sxPill.toFixed(4)}, ${syPill.toFixed(4)})`
+    } else {
+      shell.style.opacity = '0'
+      shell.style.transform = `translate3d(${dxToPill.toFixed(2)}px, ${dyToPill.toFixed(2)}px, 0) scale(${sxShell.toFixed(4)}, ${syShell.toFixed(4)})`
+      pillMotion.style.opacity = '1'
+      pillMotion.style.transform = 'translate3d(0, 0, 0) scale(1, 1)'
+    }
+
+    if (!isMobile && inputSlot && Math.abs(inputDeltaY) > 1) {
+      inputSlot.style.transition = 'none'
+      inputSlot.style.willChange = 'transform'
+      inputSlot.style.transform = `translate3d(0, ${inputDeltaY.toFixed(2)}px, 0)`
+    }
+
+    // 提交第 0 帧变换，确保随后的过渡从精确起飞坐标启动
+    void pillMotion.getBoundingClientRect()
+
+    if (rpDocked) {
+      shell.style.transition = `transform 380ms ${RP_MORPH_EASE}, opacity 200ms ease-out`
+      shell.style.transform = `translate3d(${dxToPill.toFixed(2)}px, ${dyToPill.toFixed(2)}px, 0) scale(${sxShell.toFixed(4)}, ${syShell.toFixed(4)})`
+      shell.style.opacity = '0'
+
+      pillMotion.style.transition = `transform ${RP_MORPH_DURATION_MS}ms ${RP_MORPH_EASE}, opacity 210ms ease-out`
+      pillMotion.style.transform = 'translate3d(0, 0, 0) scale(1, 1)'
+      pillMotion.style.opacity = '1'
+    } else {
+      shell.style.transition = `transform 400ms ${RP_MORPH_EASE}, opacity 240ms ${RP_MORPH_EASE} 55ms`
+      shell.style.transform = 'translate3d(0, 0, 0) scale(1, 1)'
+      shell.style.opacity = '1'
+
+      pillMotion.style.transition = `transform 380ms ${RP_MORPH_EASE}, opacity 180ms ease-in 70ms`
+      pillMotion.style.transform = `translate3d(${dxPillFromTab.toFixed(2)}px, ${dyPillFromTab.toFixed(2)}px, 0) scale(${sxPill.toFixed(4)}, ${syPill.toFixed(4)})`
+      pillMotion.style.opacity = '0'
+    }
+
+    if (!isMobile && inputSlot && Math.abs(inputDeltaY) > 1) {
+      inputSlot.style.transition = `transform ${RP_MORPH_DURATION_MS}ms ${RP_MORPH_EASE}`
+      inputSlot.style.transform = 'translate3d(0, 0, 0)'
+    }
+
+    morphCleanupTimerRef.current = window.setTimeout(clearInline, RP_MORPH_DURATION_MS + 40)
+    return clearInline
+  }, [isMobile, rpDocked])
 
   const tiltTargetRef = useRef({ x: 0, y: 0 })
   const tiltCurrentRef = useRef({ x: 0, y: 0 })
@@ -998,6 +1275,7 @@ export const Welcome = ({
 
   const parallaxActive =
     chatParallaxEnabled &&
+    !rpDocked &&
     !mobileSiderOpen &&
     !chatSearchOpen &&
     !settingsOpen &&
@@ -1054,6 +1332,36 @@ export const Welcome = ({
     heroRef.current?.classList.toggle(styles.heroAnimating, active)
     setModeMotionActive(active)
   }, [])
+
+  const handleModeDraggingChange = useCallback(
+    (dragging: boolean) => {
+      modeDraggingRef.current = dragging
+      if (dragging) {
+        cancelAutoDock()
+      }
+    },
+    [cancelAutoDock]
+  )
+
+  const handleModeCommit = useCallback(
+    (next: ChatMode) => {
+      if (next !== 'rp') {
+        cancelAutoDock()
+      }
+      setChatMode(next)
+    },
+    [cancelAutoDock]
+  )
+
+  const handleModeReselect = useCallback(
+    (current: ChatMode) => {
+      if (current === 'rp' && !rpDocked) {
+        setRpStageReady(true)
+        transitionRpDocked(true)
+      }
+    },
+    [rpDocked, transitionRpDocked]
+  )
 
   // 手指刚触碰输入框时（早于系统 IME onPrepare ~50ms）提前预热两个小合成层，消除冷启动首帧上传尖峰
   const prewarmImeLayers = useCallback(() => {
@@ -1279,7 +1587,9 @@ export const Welcome = ({
   return (
     <div
       ref={containerRef}
-      className={styles.container}
+      className={clsx(styles.container, rpDocked && styles.containerRpDocked)}
+      data-rp-stage-open={rpStageOpen ? 'true' : undefined}
+      data-rp-stage-bottom={rpStageOpen ? (rpStageBottomBlue ? 'blue' : 'blank') : undefined}
       onPointerMove={(event) => {
         if (
           isMobile ||
@@ -1308,17 +1618,59 @@ export const Welcome = ({
         wakeTiltLoop()
       }}
     >
+      <RpModelStage
+        active={rpStageOpen}
+        model={rpModel}
+        onSelect={setRpModel}
+        onPreviewModelChange={setRpPreviewModel}
+      />
+
       {isMobile ? (
         <MobileHeader
           memorySession={null}
+          transparent={rpStageOpen}
+          lightTone={rpStageLightTop}
           parallaxRef={headerParallaxRef}
           onTakePhoto={() => cameraShortcutRef.current?.()}
         />
       ) : null}
-      <div className={styles.welcome}>
-        <div ref={heroRef} className={styles.hero}>
+
+      {/* 顶部中央单胶囊：进入 RP 模式时由三模式滑块缩小飞升停靠至此，与上下文圆环齐平；点击展开回原位 */}
+      <div
+        ref={rpPillAnchorRef}
+        className={clsx(styles.rpDockedPillAnchor, rpDocked && styles.rpDockedPillAnchorVisible)}
+      >
+        <button
+          ref={rpPillMotionRef}
+          type="button"
+          className={clsx(
+            styles.rpDockedPill,
+            rpDocked && styles.rpDockedPillVisible,
+            rpStageLightTop && styles.rpDockedPillOnBlue
+          )}
+          aria-label={`${t(RP_MODE_META.labelKey)} · ${t('chatModeLabel')}`}
+          aria-expanded={!rpDocked}
+          tabIndex={rpDocked ? 0 : -1}
+          onClick={() => transitionRpDocked(false)}
+        >
+          <span className={styles.modeIcon} aria-hidden="true">
+            {RP_MODE_META.icon}
+          </span>
+          <span className={styles.modeLabel}>{t(RP_MODE_META.labelKey)}</span>
+        </button>
+      </div>
+
+      <div className={clsx(styles.welcome, rpDocked && styles.welcomeRpDocked)}>
+        <div
+          ref={heroRef}
+          className={clsx(styles.hero, rpDocked && styles.heroRpDocked)}
+          aria-hidden={rpDocked}
+        >
           <div className={clsx(styles.heroInner, heroEntering && styles.heroEntering)}>
-            <div ref={greetingParallaxRef} className={styles.greeting}>
+            <div
+              ref={greetingParallaxRef}
+              className={clsx(styles.greeting, rpDocked && styles.heroTextHidden)}
+            >
               {CHAT_MODE_OPTIONS.map((option, index) => (
                 <span
                   key={option.value}
@@ -1333,16 +1685,26 @@ export const Welcome = ({
               ))}
             </div>
 
-            <div ref={modeSwitchParallaxRef} className={styles.modeSwitchParallax}>
-              <ModeSwitch
-                mode={chatMode}
-                onMotionFrame={handleMotionFrame}
-                onMotionActiveChange={handleMotionActiveChange}
-                onCommit={setChatMode}
-              />
+            <div
+              ref={modeSwitchParallaxRef}
+              className={clsx(styles.modeSwitchParallax, rpDocked && styles.modeSwitchDocked)}
+            >
+              <div ref={modeSwitchShellRef} className={styles.modeSwitchShell}>
+                <ModeSwitch
+                  mode={chatMode}
+                  onMotionFrame={handleMotionFrame}
+                  onMotionActiveChange={handleMotionActiveChange}
+                  onDraggingChange={handleModeDraggingChange}
+                  onCommit={handleModeCommit}
+                  onReselect={handleModeReselect}
+                />
+              </div>
             </div>
 
-            <div ref={modeHintParallaxRef} className={styles.modeHintViewport}>
+            <div
+              ref={modeHintParallaxRef}
+              className={clsx(styles.modeHintViewport, rpDocked && styles.heroTextHidden)}
+            >
               <div ref={hintStageRef} className={styles.modeHintStage}>
                 {CHAT_MODE_OPTIONS.map((option, index) => (
                   <p

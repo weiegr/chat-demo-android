@@ -3,6 +3,7 @@ import type {
   WebFetchResult,
   WebFetchToolResultBlock,
 } from '../../api/types.js'
+import { PIXEL_HEIGHT, PIXEL_WIDTH } from '../../image/pixelPaint.js'
 import type {
   AssistantMessage,
   FileAttachment,
@@ -12,6 +13,7 @@ import type {
   Session,
   UserMessage,
 } from '../types.js'
+import { countWritingBody } from '../writingLength.js'
 import { fail } from './errors.js'
 import type { ChatMessage, FileEntry, Fragment, SessionFile } from './format.js'
 import { sessionFilesDir } from './paths.js'
@@ -89,6 +91,9 @@ const toUser = (message: ChatMessage): UserMessage => {
       .map((item) => (item.type === 'REQUEST' ? item.content : ''))
       .join(''),
     files,
+    ...(message.api_demo_writing_length !== undefined && {
+      writingLength: message.api_demo_writing_length,
+    }),
     ...(video && {
       video: {
         id: video.id,
@@ -133,13 +138,14 @@ const fetchResult = (
 const fetched = (
   url: string,
   title: string | null,
-  publishedAt: string | null
+  publishedAt: string | null,
+  excerpt = ''
 ): WebFetchResult => ({
   type: 'web_fetch_result',
   url,
   content: {
     type: 'document',
-    source: { type: 'text', media_type: 'text/plain', data: '' },
+    source: { type: 'text', media_type: 'text/plain', data: excerpt },
     title,
   },
   published_at: publishedAt,
@@ -249,8 +255,8 @@ const toBlocks = (fragments: Fragment[], messageId: string): ReplyBlock[] => {
             type: 'web_fetch_tool_result',
             tool_use_id: toolId,
             kind: 'read_link',
-            content: fetched(url, result.title ?? null, null),
-            signature: result.signature,
+            content: fetched(url, result.title ?? null, null, result.api_demo_excerpt),
+            ...(result.signature && { signature: result.signature }),
           })
         })
       default:
@@ -272,8 +278,38 @@ const replyStatus: Record<ChatMessage['status'], ReplyStatus> = {
 
 const toAssistant = (message: ChatMessage): AssistantMessage => {
   const id = String(message.id)
-  const blocks = toBlocks(message.fragments, id)
+  const blocks: ReplyBlock[] = []
+  message.api_demo_generated_images?.forEach(({ data_url, title }, index) => {
+    const toolId = `archive-image-${id}-${index}`
+    blocks.push(
+      { type: 'tool_use', id: toolId, name: 'draw_image', input: { stage: 'refine' } },
+      {
+        type: 'client_tool_result',
+        tool_use_id: toolId,
+        name: 'draw_image',
+        status: 'done',
+        content: '',
+        image: {
+          id: toolId,
+          stage: 'refine',
+          dataUrl: data_url,
+          width: PIXEL_WIDTH,
+          height: PIXEL_HEIGHT,
+          ...(title && { title }),
+        },
+      }
+    )
+  })
+  blocks.push(...toBlocks(message.fragments, id))
   const refused = message.status === 'CONTENT_FILTER'
+  const length = message.api_demo_writing_length
+  const body = blocks.at(-1)
+  const verifiedLength =
+    message.status === 'FINISHED' &&
+    length &&
+    body?.type === 'text' &&
+    !body.isTemplate &&
+    countWritingBody(body.text, length.unit) === length.target
   return {
     id,
     role: 'assistant',
@@ -284,6 +320,7 @@ const toAssistant = (message: ChatMessage): AssistantMessage => {
     prefix: false,
     status: replyStatus[message.status],
     ...(__BETA__ && message.api_demo_rp_summary && { rpSummary: message.api_demo_rp_summary }),
+    ...(verifiedLength && { writingLength: { ...length, attempt: 1, actual: length.target } }),
     // 拒绝回复丢弃模型正文和思考，保留模板提示与工具步骤。
     ...(refused ? { stopReason: 'refusal' as const } : {}),
     blocks: refused
@@ -347,6 +384,14 @@ export const toLocalSession = (file: SessionFile): LocalSession => {
     updatedAt: time(file.updated_at),
     ...(file.mode ? { mode: file.mode } : {}),
     ...(file.origin ? { origin: file.origin } : {}),
+    ...(file.api_demo_live_memory && {
+      liveMemory: {
+        enabled: file.api_demo_live_memory.enabled,
+        ...(file.api_demo_live_memory.source_id && {
+          sourceId: file.api_demo_live_memory.source_id,
+        }),
+      },
+    }),
     ...tree,
     ...(memory && {
       memoryRestore: {

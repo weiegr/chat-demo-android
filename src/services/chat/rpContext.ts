@@ -1,6 +1,11 @@
 import type { ModelLimits } from '../api/modelLimits.js'
 import type { ChatModel, MessageParam, MessageUsage } from '../api/types.js'
-import { getContextRounds, toRequestMessages } from './reply.js'
+import {
+  getContextRounds,
+  RP_PREVIEW_FILE_PREFIX,
+  RP_PREVIEW_TEXT_PREFIX,
+  toRequestMessages,
+} from './reply.js'
 import type {
   AssistantMessage,
   FileAttachment,
@@ -11,6 +16,14 @@ import type {
 
 export const RP_SUMMARY_TOKENS = 8_192
 export const RP_SUMMARY_LENGTH = 48 * 1024
+
+/** RP 模式只约束思考语言，不干扰角色设定指定的语言。 */
+export const RP_LANGUAGE_PROMPT =
+  '思考过程使用与你当前角色回复相同的语言。角色设定明确指定语言时以设定为准，不要无故切换成英文。'
+
+/** 组装 RP 模式实际发送与上下文圆环共用的系统提示词，确保指纹与真实用量校准一致。 */
+export const buildRpSystem = (rpSystemPrompt: string) =>
+  [rpSystemPrompt.trim(), RP_LANGUAGE_PROMPT].filter(Boolean).join('\n\n')
 
 const HASH_START = 2166136261
 const mixHash = (hash: number, value: number) => Math.imul(hash ^ value, 16777619) >>> 0
@@ -87,6 +100,8 @@ export const buildRpPrompt = ({
   thinking,
   texts,
   ocrTexts,
+  preview = false,
+  pendingTextIds,
 }: {
   history: Message[]
   question?: UserMessage
@@ -96,6 +111,8 @@ export const buildRpPrompt = ({
   thinking: boolean
   texts?: Map<string, string>
   ocrTexts?: Map<string, string>
+  preview?: boolean
+  pendingTextIds?: ReadonlySet<string>
 }): RpPrompt => {
   const rounds: RpRound[] = []
   const pro = model === 'deepseek-v4-pro'
@@ -112,6 +129,7 @@ export const buildRpPrompt = ({
       omitServerTools: true,
       omitLatestReminder: pro,
       useOcrForVisual: pro,
+      previewPendingFiles: preview ? { textIds: pendingTextIds, crossModel: true } : undefined,
       onContextRound: (reply, end, reminder) => rounds.push({ reply, end, reminder }),
     }
   )
@@ -121,6 +139,10 @@ export const buildRpPrompt = ({
       for (const file of message.files) {
         if (file.serverId) {
           files.set(file.serverId, file)
+        }
+        if (preview) {
+          files.set(`${RP_PREVIEW_TEXT_PREFIX}${file.id}`, file)
+          files.set(`${RP_PREVIEW_FILE_PREFIX}${file.id}`, file)
         }
       }
     }
@@ -192,8 +214,14 @@ const measureMessage = (message: MessageParam, files: RpPrompt['files']): TextMe
       case 'document': {
         const id = block.source.file_id
         hash = mixHash(hash, measureText(id).hash)
-        // Files API 的解析结果无法从客户端读取；引用先估算，响应后用实际输入量修正。
-        tokens += Math.min(32_768, Math.max(1_024, Math.ceil((files.get(id)?.size ?? 0) / 8)))
+        const size = files.get(id)?.size ?? 0
+        if (id.startsWith(RP_PREVIEW_TEXT_PREFIX)) {
+          // 纯文本附件尚在异步读取时，按 UTF-8 字节约 2 字节/token 给过渡估算。
+          tokens += Math.min(262_144, Math.max(128, Math.ceil(size / 2)))
+        } else {
+          // Files API 的解析结果无法从客户端读取；引用先估算，响应后用实际输入量修正。
+          tokens += Math.min(32_768, Math.max(1_024, Math.ceil(size / 8)))
+        }
         break
       }
       default:
@@ -247,8 +275,8 @@ export const measureRpInput = (
 export const actualRpInput = (usage: MessageUsage) => {
   const counts = [
     usage.input_tokens,
-    usage.cache_read_input_tokens,
-    usage.cache_creation_input_tokens,
+    usage.cache_read_input_tokens ?? 0,
+    usage.cache_creation_input_tokens ?? 0,
   ]
   return counts.every((count) => Number.isSafeInteger(count) && count >= 0)
     ? counts.reduce((sum, count) => sum + count, 0)

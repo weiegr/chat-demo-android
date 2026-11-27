@@ -1,3 +1,4 @@
+import clsx from 'clsx'
 import type { MutableRefObject } from 'react'
 import { IconCameraOutline20, IconMenuOutline20, IconNewChatOutline20 } from '../base/icons.js'
 import { useTranslate } from '../../i18n/index.js'
@@ -10,7 +11,6 @@ import { openMobileSider, closeMobileSider, useMobileSider } from '../sider/mobi
 import { getChatModeMeta } from './chatModeMeta.js'
 import { SessionMemoryButton } from './SessionMemoryButton.js'
 import { RpContextRing } from './RpContextRing.js'
-import { RpModelCapsule } from './RpModelCapsule.js'
 import styles from './MobileHeader.module.css'
 
 /** 移动端顶栏：侧边栏、会话标题与模式、拍照快捷入口和新对话 */
@@ -18,6 +18,8 @@ export const MobileHeader = ({
   title,
   mode,
   editing = false,
+  transparent = false,
+  lightTone = false,
   onTakePhoto,
   memorySession,
   parallaxRef,
@@ -25,6 +27,8 @@ export const MobileHeader = ({
   title?: string
   mode?: ChatMode
   editing?: boolean
+  transparent?: boolean
+  lightTone?: boolean
   onTakePhoto?: () => void
   memorySession?: Session | null
   parallaxRef?: MutableRefObject<HTMLDivElement | null>
@@ -45,11 +49,18 @@ export const MobileHeader = ({
   })
   const modeMeta = mode ? getChatModeMeta(mode) : null
   return (
-    <div className={styles.header}>
+    <div
+      className={clsx(
+        styles.header,
+        transparent && styles.transparent,
+        lightTone && styles.lightTone
+      )}
+    >
       <div ref={parallaxRef} className={styles.headerInner}>
         <IconButton
           size="xl"
           tone="primary"
+          className={lightTone ? styles.lightAction : undefined}
           icon={<IconMenuOutline20 />}
           aria-label={siderOpen ? t('collapseSiderbarButton') : t('expandSiderbarButton')}
           onClick={() => (siderOpen ? closeMobileSider() : openMobileSider())}
@@ -76,17 +87,18 @@ export const MobileHeader = ({
           <IconButton
             size="xl"
             tone="primary"
+            className={lightTone ? styles.lightAction : undefined}
             icon={<IconCameraOutline20 />}
             aria-label={t('attachCamera')}
             disabled={importingHistory}
             onClick={onTakePhoto}
           />
         ) : null}
-        <RpContextRing mobile />
-        <RpModelCapsule mobile />
+        <RpContextRing mobile lightTone={lightTone} />
         <IconButton
           size="xl"
           tone="primary"
+          className={lightTone ? styles.lightAction : undefined}
           icon={<IconNewChatOutline20 />}
           aria-label={t('newChat')}
           onClick={newChat}

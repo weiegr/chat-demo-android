@@ -31,6 +31,13 @@
   opacity: 0;
 }
 
+/* 像素画：原图只有 64px，预览时放大到接近满屏，并保持方块硬边 */
+.pixelated {
+  width: min(70vmin, 512px);
+  height: auto;
+  image-rendering: pixelated;
+}
+
 .video {
   width: 100%;
   max-width: 900px;

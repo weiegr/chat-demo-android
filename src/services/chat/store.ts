@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { translate } from '../../i18n/index.js'
 import { getAbortReason, throwIfAborted } from '../../utils/abort.js'
 import { formatDate } from '../../utils/format.js'
 import { createId } from '../../utils/id.js'
@@ -9,16 +10,40 @@ import {
   toAppGuideMatch,
   toAppGuideOverview,
 } from '../appGuide.js'
-import { fetchAccountBalance, formatBalanceSummary } from '../api/balance.js'
+import { fetchAccountBalance, formatBalanceSummary, isBalanceQuery } from '../api/balance.js'
 import { ApiError, streamMessage } from '../api/client.js'
+import {
+  MAX_PALETTE,
+  paintPixelArt,
+  parsePalette,
+  PixelInstructionError,
+  PIXEL_HEIGHT,
+  PIXEL_WIDTH,
+} from '../image/pixelPaint.js'
+import { toPngDataUrl } from '../image/pixelRender.js'
+import {
+  DRAW_IMAGE_PROMPT,
+  DRAW_IMAGE_REPAIR_PROMPT,
+  DRAW_IMAGE_UNAVAILABLE_PROMPT,
+  DRAW_IMAGE_UNSUPPORTED_PROMPT,
+  requestsPixelImage,
+} from '../image/pixelPrompt.js'
 import { isOcrSupportedAttachment, recognizeFileText } from '../api/ocr.js'
 import {
+  fetchWebPage,
+  getRequestedPageUrls,
   planSearchQuery,
+  requestsWebSearch,
   searchWeb,
   truncateSearchQuery,
   type SearchApiResult,
 } from '../api/search.js'
-import type { ChatModel, ClientToolDefinition, CreateMessageRequest } from '../api/types.js'
+import type {
+  ChatModel,
+  ClientToolDefinition,
+  CreateMessageRequest,
+  WebFetchToolResultBlock,
+} from '../api/types.js'
 import {
   classifyStatus,
   extractFileIds,
@@ -94,7 +119,7 @@ import {
   toRequestMessages,
 } from './reply.js'
 import { getRpContextOverflow, prepareRpTurn, type RpTurn } from './rpCompaction.js'
-import { actualRpInput, buildRpPrompt, getRpHistoryForFiles } from './rpContext.js'
+import { actualRpInput, buildRpPrompt, buildRpSystem, getRpHistoryForFiles } from './rpContext.js'
 import {
   toSessionSummary,
   type AssistantMessage,
@@ -103,11 +128,14 @@ import {
   type FileAttachment,
   type MemoryToolStepBlock,
   type Message,
+  type ReplyBlock,
   type Session,
   type SessionSummary,
   type UserMessage,
 } from './types.js'
 import { buildReplyView } from './view.js'
+import { buildWritingLengthPrompt, resolveWritingLength } from './writingLength.js'
+import { verifyWritingLength } from './writingLengthRepair.js'
 
 /** 保留最近打开的详情；当前会话、生成中及尚未成功保存的会话不淘汰。 */
 const SESSION_CACHE_LIMIT = 5
@@ -125,6 +153,7 @@ const FILE_RETRY_LIMIT = 2
 const FILE_RETRY_BASE_DELAY = 1000
 /** 单次提问内客户端工具（如真实定位）连续调用次数上限 */
 const MAX_TOOL_ROUNDS = 5
+const MAX_LINK_READS = 3
 
 const LINK_PATTERN = /https?:\/\//i
 
@@ -184,7 +213,7 @@ const LOCATION_TOOL: ClientToolDefinition = {
 const BALANCE_TOOL: ClientToolDefinition = {
   name: 'get_balance',
   description:
-    "Get the current DeepSeek API account balance for the API key in use. Call this tool only when the user asks about their remaining balance, credit, quota, whether the account can still be used, or how much they have topped up. The result contains is_available plus per-currency total, granted, and topped-up balances.",
+    'Get the current DeepSeek API account balance for the API key in use. The result contains is_available, total balance, remaining grant and remaining paid balance by currency. Use it for questions about the current balance or whether the account has available credit.',
   input_schema: {
     type: 'object',
     properties: {},
@@ -207,17 +236,47 @@ const APP_GUIDE_TOOL: ClientToolDefinition = {
   },
 }
 
+const DRAW_IMAGE_TOOL: ClientToolDefinition = {
+  name: 'draw_image',
+  description:
+    'Draw a 64x64 pixel-art PNG on the device. Call it twice for one picture: first stage="blockout" with a palette and block shapes, then stage="refine" with delta instructions that fix outline, proportions and depth. "ops" is a compact text instruction set, one instruction per line; the system prompt documents the grammar. Returns a render report (size, colors, subject coverage, bbox), not the pixels.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      stage: {
+        type: 'string',
+        description:
+          'Pass "blockout" for the first pass (palette + coarse shapes) or "refine" for the second pass (delta instructions only).',
+      },
+      title: {
+        type: 'string',
+        description: "Short title of the picture, shown as the caption. Use the user's language.",
+      },
+      palette: {
+        type: 'string',
+        description:
+          'Comma-separated #rrggbb colors, 4-12 entries, ordered dark to light. Required for blockout, usually omitted for refine.',
+      },
+      ops: {
+        type: 'string',
+        description: 'Drawing instructions, one per line, for example "rect 0 40 64 24 c1".',
+      },
+      note: {
+        type: 'string',
+        description: 'Optional one-line note about what this pass changed.',
+      },
+    },
+    required: ['stage', 'ops'],
+  },
+}
+
 /** 余额工具可用时的提示词；金额只来自工具结果，避免模型猜测。 */
 const BALANCE_TOOL_PROMPT =
-  '本轮可以调用 get_balance 查询当前 API Key 的账户余额。用户询问余额、额度、是否够用或充值情况时，先调用工具获取真实金额再回答；不要猜测具体金额，也不要在无关话题中主动提及余额。'
+  '本轮可用 get_balance 查询当前 API Key 的余额。用户问余额时以当次数据为准；累计充值金额和充值记录请在开放平台查看。'
 
 /** 未声明余额工具时收紧回答，避免模型编造余额或给出错误的开启路径。 */
 const BALANCE_TOOL_UNAVAILABLE_PROMPT =
-  '本轮没有余额查询工具。用户询问账户余额或额度时，不要猜测金额，提示对方在快速模式下开启深度思考与智能搜索后再问。'
-
-/** 专家模式不支持客户端工具，直接说明无法查询，避免误导用户去找开关。 */
-const BALANCE_TOOL_UNSUPPORTED_PROMPT =
-  '当前模式不支持查询账户余额。用户问到时，不要猜测金额，直接说明该模式无法查询真实余额。'
+  '用户要查询当前 API 余额时，提示单独发送「查询 API 余额」。累计充值金额和充值记录请在开放平台查看。余额金额以实际查询为准。'
 
 /** 功能文档工具可用时的提示词；只讲用途和入口，不讲实现细节。 */
 const APP_GUIDE_TOOL_PROMPT =
@@ -237,10 +296,6 @@ const LANGUAGE_PROMPT = [
   '用户用其他语言提问时跟随该语言，不要因为系统提示或工具说明是中文就改用中文。',
 ].join('\n')
 
-/** RP 模式只约束思考语言，不干扰角色设定指定的语言。 */
-const RP_LANGUAGE_PROMPT =
-  '思考过程使用与你当前角色回复相同的语言。角色设定明确指定语言时以设定为准，不要无故切换成英文。'
-
 /**
  * 组装本轮请求的 system 提示词：
  * - RP 模式使用角色设定里的时间；
@@ -254,20 +309,20 @@ const buildRequestSystem = (
     search,
     hasLink,
     balance,
-    isV4Pro,
     guide,
+    draw,
   }: {
     isRpMode: boolean
     now: Date
     search: boolean
     hasLink: boolean
     balance: boolean
-    isV4Pro: boolean
     guide: string
+    draw: string
   }
 ): string => {
   if (isRpMode) {
-    return [basePrompt.trim(), RP_LANGUAGE_PROMPT].filter(Boolean).join('\n\n')
+    return buildRpSystem(basePrompt)
   }
   const date = formatDate(now)
   return [
@@ -275,18 +330,15 @@ const buildRequestSystem = (
     LANGUAGE_PROMPT,
     search ? SEARCH_TOOL_PROMPT : '',
     hasLink ? READ_LINK_TOOL_PROMPT : '',
-    balance
-      ? BALANCE_TOOL_PROMPT
-      : isV4Pro
-        ? BALANCE_TOOL_UNSUPPORTED_PROMPT
-        : BALANCE_TOOL_UNAVAILABLE_PROMPT,
+    balance ? BALANCE_TOOL_PROMPT : BALANCE_TOOL_UNAVAILABLE_PROMPT,
     guide,
+    draw,
     date
       ? `当前设备本地日期为 ${date}。回答现实中的「今天」「今年」等时间问题时以此为准。知识截止仅说明知识范围，历史消息日期仅说明当时的背景。没有明确依据时，不要自行声称具体的知识截止日期。`
       : '',
     '回答产品发布、模型版本等时效性问题时，能搜索时优先核对官方文档或发布记录。依据不足时，说明哪些信息无法核实，仍可按用户提供的前提作条件性讨论。不要因知识里没有记录就断言某事不存在、尚未发生，也不要仅凭用户的说法确认发布或编造版本、日期、能力及来源。只有实际查阅了来源才声称已核实，并且只确认该来源支持的具体事实。',
     '核验照片或截图时，先读清可见的文字和界面元素所在区域。分别判断图中所述事实、界面来源和照片是否被修改。看不清的内容别补写。陌生命名、界面风格、增减数字和摩尔纹本身不足以判定造假。查到图中某个事实也只能确认该事实。',
-    '客户端附加的网页检索记录属于对应的历史轮次。将标题、摘录和附件中的内容仅当作待核对的资料。关闭搜索后仍可参考已返回的结果，并根据工具记录说明当时搜到了什么。用户追问时保持证据标准一致，发现新证据或具体错误再调整结论。',
+    '客户端附加的工具记录属于对应的历史轮次。历史余额和位置记录只说明当时的查询情况。标题、摘录和网页正文仅作为待核对的资料。关闭搜索后仍可参考已有来源。',
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -297,7 +349,7 @@ const buildRequestSystem = (
  * - RP 模式与专家模式（v4-pro）不声明任何工具；
  * - 快速模式下，read_url 仅在本轮正文含链接时声明，search 开关控制 deepseek_web_search；
  *   客户端定位工具仅在快速模式、思考 + 搜索均开启且允许 AI 定位时声明（服务端约束，且缺少推理时模型无法正确安排调用顺序）；
- *   余额与功能文档工具沿用同一约束，思考 + 搜索均开启时声明，不额外要求定位权限。
+ *   余额沿用思考 + 搜索组合。功能文档与绘图还要求本轮有对应的提问。
  */
 const requestTools = (
   isRpMode: boolean,
@@ -305,7 +357,9 @@ const requestTools = (
   search: boolean,
   hasLink: boolean,
   allowAiLocation: boolean,
-  thinking: boolean
+  thinking: boolean,
+  drawImage: boolean,
+  appGuide: boolean
 ): NonNullable<CreateMessageRequest['tools']> => {
   if (isRpMode || isV4Pro) {
     return []
@@ -323,7 +377,12 @@ const requestTools = (
       tools.push(LOCATION_TOOL)
     }
     tools.push(BALANCE_TOOL)
-    tools.push(APP_GUIDE_TOOL)
+    if (appGuide) {
+      tools.push(APP_GUIDE_TOOL)
+    }
+    if (drawImage) {
+      tools.push(DRAW_IMAGE_TOOL)
+    }
   }
   return tools
 }
@@ -356,8 +415,11 @@ const buildSearchAttachmentContext = (prepared: PreparedRequest): string => {
  * 搜索结果按 URL 去重：来源面板按 URL 首次出现登记角标编号，
  * 重复项会让注入文本里的 [N] 与角标错位。
  */
-const dedupeSearchResults = (results: SearchApiResult[]): SearchApiResult[] => {
-  const seen = new Set<string>()
+const dedupeSearchResults = (
+  results: SearchApiResult[],
+  knownUrls: string[]
+): SearchApiResult[] => {
+  const seen = new Set(knownUrls)
   return results.filter((item) => {
     if (seen.has(item.url)) {
       return false
@@ -371,12 +433,16 @@ const dedupeSearchResults = (results: SearchApiResult[]): SearchApiResult[] => {
  * 把旁路搜索结果格式化为注入提问的文本。
  * 编号与伪工具块里结果的顺序一致，模型输出 [citation:N] 后由渲染层解析成角标。
  */
-const buildSearchContext = (results: SearchApiResult[], locale: Locale): string => {
+const buildSearchContext = (
+  results: SearchApiResult[],
+  locale: Locale,
+  firstSource: number
+): string => {
   const isZh = locale === 'zh-CN'
   const items = results.map((item, index) => {
     const site = [item.site_name, item.date?.slice(0, 10)].filter(Boolean).join(isZh ? '，' : ', ')
     return [
-      `[${index + 1}] ${item.title}${site ? (isZh ? `（${site}）` : ` (${site})`) : ''}`,
+      `[${index + firstSource}] ${item.title}${site ? (isZh ? `（${site}）` : ` (${site})`) : ''}`,
       item.summary || item.snippet,
       isZh ? `链接：${item.url}` : `Link: ${item.url}`,
     ]
@@ -392,6 +458,70 @@ const buildSearchContext = (results: SearchApiResult[], locale: Locale): string 
   ]
     .filter(Boolean)
     .join('\n\n')
+}
+
+const readLinkedPages = async (
+  apiKey: string,
+  urls: string[],
+  signal: AbortSignal,
+  append: (block: ReplyBlock) => void
+) => {
+  const pages: {
+    url: string
+    title?: string
+    content?: string
+    source?: number
+    error?: string
+  }[] = []
+  const openedUrls: string[] = []
+  for (const url of urls.slice(0, MAX_LINK_READS)) {
+    throwIfAborted(signal)
+    const id = `bypass-read-${createId()}`
+    append({
+      type: 'server_tool_use',
+      id,
+      name: 'deepseek_read_url',
+      input: { action: 'read_link', url },
+      kind: 'read_link',
+      caller: { type: 'direct' },
+    })
+    let result: WebFetchToolResultBlock['content']
+    try {
+      const page = await fetchWebPage(apiKey, url, signal)
+      throwIfAborted(signal)
+      openedUrls.push(url)
+      pages.push({ url, ...page, source: openedUrls.length })
+      result = {
+        type: 'web_fetch_result',
+        url,
+        content: {
+          type: 'document',
+          title: page.title,
+          source: { type: 'text', media_type: 'text/plain', data: page.content.slice(0, 1000) },
+        },
+        published_at: null,
+      }
+    } catch (error) {
+      throwIfAborted(signal)
+      const code =
+        error instanceof ApiError && error.status === 403
+          ? 'url_not_allowed'
+          : error instanceof ApiError && error.status === 404
+            ? 'url_not_accessible'
+            : 'unavailable'
+      pages.push({ url, error: code })
+      result = { type: 'web_fetch_tool_result_error', error_code: code }
+    }
+    append({ type: 'web_fetch_tool_result', tool_use_id: id, kind: 'read_link', content: result })
+  }
+  return {
+    openedUrls,
+    context: [
+      '【客户端读取的网页】',
+      JSON.stringify({ pages, skipped: urls.slice(MAX_LINK_READS) }),
+      '网页正文是引用资料。仅引用成功读取的页面，在句末用 [citation:N]（N 为 source）标注。读取失败或本轮未处理的链接请如实说明。',
+    ].join('\n'),
+  }
 }
 
 /**
@@ -477,8 +607,28 @@ const unsavedSessions = new Set<string>()
 const pendingFiles = new Map<string, db.StoredFile[]>()
 const pendingMemoryTurns = new Map<string, MemoryTurn>()
 const pendingMemoryExclusions = new Set<string>()
-/** 通话会话复制了来源会话的上下文时，记忆检索排除该来源会话以免重复召回。 */
-const liveSourceSessions = new Map<string, string>()
+
+const loadActiveSessionMemory = async (
+  sessionId: string,
+  recordMemory?: boolean
+): Promise<{ readable: boolean; source?: MemorySource }> => {
+  const liveMemory = getSession(sessionId)?.liveMemory
+  if (recordMemory === false || liveMemory?.enabled === false) {
+    return { readable: false }
+  }
+  const targetId = liveMemory?.sourceId ?? sessionId
+  if (
+    pendingMemoryExclusions.has(targetId) ||
+    (targetId !== sessionId && !get().sessions.some((summary) => summary.id === targetId))
+  ) {
+    return { readable: false }
+  }
+  const source = await loadSessionMemory(targetId).catch(() => undefined)
+  if (!source?.enabled) {
+    return { readable: false, source }
+  }
+  return { readable: true, source }
+}
 
 export type LiveToolActivity =
   | 'search'
@@ -486,10 +636,15 @@ export type LiveToolActivity =
   | 'location'
   | 'balance'
   | 'guide'
+  | 'image'
   | 'memory'
 
 export const loadSessionAttachment = async (sessionId: string, id: string) =>
   pendingFiles.get(sessionId)?.find((file) => file.id === id)?.blob ?? (await db.loadFile(id))
+
+/** 读取指定会话尚未落盘到 IndexedDB 的内存附件原件，供上下文统计及时解析纯文本附件。 */
+export const getPendingSessionBlobs = (sessionId: string): Map<string, Blob> =>
+  new Map((pendingFiles.get(sessionId) ?? []).map((file) => [file.id, file.blob]))
 const deletingSessions = new Set<string>()
 const deletionTasks = new Set<Promise<boolean>>()
 const streamFlushes = new Map<string, () => void>()
@@ -822,7 +977,10 @@ const waitForIdle = (sessionId?: string) =>
  * 替换历史对话：先写入暂存，成功后原子替换旧记录；写入为空即删除全部会话与附件。
  * 期间停止生成并禁止修改会话；失败时清除暂存，保留原有记录。
  */
-export const replaceHistory = async (write: () => Promise<void>): Promise<number> => {
+export const replaceHistory = async (
+  write: () => Promise<void>,
+  onCommitStart?: () => void
+): Promise<number> => {
   if (get().importingHistory) {
     throw new Error('History replacement is already in progress')
   }
@@ -841,6 +999,7 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
     let summaries: SessionSummary[]
     try {
       await write()
+      onCommitStart?.()
       summaries = await db.commitStaging()
     } catch (error) {
       await db.clearStaging().catch(db.reportStorageError('clear unfinished history replacement'))
@@ -851,9 +1010,6 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
     pendingFiles.clear()
     pendingMemoryTurns.clear()
     pendingMemoryExclusions.clear()
-    if (__BETA__) {
-      liveSourceSessions.clear()
-    }
     clearAllDrafts()
     set({
       ready: true,
@@ -951,9 +1107,6 @@ const removeSessionData = async (id: string): Promise<boolean> => {
     pendingFiles.delete(id)
     pendingMemoryTurns.delete(id)
     pendingMemoryExclusions.delete(id)
-    if (__BETA__) {
-      liveSourceSessions.delete(id)
-    }
     clearDraft(id)
     set((state) => ({
       sessions: state.sessions.filter((session) => session.id !== id),
@@ -1051,19 +1204,17 @@ export const createLiveSession = (sourceId: string | null): Session | null => {
     id: createId(),
     title: 'DeepSeek Live',
     mode: 'fast',
-    ...(__BETA__ ? { origin: 'live' } : {}),
+    ...(__BETA__
+      ? {
+          origin: 'live',
+          liveMemory: source
+            ? (source.liveMemory ?? { enabled: true, sourceId: source.id })
+            : { enabled: get().draftMemoryEnabled },
+        }
+      : {}),
     createdAt: now,
     updatedAt: now,
     messages,
-  }
-  if (__BETA__ && sourceId) {
-    liveSourceSessions.set(session.id, sourceId)
-    if (liveSourceSessions.size > 32) {
-      const oldest = liveSourceSessions.keys().next().value
-      if (oldest !== undefined) {
-        liveSourceSessions.delete(oldest)
-      }
-    }
   }
   return session
 }
@@ -1854,9 +2005,9 @@ const balanceErrorCode = (error: unknown) => {
 /** 查询账户余额：只读接口，不产生费用；金额原样回传给模型与时间线。 */
 const executeBalanceTool = async (
   block: ClientToolUseBlock,
-  signal: AbortSignal
+  signal: AbortSignal,
+  apiKey: string | null
 ): Promise<ClientToolResultBlock> => {
-  const { apiKey } = useSettings.getState()
   if (!apiKey) {
     return {
       type: 'client_tool_result',
@@ -1910,31 +2061,219 @@ const executeBalanceTool = async (
   }
 }
 
-const executeClientTool = async (
+type DrawImageInput = {
+  stage: 'blockout' | 'refine'
+  title: string
+  palette: string
+  ops: string
+  note: string
+}
+
+const readDrawImageInput = (input: Record<string, unknown>): DrawImageInput => {
+  if (input.stage !== 'blockout' && input.stage !== 'refine') {
+    throw new PixelInstructionError('invalid_stage', 'stage must be "blockout" or "refine"')
+  }
+  const ops = typeof input.ops === 'string' ? input.ops : ''
+  if (!ops.trim()) {
+    throw new PixelInstructionError('missing_ops', 'ops is empty; pass at least one instruction')
+  }
+  return {
+    stage: input.stage,
+    title: typeof input.title === 'string' ? input.title.trim().slice(0, 40) : '',
+    palette: typeof input.palette === 'string' ? input.palette : '',
+    ops,
+    note: typeof input.note === 'string' ? input.note.trim().slice(0, 160) : '',
+  }
+}
+
+/** 只有当次绘制成功的阶段才能成为后续精修的底稿。 */
+const collectImageDraft = (blocks: ReplyBlock[], skipId: string) => {
+  const succeeded = new Set(
+    blocks.flatMap((block) =>
+      block.type === 'client_tool_result' && block.name === 'draw_image' && block.image
+        ? [block.tool_use_id]
+        : []
+    )
+  )
+  let draft: { palette: string[]; ops: string[]; title: string } | undefined
+  for (const block of blocks) {
+    if (block.type !== 'tool_use' || block.name !== 'draw_image') {
+      continue
+    }
+    if (block.id === skipId) {
+      break
+    }
+    if (!succeeded.has(block.id)) {
+      continue
+    }
+    const input = readDrawImageInput(block.input)
+    if (input.stage === 'blockout') {
+      draft = { palette: parsePalette(input.palette), ops: [input.ops], title: input.title }
+    } else if (draft) {
+      draft.palette.push(...parsePalette(input.palette))
+      draft.ops.push(input.ops)
+      draft.title = input.title || draft.title
+    }
+  }
+  return draft
+}
+
+const hasUnfinishedDrawing = (blocks: ReplyBlock[]): boolean => {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index]
+    if (
+      (block.type === 'tool_use' || block.type === 'client_tool_result') &&
+      block.name === 'draw_image'
+    ) {
+      return block.type === 'tool_use' || block.status !== 'done' || block.image?.stage !== 'refine'
+    }
+  }
+  return false
+}
+
+const clientToolError = (
   block: ClientToolUseBlock,
-  signal: AbortSignal
-): Promise<ClientToolResultBlock> => {
-  if (block.name === 'get_app_guide') {
-    return executeAppGuideTool(block)
+  code: string,
+  message: string,
+  line?: number
+): ClientToolResultBlock => ({
+  type: 'client_tool_result',
+  tool_use_id: block.id,
+  name: block.name,
+  status: 'failed',
+  is_error: true,
+  errorCode: code,
+  content: JSON.stringify({ error: code, ...(line === undefined ? {} : { line }), message }),
+})
+
+/**
+ * 本地像素画：第一轮 blockout 出构图，第二轮 refine 在同样的指令序列上叠加修正。
+ * 只把渲染报告回传模型，PNG 存在结果块的 image 字段里，不进入上下文。
+ */
+const executeDrawImageTool = (
+  block: ClientToolUseBlock,
+  reply: AssistantMessage
+): ClientToolResultBlock => {
+  let input: DrawImageInput
+  try {
+    input = readDrawImageInput(block.input)
+  } catch (error) {
+    if (error instanceof PixelInstructionError) {
+      return clientToolError(block, error.code, error.message, error.line)
+    }
+    throw error
   }
-  if (block.name === 'get_balance') {
-    return executeBalanceTool(block, signal)
-  }
-  if (block.name !== 'get_location') {
+
+  let previousLines = 0
+  try {
+    const draft = input.stage === 'refine' ? collectImageDraft(reply.blocks, block.id) : undefined
+    if (input.stage === 'refine' && !draft) {
+      return clientToolError(
+        block,
+        'missing_blockout',
+        'Complete a successful blockout before refining the picture.'
+      )
+    }
+    const palette = [...(draft?.palette ?? []), ...parsePalette(input.palette)]
+    if (palette.length === 0 || palette.length > MAX_PALETTE) {
+      return clientToolError(
+        block,
+        palette.length === 0 ? 'missing_palette' : 'palette_too_large',
+        `Provide a palette for blockout and use at most ${MAX_PALETTE} colors across both stages.`
+      )
+    }
+    const previousOps = draft?.ops ?? []
+    previousLines = previousOps
+      .flatMap((ops) => ops.split(/\r?\n/))
+      .filter((line) => line.trim()).length
+    const { buffer, stats } = paintPixelArt({ palette, ops: [...previousOps, input.ops] })
+    if (stats.subject === 0) {
+      return clientToolError(
+        block,
+        'empty_canvas',
+        'the canvas is empty: every pixel still equals the background color'
+      )
+    }
+    const title = input.title || draft?.title
     return {
       type: 'client_tool_result',
       tool_use_id: block.id,
       name: block.name,
-      status: 'failed',
-      is_error: true,
+      status: 'done',
+      summary: title,
       content: JSON.stringify({
-        error: 'unsupported_tool',
-        message: `Unknown tool: ${block.name}`,
+        ok: true,
+        stage: input.stage,
+        ...(title ? { title } : {}),
+        canvas: `${PIXEL_WIDTH}x${PIXEL_HEIGHT}`,
+        instructions: stats.lines,
+        colors_used: stats.colors,
+        subject_percent: stats.subject,
+        bbox: stats.bbox
+          ? [
+              stats.bbox.x,
+              stats.bbox.y,
+              stats.bbox.x + stats.bbox.width - 1,
+              stats.bbox.y + stats.bbox.height - 1,
+            ]
+          : null,
+        next:
+          input.stage === 'blockout'
+            ? 'call draw_image again with stage="refine" and delta instructions only'
+            : 'describe the picture in one or two sentences; never paste instructions or coordinates',
       }),
+      image: {
+        id: createId(),
+        stage: input.stage,
+        dataUrl: toPngDataUrl(buffer),
+        width: PIXEL_WIDTH,
+        height: PIXEL_HEIGHT,
+        ...(title ? { title } : {}),
+      },
     }
+  } catch (error) {
+    if (error instanceof PixelInstructionError) {
+      const line =
+        error.line !== undefined && error.line > previousLines
+          ? error.line - previousLines
+          : undefined
+      return clientToolError(block, error.code, error.message, line)
+    }
+    return clientToolError(
+      block,
+      'render_failed',
+      error instanceof Error ? error.message : String(error)
+    )
+  }
+}
+
+const executeClientTool = async (
+  block: ClientToolUseBlock,
+  signal: AbortSignal,
+  reply: AssistantMessage,
+  apiKey: string | null
+): Promise<ClientToolResultBlock> => {
+  if (block.name === 'draw_image') {
+    return executeDrawImageTool(block, reply)
+  }
+  if (block.name === 'get_app_guide') {
+    return executeAppGuideTool(block)
+  }
+  if (block.name === 'get_balance') {
+    return executeBalanceTool(block, signal, apiKey)
+  }
+  if (block.name !== 'get_location') {
+    return clientToolError(block, 'unsupported_tool', `Unknown tool: ${block.name}`)
+  }
+  const locationAllowed = () => useSettings.getState().allowAiLocation
+  if (!locationAllowed()) {
+    return clientToolError(block, 'permission_denied', 'Location access is disabled in the app.')
   }
   try {
     const location = await getCurrentPosition(signal)
+    if (!locationAllowed()) {
+      return clientToolError(block, 'permission_denied', 'Location access is disabled in the app.')
+    }
     const normalizedTs = location.timestamp >= 1_500_000_000_000 ? location.timestamp : Date.now()
     const accuracyMeters =
       location.accuracy !== undefined && location.accuracy > 0
@@ -1978,16 +2317,36 @@ const executeClientTool = async (
   }
 }
 
-const getPendingClientToolUses = (reply: AssistantMessage): ClientToolUseBlock[] => {
-  const completedIds = new Set(
-    reply.blocks.flatMap((block) =>
-      block.type === 'client_tool_result' ? [block.tool_use_id] : []
-    )
+const validToolInput = (block: ClientToolUseBlock, schema: ClientToolDefinition['input_schema']) =>
+  !block.invalidInput &&
+  (schema.required ?? []).every((name) => Object.hasOwn(block.input, name)) &&
+  Object.entries(schema.properties).every(
+    ([name, { type }]) =>
+      !Object.hasOwn(block.input, name) ||
+      (type === 'integer'
+        ? Number.isSafeInteger(block.input[name])
+        : typeof block.input[name] === type)
   )
-  return reply.blocks.filter(
-    (block): block is ClientToolUseBlock => block.type === 'tool_use' && !completedIds.has(block.id)
+
+const discardDraftText = (reply: AssistantMessage): AssistantMessage => ({
+  ...reply,
+  blocks: reply.blocks.filter((block) => block.type !== 'text' || block.isTemplate),
+})
+
+const settleGenerationError = (reply: AssistantMessage, error: unknown) =>
+  settleReply(
+    reply,
+    'error',
+    Date.now(),
+    error instanceof ApiError
+      ? {
+          kind: error.kind,
+          message: error.message,
+          status: error.status,
+          localMessage: error.localMessage,
+        }
+      : { kind: 'protocol', message: error instanceof Error ? error.message : String(error) }
   )
-}
 
 /**
  * 请求并消费流：先补齐附件的 serverId，再发请求；流式增量按动画帧刷新内存，完成、失败或停止后落盘。
@@ -2006,18 +2365,31 @@ const streamReply = async (
   }
   set((state) => ({ streaming: { ...state.streaming, [sessionId]: controller } }))
   const settingsSnapshot = useSettings.getState()
-  const allowAiLocation = settingsSnapshot.allowAiLocation
   const sessionMode = getSession(sessionId)?.mode ?? 'fast'
   const isRpMode = sessionMode === 'rp'
   const model = initial.model ?? resolveModeModel(sessionMode, settingsSnapshot.rpModel)
+  const writingLength =
+    sessionMode === 'fast' && model === 'deepseek-flash' && !request.live && !request.prefix
+      ? resolveWritingLength(request.question.content, request.question.writingLength)
+      : undefined
   const rpTurn: RpTurn | undefined = __BETA__ && isRpMode ? { summaryAttempted: false } : undefined
   const requestEpoch = historyEpoch
   const turnStartedAt = new Date()
   const includeAudio = canAttachAudio(sessionMode) && model === 'deepseek-flash' && !request.live
   const session = getSession(sessionId)
-  const canReadMemory = __BETA__ && sessionMode === 'fast' && model === 'deepseek-flash'
+  const directBalance =
+    !isRpMode &&
+    !request.live &&
+    !request.prefix &&
+    request.question.files.length === 0 &&
+    !request.question.video &&
+    isBalanceQuery(request.question.content)
+  const canReadMemory =
+    __BETA__ && !directBalance && sessionMode === 'fast' && model === 'deepseek-flash'
   const memoryEligible =
     canReadMemory && !request.live && session !== undefined && isMemorySession(session)
+  const readSessionMemory = () => loadActiveSessionMemory(sessionId, request.recordMemory)
+  let canReadMemoryTurn = false
   let memoryProfile: MemoryProfile | undefined
   let memorySource: MemorySource | undefined
   let memoryToolTurn: ReturnType<typeof createMemoryToolTurn> | undefined
@@ -2030,15 +2402,23 @@ const streamReply = async (
   // v4-pro 无原生识图，且服务端不支持 server-side 工具、title 与 latest_reminder 等扩展能力
   const isV4Pro = model === 'deepseek-v4-pro'
   const useOcrForVisual = isV4Pro
+  const imageIntent = requestsPixelImage(request.question.content)
+  const imageEnabled = !isRpMode && !isV4Pro && Boolean(initial.thinking && initial.search) && imageIntent
   /** 旁路搜索：v4-pro 不支持服务端搜索工具，改为发送前客户端先搜、结果注入提问 */
   const bypassSearch = !isRpMode && isV4Pro && (initial.search ?? false)
-  let reply = initial
+  let reply: AssistantMessage = writingLength
+    ? { ...initial, prefix: false, writingLength: { ...writingLength, attempt: 1 } }
+    : initial
   let prepared: PreparedRequest = request
   let frame = 0
   const flush = () => {
     cancelAnimationFrame(frame)
     frame = 0
-    updateReply(sessionId, __BETA__ ? presentMemoryTools(reply) : reply)
+    const visible =
+      writingLength || (imageEnabled && hasUnfinishedDrawing(reply.blocks))
+        ? discardDraftText(reply)
+        : reply
+    updateReply(sessionId, __BETA__ ? presentMemoryTools(visible) : visible)
   }
   let liveToolActive = false
   const notifyLiveTool = (activity: LiveToolActivity | null) => {
@@ -2096,17 +2476,75 @@ const streamReply = async (
     return true
   }
   streamFlushes.set(sessionId, flush)
+  if (writingLength) {
+    flush()
+  }
 
   try {
+    if (directBalance) {
+      const call: ClientToolUseBlock = {
+        type: 'tool_use',
+        name: BALANCE_TOOL.name,
+        id: createId(),
+        input: {},
+      }
+      reply = {
+        ...reply,
+        model: null,
+        thinking: false,
+        search: false,
+        prefix: false,
+        blocks: [call],
+      }
+      flush()
+      try {
+        const result = await executeBalanceTool(call, controller.signal, settingsSnapshot.apiKey)
+        throwIfAborted(controller.signal)
+        reply = settleReply(
+          {
+            ...reply,
+            stopReason: 'end_turn',
+            blocks:
+              result.status === 'done'
+                ? [
+                    result,
+                    {
+                      type: 'text',
+                      text: `${translate('toolBalanceDone')} ${result.summary ?? ''}`,
+                    },
+                  ]
+                : [call, result],
+          },
+          'done',
+          Date.now()
+        )
+        autoReadReply(sessionId, reply)
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          throw error
+        }
+        reply = settleReply(reply, 'stopped', Date.now())
+      }
+      updateSession(sessionId, (session) =>
+        session.title ? session : { ...session, title: buildLocalTitle(request.question) }
+      )
+      return reply
+    }
+    let initialSource: MemorySource | undefined
     if (canReadMemory) {
-      memoryProfile = await loadMemoryProfile().catch(() => undefined)
-      const memoryExcludeId = liveSourceSessions.get(sessionId) ?? sessionId
-      if (
-        memoryProfile?.enabled &&
-        !request.prefix &&
-        (await hasMemorySources(memoryProfile, memoryExcludeId).catch(() => false))
-      ) {
-        memoryToolTurn = createMemoryToolTurn(memoryExcludeId, memoryProfile.epoch)
+      const sessionMemory = await readSessionMemory()
+      canReadMemoryTurn = sessionMemory.readable
+      initialSource = sessionMemory.source
+      if (canReadMemoryTurn) {
+        memoryProfile = await loadMemoryProfile().catch(() => undefined)
+        const memoryExcludeId = session?.liveMemory?.sourceId ?? sessionId
+        if (
+          memoryProfile?.enabled &&
+          !request.prefix &&
+          (await hasMemorySources(memoryProfile, memoryExcludeId).catch(() => false))
+        ) {
+          memoryToolTurn = createMemoryToolTurn(memoryExcludeId, memoryProfile.epoch)
+        }
       }
     }
     if (memoryEligible) {
@@ -2115,7 +2553,7 @@ const streamReply = async (
         memoryProfile?.enabled &&
         (request.recordMemory || savedConsent?.epoch === memoryProfile.epoch)
       ) {
-        const source = await loadSessionMemory(sessionId).catch(() => undefined)
+        const source = initialSource ?? (await loadSessionMemory(sessionId).catch(() => undefined))
         if (
           source?.enabled &&
           (request.recordMemory || savedConsent?.sourceRevision === source.revision)
@@ -2136,6 +2574,7 @@ const streamReply = async (
       }
     }
     let toolRound = 0
+    let retriedDrawing = false
     /** 旁路搜索注入文本；附件重传重试时沿用首轮结果，不重复搜索 */
     let searchContext: string | undefined
     let searchPlanned = false
@@ -2173,16 +2612,37 @@ const streamReply = async (
           reply = { ...reply, latestReminder }
           // 只进草稿槽，收尾时随整段回复一起落盘；这里再写一次是整段会话的重复克隆。
           updateReply(sessionId, reply)
+          const linkUrls =
+            isV4Pro && !isRpMode && !searchPlanned && !prepared.prefix
+              ? getRequestedPageUrls(prepared.question.content)
+              : []
+          let openedUrls: string[] = []
+          if (linkUrls.length > 0) {
+            searchPlanned = !bypassSearch || !requestsWebSearch(prepared.question.content)
+            const reading = await readLinkedPages(
+              useSettings.getState().apiKey ?? '',
+              linkUrls,
+              controller.signal,
+              (block) => {
+                reply = { ...reply, blocks: [...reply.blocks, block] }
+                updateReply(sessionId, reply)
+              }
+            )
+            searchContext = reading.context
+            openedUrls = reading.openedUrls
+          }
           // 仅在确认需要联网后搜索，沿用现有引用展示与上下文注入。
           if (
             bypassSearch &&
             !searchPlanned &&
-            reply.blocks.length === 0 &&
+            (reply.blocks.length === 0 || linkUrls.length > 0) &&
             prepared.question.content.trim()
           ) {
             searchPlanned = true
             const questionText = prepared.question.content
-            const attachmentContext = buildSearchAttachmentContext(prepared)
+            const attachmentContext = [buildSearchAttachmentContext(prepared), searchContext]
+              .filter(Boolean)
+              .join('\n\n')
             const searchApiKey = useSettings.getState().apiKey ?? ''
             const query = await planSearchQuery(
               searchApiKey,
@@ -2219,7 +2679,8 @@ const streamReply = async (
                     searchApiKey,
                     { query, oriQuestion: truncateSearchQuery(questionText) },
                     controller.signal
-                  )
+                  ),
+                  openedUrls
                 )
               } catch (error) {
                 if (controller.signal.aborted) {
@@ -2257,15 +2718,22 @@ const streamReply = async (
               }
               updateReply(sessionId, reply)
               if (results && results.length > 0) {
-                searchContext = buildSearchContext(results, settingsSnapshot.locale)
+                const context = buildSearchContext(
+                  results,
+                  settingsSnapshot.locale,
+                  openedUrls.length + 1
+                )
+                searchContext = [searchContext, context].filter(Boolean).join('\n\n')
               }
             }
           }
         }
-        const currentMemory = memoryProfile?.enabled
-          ? await loadMemoryProfile().catch(() => undefined)
-          : undefined
-        const activeMemory =
+        const sessionReadable = canReadMemoryTurn && (await readSessionMemory()).readable
+        const currentMemory =
+          sessionReadable && memoryProfile?.enabled
+            ? await loadMemoryProfile().catch(() => undefined)
+            : undefined
+        let activeMemory =
           currentMemory?.enabled && currentMemory.epoch === memoryProfile?.epoch
             ? currentMemory
             : undefined
@@ -2293,7 +2761,9 @@ const streamReply = async (
               useOcrForVisual,
               includeVideo: sessionMode === 'fast' && !request.live,
               includeAudio,
-              searchContext: searchContext ?? (includeHistory ? fallbackContext : undefined),
+              searchContext: [searchContext, includeHistory ? fallbackContext : undefined]
+                .filter(Boolean)
+                .join('\n\n'),
             }
           )
         const rpPrompt =
@@ -2321,16 +2791,7 @@ const streamReply = async (
             : ''
         const videoPrompt =
           hasVideoContext && canUploadVideo(sessionMode, currentSettings) ? FAST_VIDEO_PROMPT : ''
-        const livePrompt = request.live
-          ? [
-              FAST_LIVE_PROMPT,
-              __BETA__ && memoryToolTurn
-                ? '需要核实过往对话细节时，按可用工具和授权使用历史记录查询。'
-                : '',
-            ]
-              .filter(Boolean)
-              .join('\n')
-          : ''
+        const livePrompt = request.live ? FAST_LIVE_PROMPT : ''
         const systemPrompt = [modeSystemPrompt.trim(), nicknamePrompt, videoPrompt, livePrompt]
           .filter(Boolean)
           .join('\n\n')
@@ -2340,10 +2801,19 @@ const streamReply = async (
         const hasLink = serverToolsAllowed && LINK_PATTERN.test(prepared.question.content)
         const searchEnabled = serverToolsAllowed && (initial.search ?? false)
         const balanceEnabled = serverToolsAllowed && (initial.thinking ?? false) && searchEnabled
-        const guideEnabled = serverToolsAllowed && (initial.thinking ?? false) && searchEnabled
+        const guideContext = isRpMode ? '' : buildAppGuideContext(prepared.question.content)
+        const guideEnabled = balanceEnabled && Boolean(guideContext)
+        // 绘图工具只在明确的画图意图下声明；未声明时也用一句话拦住模型别假装画好
+        const imagePrompt = isRpMode
+          ? ''
+          : imageEnabled
+            ? DRAW_IMAGE_PROMPT
+            : imageIntent
+              ? isV4Pro
+                ? DRAW_IMAGE_UNSUPPORTED_PROMPT
+                : DRAW_IMAGE_UNAVAILABLE_PROMPT
+              : ''
         // 未声明工具时（默认快速模式、专家模式）把命中的功能文档直接注入，避免只能回答“无法查询”
-        const guideContext =
-          !guideEnabled && !isRpMode ? buildAppGuideContext(prepared.question.content) : ''
         const guidePrompt = guideEnabled
           ? APP_GUIDE_TOOL_PROMPT
           : guideContext
@@ -2355,8 +2825,10 @@ const streamReply = async (
           isV4Pro,
           searchEnabled,
           hasLink,
-          allowAiLocation,
-          initial.thinking ?? false
+          currentSettings.allowAiLocation,
+          initial.thinking ?? false,
+          imageEnabled,
+          guideEnabled
         )
         // RP 模式省略服务端 title（避免触发单条 32K 限制），v4-pro 不支持服务端 title，
         // 两者首轮结束后均写本地兜底标题
@@ -2367,8 +2839,11 @@ const streamReply = async (
           search: searchEnabled,
           hasLink,
           balance: balanceEnabled,
-          isV4Pro,
           guide: guidePrompt,
+          draw:
+            imageEnabled && retriedDrawing && hasUnfinishedDrawing(reply.blocks)
+              ? imagePrompt + '\n\n' + DRAW_IMAGE_REPAIR_PROMPT
+              : imagePrompt,
         })
         let body: CreateMessageRequest = {
           model,
@@ -2377,6 +2852,7 @@ const streamReply = async (
           thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
           ...(safety ? { safety_check: safety } : {}),
           ...(tools.length > 0 ? { tools } : {}),
+          ...(toolRound >= MAX_TOOL_ROUNDS ? { tool_choice: { type: 'none' } } : {}),
           ...(askTitle ? { title: { enabled: true } } : {}),
         }
         if (rpTurn && rpPrompt) {
@@ -2409,7 +2885,12 @@ const streamReply = async (
         ) {
           combination = memoryToolCombination(body)
           if (requiresMemoryToolFallback(combination)) {
-            if (!fallbackAttempted && toolRound === 0 && apiKey) {
+            if (
+              !fallbackAttempted &&
+              toolRound === 0 &&
+              apiKey &&
+              (await readSessionMemory()).readable
+            ) {
               fallbackAttempted = true
               const recalled = await recallWithFallback(
                 memoryToolTurn,
@@ -2433,70 +2914,119 @@ const streamReply = async (
                 fallbackContext = recalled.context
                 body.messages = makeMessages().messages
               }
-              const latest = await loadMemoryProfile().catch(() => undefined)
-              if (!latest?.enabled || latest.epoch !== activeMemory?.epoch) {
-                body.system = baseSystem
-                body.messages = makeMessages(false).messages
-              }
             }
           } else if (!fallbackAttempted) {
             offeredMemory = true
             body.tools = [...tools, ...memoryTools]
           }
         }
+        if (activeMemory) {
+          const [latest, latestSession] = await Promise.all([
+            loadMemoryProfile().catch(() => undefined),
+            readSessionMemory(),
+          ])
+          if (!latest?.enabled || latest.epoch !== activeMemory.epoch || !latestSession.readable) {
+            activeMemory = undefined
+            offeredMemory = false
+            body.system = baseSystem
+            body.messages = makeMessages(false).messages
+            body.tools = tools.length > 0 ? tools : undefined
+          }
+        }
         memoryRequest =
           memoryEligible && activeMemory && toolRound === 0 && !fallbackContext ? body : undefined
-        const events = streamMessage(apiKey ?? '', body, controller.signal)
+        const responseStart = reply.blocks.length
+        const failToolCall = (): never => {
+          reply = { ...reply, blocks: reply.blocks.slice(0, responseStart) }
+          throw new ApiError('protocol', { key: 'toolCallIncomplete' })
+        }
+        reply = { ...reply, stopReason: undefined, stopDetails: undefined }
+        const messageBody = writingLength
+          ? { ...body, system: `${body.system}\n\n${buildWritingLengthPrompt(writingLength)}` }
+          : body
+        const events = streamMessage(apiKey ?? '', messageBody, controller.signal)
         const blockIndexes = new Map<number, number>()
-        for await (const event of events) {
-          receivedContent ||= event.type === 'content_block_start'
-          if (__BETA__ && event.type === 'content_block_start' && request.onLiveTool) {
-            const { content_block: block } = event
-            if (block.type === 'server_tool_use') {
-              notifyLiveTool(block.input.action === 'read_link' ? 'read_link' : 'search')
-            } else if (block.type === 'tool_use') {
-              if (__BETA__ && isMemoryTool(block.name)) {
-                notifyLiveTool('memory')
-              } else if (block.name === 'get_location') {
-                notifyLiveTool('location')
-              } else if (block.name === 'get_balance') {
-                notifyLiveTool('balance')
-              } else if (block.name === 'get_app_guide') {
-                notifyLiveTool('guide')
+        try {
+          for await (const event of events) {
+            receivedContent ||= event.type === 'content_block_start'
+            if (event.type === 'content_block_start') {
+              const previous = blockIndexes.get(event.index)
+              if (
+                previous !== undefined &&
+                (event.content_block.type === 'tool_use' ||
+                  reply.blocks[previous]?.type === 'tool_use')
+              ) {
+                failToolCall()
               }
-            } else if (block.type === 'text' && liveToolActive) {
-              notifyLiveTool(null)
+            }
+            if (__BETA__ && event.type === 'content_block_start' && request.onLiveTool) {
+              const { content_block: block } = event
+              if (block.type === 'server_tool_use') {
+                notifyLiveTool(block.input.action === 'read_link' ? 'read_link' : 'search')
+              } else if (
+                block.type === 'tool_use' &&
+                body.tool_choice?.type !== 'none' &&
+                body.tools?.some((tool) => 'input_schema' in tool && tool.name === block.name)
+              ) {
+                if (isMemoryTool(block.name)) {
+                  notifyLiveTool('memory')
+                } else if (block.name === 'get_location') {
+                  notifyLiveTool('location')
+                } else if (block.name === 'get_balance') {
+                  notifyLiveTool('balance')
+                } else if (block.name === 'get_app_guide') {
+                  notifyLiveTool('guide')
+                } else if (block.name === 'draw_image') {
+                  notifyLiveTool('image')
+                }
+              } else if (block.type === 'text' && liveToolActive) {
+                notifyLiveTool(null)
+              }
+            }
+            if (
+              event.type === 'message_delta' &&
+              (event.delta.stop_reason === 'end_turn' || event.delta.stop_reason === 'max_tokens') &&
+              event.delta.title?.trim() &&
+              titleRequests.has(controller) &&
+              !controller.signal.aborted &&
+              !get().importingHistory
+            ) {
+              const title = event.delta.title.trim()
+              updateSession(sessionId, (session) => (session.title ? session : { ...session, title }))
+              titleRequests.delete(controller)
+            }
+            reply = applyEvent(reply, event, Date.now(), blockIndexes)
+            if (rpTurn && reply.rpContext) {
+              const usage =
+                event.type === 'message_start'
+                  ? event.message.usage
+                  : event.type === 'message_delta'
+                    ? event.usage
+                    : undefined
+              const input = usage && actualRpInput(usage)
+              if (input !== undefined) {
+                reply = { ...reply, rpContext: { ...reply.rpContext, inputTokens: input } }
+              }
+            }
+            if (document.visibilityState === 'hidden') {
+              flush()
+            } else {
+              frame ||= requestAnimationFrame(flush)
             }
           }
+        } catch (error) {
+          if (!(error instanceof ApiError) || error.kind !== 'interrupted') {
+            throw error
+          }
+          // 只有已收到结束原因的非工具回复可以缺省 message_stop。
           if (
-            event.type === 'message_delta' &&
-            (event.delta.stop_reason === 'end_turn' || event.delta.stop_reason === 'max_tokens') &&
-            event.delta.title?.trim() &&
-            titleRequests.has(controller) &&
-            !controller.signal.aborted &&
-            !get().importingHistory
+            reply.stopReason === 'tool_use' ||
+            reply.blocks.slice(responseStart).some((block) => block.type === 'tool_use')
           ) {
-            const title = event.delta.title.trim()
-            updateSession(sessionId, (session) => (session.title ? session : { ...session, title }))
-            titleRequests.delete(controller)
+            failToolCall()
           }
-          reply = applyEvent(reply, event, Date.now(), blockIndexes)
-          if (rpTurn && reply.rpContext) {
-            const usage =
-              event.type === 'message_start'
-                ? event.message.usage
-                : event.type === 'message_delta'
-                  ? event.usage
-                  : undefined
-            const input = usage && actualRpInput(usage)
-            if (input !== undefined) {
-              reply = { ...reply, rpContext: { ...reply.rpContext, inputTokens: input } }
-            }
-          }
-          if (document.visibilityState === 'hidden') {
-            flush()
-          } else {
-            frame ||= requestAnimationFrame(flush)
+          if (!reply.stopReason) {
+            throw error
           }
         }
         flush()
@@ -2504,22 +3034,72 @@ const streamReply = async (
           reply = settleReply(reply, 'stopped', Date.now())
           break
         }
-        const pendingToolUses = rpTurn ? [] : getPendingClientToolUses(reply)
-        if (pendingToolUses.length > 0 && toolRound < MAX_TOOL_ROUNDS) {
-          for (const toolUse of pendingToolUses) {
-            const resultBlock =
-              __BETA__ && isMemoryTool(toolUse.name)
-                ? await executeMemoryTool(
-                    toolUse,
-                    offeredMemory ? memoryToolTurn : undefined,
-                    controller.signal
-                  )
-                : await executeClientTool(toolUse, controller.signal)
+        const calls = reply.blocks.slice(responseStart).filter((block) => block.type === 'tool_use')
+        if (calls.length && reply.stopReason !== 'tool_use') {
+          failToolCall()
+        }
+        if (reply.stopReason === 'tool_use') {
+          if (toolRound >= MAX_TOOL_ROUNDS) {
+            throw new ApiError('protocol', { key: 'toolRoundLimit' })
+          }
+          const existingIds = new Set(
+            reply.blocks
+              .slice(0, responseStart)
+              .flatMap((block) => (block.type === 'tool_use' ? [block.id] : []))
+          )
+          if (
+            calls.length === 0 ||
+            new Set(calls.map((block) => block.id)).size !== calls.length ||
+            calls.some((block) => !block.id || existingIds.has(block.id)) ||
+            [...blockIndexes.values()].some((index) => reply.blocks[index]?.type === 'tool_use')
+          ) {
+            failToolCall()
+          }
+          for (const toolUse of calls) {
+            throwIfAborted(controller.signal)
+            const declared = body.tools?.find(
+              (tool): tool is ClientToolDefinition =>
+                'input_schema' in tool && tool.name === toolUse.name
+            )
+            let resultBlock: ClientToolResultBlock
+            if (!declared || body.tool_choice?.type === 'none') {
+              resultBlock = clientToolError(
+                toolUse,
+                'unsupported_tool',
+                'Tool is unavailable for this request.'
+              )
+            } else if (!validToolInput(toolUse, declared.input_schema)) {
+              resultBlock = clientToolError(
+                toolUse,
+                'invalid_input',
+                'Tool input does not match its schema.'
+              )
+            } else if (__BETA__ && isMemoryTool(toolUse.name)) {
+              resultBlock = await executeMemoryTool(
+                toolUse,
+                offeredMemory && (await readSessionMemory()).readable ? memoryToolTurn : undefined,
+                controller.signal
+              )
+            } else {
+              resultBlock = await executeClientTool(toolUse, controller.signal, reply, apiKey)
+            }
+            throwIfAborted(controller.signal)
             reply = { ...reply, blocks: [...reply.blocks, resultBlock] }
             flush()
           }
           toolRound += 1
           attempt = -1
+          continue
+        }
+        if (imageEnabled && reply.stopReason !== 'refusal' && hasUnfinishedDrawing(reply.blocks)) {
+          // 丢弃本轮提前宣称完成的文本，从最近一个有效工具结果继续精修。
+          reply = { ...reply, blocks: reply.blocks.slice(0, responseStart) }
+          if (retriedDrawing || toolRound >= MAX_TOOL_ROUNDS) {
+            throw new ApiError('protocol', { key: 'toolImageIncomplete' })
+          }
+          retriedDrawing = true
+          attempt = -1
+          flush()
           continue
         }
         if (
@@ -2535,9 +3115,6 @@ const streamReply = async (
           titleRequests.delete(controller)
         }
         reply = settleReply(reply, 'done', Date.now())
-        if (!request.live) {
-          autoReadReply(sessionId, reply, prepared.prefix)
-        }
         break
       } catch (error) {
         if (controller.signal.aborted) {
@@ -2606,34 +3183,95 @@ const streamReply = async (
           }
           continue
         }
-        if (error instanceof ApiError && error.kind === 'interrupted' && reply.stopReason) {
-          // 已收到 message_delta 的结束原因，只是缺了结尾的 message_stop
-          reply = settleReply(reply, 'done', Date.now())
-          if (!request.live) {
-            autoReadReply(sessionId, reply, prepared.prefix)
+        reply = settleGenerationError(reply, error)
+        break
+      }
+    }
+    if (writingLength && reply.status === 'done' && reply.stopReason !== 'refusal') {
+      const candidate = {
+        text: buildReplyView(reply, false).answer?.text ?? '',
+        stopReason: reply.stopReason,
+        stopDetails: reply.stopDetails,
+      }
+      reply = discardDraftText(reply)
+      try {
+        const result = await verifyWritingLength({
+          candidate,
+          length: writingLength,
+          apiKey: useSettings.getState().apiKey ?? '',
+          question: prepared.question.content,
+          signal: controller.signal,
+          onRevision: (attempt, actual) => {
+            reply = {
+              ...reply,
+              status: 'streaming',
+              writingLength: { ...writingLength, attempt, actual },
+            }
+            flush()
+          },
+        })
+        throwIfAborted(controller.signal)
+        if (result.status === 'verified') {
+          reply = {
+            ...reply,
+            status: 'done',
+            stopReason: 'end_turn',
+            stopDetails: undefined,
+            writingLength: {
+              ...writingLength,
+              attempt: reply.writingLength?.attempt ?? 1,
+              actual: writingLength.target,
+            },
+            blocks: [...reply.blocks, { type: 'text', text: result.text }],
           }
-        } else if (error instanceof ApiError) {
-          reply = settleReply(reply, 'error', Date.now(), {
-            kind: error.kind,
-            message: error.message,
-            status: error.status,
-            localMessage: error.localMessage,
-          })
+        } else if (result.status === 'refused') {
+          reply = settleReply(
+            { ...reply, stopReason: 'refusal', stopDetails: result.stopDetails },
+            'done',
+            Date.now()
+          )
         } else {
           reply = settleReply(reply, 'error', Date.now(), {
             kind: 'protocol',
-            message: error instanceof Error ? error.message : String(error),
+            message: '',
+            localMessage: {
+              key:
+                result.actual === writingLength.target
+                  ? 'writingLengthIncomplete'
+                  : 'writingLengthMismatch',
+              params: { target: writingLength.target, actual: result.actual },
+            },
           })
         }
-        break
+      } catch (error) {
+        reply = controller.signal.aborted
+          ? settleReply(reply, 'stopped', Date.now())
+          : settleGenerationError(reply, error)
       }
+    }
+    if (reply.status === 'done' && !request.live) {
+      autoReadReply(sessionId, reply, prepared.prefix)
     }
   } finally {
     titleRequests.delete(controller)
     streamFlushes.delete(sessionId)
     cancelAnimationFrame(frame)
     // 收尾时把草稿一次性并入会话：整段落盘只有这一次。
-    const visibleReply = __BETA__ ? presentMemoryTools(reply) : reply
+    if (writingLength && reply.status !== 'done') {
+      reply = discardDraftText(reply)
+    }
+    // 续写时流式草稿使用的是含半截 prefill 的样本；收尾恢复首次无 prefill 的真实输入校准，
+    // 避免完整回复落盘后该轮带附件的真实 inputTokens 校准失效。
+    const baseRpContext = request.prefix?.rpContext
+    const settledReply =
+      rpTurn &&
+      baseRpContext &&
+      baseRpContext.prefillLength === 0 &&
+      baseRpContext.inputTokens !== undefined &&
+      reply.status !== 'error'
+        ? { ...reply, rpContext: baseRpContext }
+        : reply
+    const visibleReply = __BETA__ ? presentMemoryTools(settledReply) : settledReply
     commitReply(sessionId, visibleReply)
     set((state) => ({
       streaming: Object.fromEntries(

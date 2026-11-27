@@ -108,6 +108,25 @@ export type GuideStep = {
   errorCode?: string
 }
 
+/** 本地绘制的像素画：第一轮是构图，第二轮是成品，两轮都保留在时间线里 */
+export type ImageStep = {
+  type: 'image'
+  id: string
+  status: ToolStatus
+  stage: 'blockout' | 'refine'
+  title?: string
+  /** 64×64 PNG 的 data URL */
+  dataUrl?: string
+  errorCode?: string
+}
+
+/** 最终成品图：随正文展示在回复里，而不是只留在时间线 */
+export type GeneratedImageItem = {
+  id: string
+  dataUrl: string
+  title?: string
+}
+
 export type ThinkingStep = { type: 'thinking'; key: string; blocks: ThinkingPart[] }
 
 /** 工具调用前输出的说明文字 */
@@ -121,6 +140,7 @@ export type Step =
   | LocationStep
   | BalanceStep
   | GuideStep
+  | ImageStep
   | MemoryToolStepBlock
   | ThinkingStep
   | PreambleStep
@@ -133,6 +153,8 @@ export type ReplyView = {
   sources: Source[]
   /** 搜索到的网页（去重），用于底部汇总与搜索结果列表 */
   searchResults: Source[]
+  /** 本轮生成的最终像素画，按出现顺序排在正文后面 */
+  finalImages: GeneratedImageItem[]
 }
 
 export const getSafeHttpUrl = (value: unknown): string | null => {
@@ -300,6 +322,7 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
 
   const registry = new SourceRegistry()
   const searchResults: Source[] = []
+  const finalImages: GeneratedImageItem[] = []
   const steps: Step[] = []
   const mergedSearch = new Map<ServerToolKind, SearchStep>()
   let mergedThinking: ThinkingStep | null = null
@@ -323,7 +346,8 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
     } else if (
       result?.type === 'web_fetch_tool_result' &&
       result.content.type === 'web_fetch_result' &&
-      block.kind === 'deep_search'
+      (block.kind === 'deep_search' ||
+        (block.kind === 'read_link' && result.content.content.source?.data))
     ) {
       registry.add(result.content.url, result.content.content.title, result.content.published_at)
     }
@@ -454,6 +478,36 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
       })
       return
     }
+    if (block.type === 'tool_use' && block.name === 'draw_image') {
+      // 绘图同理：发起绘制前的过场提示语不单独成节点，只保留两轮画面
+      pendingText = []
+      const res = clientResults.get(block.id)
+      const status: ToolStatus = !res
+        ? streaming
+          ? 'wip'
+          : 'failed'
+        : res.is_error || res.status === 'failed'
+          ? 'failed'
+          : 'done'
+      const title = res?.image?.title ?? res?.summary
+      if (res?.status === 'done' && res.image?.stage === 'refine' && res.image.dataUrl) {
+        finalImages.push({
+          id: res.image.id,
+          dataUrl: res.image.dataUrl,
+          ...(title ? { title } : {}),
+        })
+      }
+      steps.push({
+        type: 'image',
+        id: block.id,
+        status,
+        stage: res?.image?.stage ?? (block.input.stage === 'refine' ? 'refine' : 'blockout'),
+        ...(title ? { title } : {}),
+        ...(res?.image?.dataUrl ? { dataUrl: res.image.dataUrl } : {}),
+        errorCode: res?.errorCode,
+      })
+      return
+    }
     if (block.type === 'memory_tool_step') {
       flushPreamble()
       const status =
@@ -562,6 +616,7 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
     answer: answer && answer.text ? answer : null,
     sources: registry.list,
     searchResults,
+    finalImages,
   }
 }
 

@@ -1,3 +1,4 @@
+import clsx from 'clsx'
 import { useEffect, useId, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslate } from '../../i18n/index.js'
@@ -5,12 +6,28 @@ import { useAnchoredPosition } from '../base/anchored.js'
 import { useRpContextPercent } from './RpContextProgress.js'
 import styles from './RpContextRing.module.css'
 
-export const RpContextRing = ({ mobile = false }: { mobile?: boolean }) => {
+export const RpContextRing = ({
+  mobile = false,
+  lightTone = false,
+}: {
+  mobile?: boolean
+  lightTone?: boolean
+}) => {
   const percent = useRpContextPercent()
-  return percent === undefined ? null : <Ring percent={percent} mobile={mobile} />
+  return percent === undefined ? null : (
+    <Ring percent={percent} mobile={mobile} lightTone={lightTone} />
+  )
 }
 
-const Ring = ({ percent, mobile }: { percent: number; mobile: boolean }) => {
+const Ring = ({
+  percent,
+  mobile,
+  lightTone,
+}: {
+  percent: number
+  mobile: boolean
+  lightTone: boolean
+}) => {
   const t = useTranslate()
   const label = t('rpContextTokens', { percent: Math.round(percent) })
   const id = useId()
@@ -47,7 +64,7 @@ const Ring = ({ percent, mobile }: { percent: number; mobile: boolean }) => {
       <button
         type="button"
         ref={anchorRef}
-        className={mobile ? styles.mobile : styles.button}
+        className={clsx(mobile ? styles.mobile : styles.button, lightTone && styles.lightTone)}
         aria-label={label}
         aria-expanded={open}
         aria-controls={open ? id : undefined}

@@ -1,6 +1,7 @@
 import type { ChatMode } from '../../settings.js'
 import type { AudioAttachmentData } from '../../audio/metadata.js'
 import type { VideoAttachment } from '../types.js'
+import type { WritingLengthTarget } from '../writingLength.js'
 
 /**
  * 历史会话导出产物（deepseek_data-*.zip）的类型定义。
@@ -38,6 +39,7 @@ export type SessionFile = {
   origin?: 'chat' | 'live'
   /** API demo 可选的会话记忆状态，已整理的提问引用本归档重新编号后的消息。 */
   api_demo_memory?: { enabled: boolean; active: boolean; processed_user_message_ids?: number[] }
+  api_demo_live_memory?: { enabled: boolean; source_id?: string }
   /** 用户当前停留的消息，线性化消息树的唯一依据 */
   current_message_id: number
   inserted_at: Iso8601Utc
@@ -73,6 +75,10 @@ export type ChatMessage = {
   fragments: Fragment[]
   /** 剧情摘要涵盖当前助手消息所在的祖先路径。 */
   api_demo_rp_summary?: string
+  /** 兼容旧提问的手动配置，并保存助手通过验证的正文长度。 */
+  api_demo_writing_length?: WritingLengthTarget | null
+  /** 对话中本地生成的成品像素画。 */
+  api_demo_generated_images?: { data_url: string; title?: string }[]
   video?: VideoAttachment & { export_path: string | null }
 }
 
@@ -164,6 +170,7 @@ export type ReadLinkResult = {
   url?: string
   title?: string | null
   signature: string
+  api_demo_excerpt?: string
 }
 
 export type ReadLinkFragment = { type: 'READ_LINK'; results: ReadLinkResult[] }

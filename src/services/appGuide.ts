@@ -52,12 +52,18 @@ const APP_GUIDE_OVERVIEW: AppGuideOverviewCategory[] = [
       },
       { title: '智能搜索', summary: '回答前上网查最新信息', entryId: 'search' },
       { title: '阅读链接', summary: '读取消息里的网页内容', entryId: 'read-link' },
+      { title: '精准长度', summary: '按指定长度生成并核验写作正文', entryId: 'writing-length' },
       {
         title: '重新生成与分支',
         summary: '同一问题保留多个回答并切换',
         entryId: 'branch',
       },
       { title: '继续生成', summary: '回答被截断时接着写' },
+      {
+        title: '生成图片',
+        summary: '在对话里画 64×64 像素画，可直接保存',
+        entryId: 'draw-image',
+      },
       { title: '搜索聊天', summary: '按关键词找回历史会话', entryId: 'chat-search' },
     ],
   },
@@ -91,12 +97,12 @@ const APP_GUIDE_OVERVIEW: AppGuideOverviewCategory[] = [
     items: [
       {
         title: '全局记忆',
-        summary: '跨会话记住长期偏好',
+        summary: '仅适用于快速模式，跨会话记住长期偏好和重要信息',
         entryId: 'global-memory',
       },
       {
         title: '会话记忆',
-        summary: '只记住当前会话的设定',
+        summary: '关闭后不写入记忆，也读不到其他会话',
         entryId: 'session-memory',
       },
       {
@@ -109,6 +115,11 @@ const APP_GUIDE_OVERVIEW: AppGuideOverviewCategory[] = [
         title: '聊天背景',
         summary: '自定义背景图和动态视差',
         entryId: 'chat-background',
+      },
+      {
+        title: 'Live形象',
+        summary: '为实时通话自定义四态形象图',
+        entryId: 'live-avatar',
       },
       {
         title: '个人中心',
@@ -197,10 +208,24 @@ const ENTRIES: AppGuideEntry[] = [
   {
     id: 'thinking',
     title: '深度思考',
-    summary:
-      '让 AI 先推理再回答，适合数学、代码和复杂分析；简单聊天可以关掉，回复更快。',
+    summary: '让 AI 先推理再回答，适合数学、代码和复杂分析；简单聊天可以关掉，回复更快。',
     steps: '输入框下方的「深度思考」开关',
     keywords: ['深度思考', '思考', '推理', '复杂问题', 'thinking', 'reasoning'],
+  },
+  {
+    id: 'writing-length',
+    title: '写作长度精准工具',
+    summary:
+      '快速模式按目标字数、字符数或英文单词数生成正文。应用会核对实际长度并自动返工，校验通过后展示正文。',
+    steps: '在快速模式直接发送带明确长度的写作要求，例如「写一篇 300 字的短文」。',
+    keywords: [
+      '精准长度',
+      '写作长度',
+      '精确字数',
+      '字数校验',
+      'exact length',
+      'exact writing length',
+    ],
   },
   {
     id: 'search',
@@ -213,9 +238,29 @@ const ENTRIES: AppGuideEntry[] = [
   {
     id: 'read-link',
     title: '阅读链接',
-    summary: '消息里带网页链接时，AI 可以打开链接读内容再回答，不需要额外开开关；仅快速模式可用。',
-    steps: '直接在消息里粘贴 http(s) 链接',
+    summary: '快速模式和专家模式都可以读取网页链接，阅读链接独立于智能搜索开关。',
+    steps: '发送网页链接，并说明要阅读、总结或提取的内容',
     keywords: ['链接', '阅读链接', '网页', 'url', 'link'],
+  },
+  {
+    id: 'draw-image',
+    title: '生成图片',
+    summary:
+      '让 AI 在对话里画一张 64×64 的像素画，画好直接显示，点图片可以放大，点「保存」存到下载目录。需要快速模式 + 深度思考 + 智能搜索。',
+    steps: '输入框下方开启「深度思考」和「智能搜索」→ 直接说「画一只…」',
+    keywords: [
+      '画图',
+      '画画',
+      '生成图片',
+      '插图',
+      '配图',
+      '像素画',
+      '头像',
+      '壁纸',
+      'draw',
+      'image',
+      'pixel art',
+    ],
   },
   {
     id: 'voice-input',
@@ -281,24 +326,42 @@ const ENTRIES: AppGuideEntry[] = [
     id: 'global-memory',
     title: '全局记忆',
     summary:
-      '让 AI 记住跨会话的长期偏好和重要信息，之后聊天会自动参考；需要快速模式并使用 DeepSeek Flash，开启后会在合适轮次自动归纳。',
-    steps: '设置 → 数据管理 → 全局记忆',
+      '在快速模式使用 DeepSeek Flash 时，可以跨会话参考长期偏好和重要信息。导入的会话不会自动归纳，可在设置里查看、重新生成或删除记忆。',
+    steps: '设置 → 全局记忆（移动端）或数据管理 → 全局记忆（桌面端）',
     page: 'globalMemory',
-    keywords: ['全局记忆', '记忆', '记住', '偏好', 'memory'],
+    keywords: [
+      '全局记忆',
+      '记忆',
+      '记住',
+      '偏好',
+      '快速模式',
+      '历史会话',
+      '关闭记忆',
+      '不参与记忆',
+      'memory',
+    ],
   },
   {
     id: 'session-memory',
     title: '会话记忆',
     summary:
-      '只让 AI 记住当前会话里的设定和细节，不影响其他会话；需要先开启全局记忆，并在快速模式下使用 DeepSeek Flash。',
-    steps: '会话页顶部的记忆按钮',
-    keywords: ['会话记忆', '这次对话', '记住这个会话'],
+      '开启全局记忆后，可在快速模式的会话页用记忆图标控制参与状态。关闭后该会话暂停读写全局记忆，已生成的记忆会保留。',
+    steps: '快速模式对话页顶部的记忆图标',
+    keywords: [
+      '会话记忆',
+      '此会话记忆',
+      '记忆图标',
+      '这次对话',
+      '关闭记忆',
+      '暂停记忆',
+      '不参与记忆',
+      '记住这个会话',
+    ],
   },
   {
     id: 'system-prompt',
     title: '系统提示词',
-    summary:
-      '给快速、专家、RP 模式分别设定长期生效的回复要求，比如固定语气、身份或输出格式。',
+    summary: '给快速、专家、RP 模式分别设定长期生效的回复要求，比如固定语气、身份或输出格式。',
     steps: '设置 → 对话设置 → 系统提示词',
     page: 'systemPrompt',
     keywords: ['提示词', '系统提示词', '人设', '语气', '自定义', 'prompt'],
@@ -306,11 +369,19 @@ const ENTRIES: AppGuideEntry[] = [
   {
     id: 'chat-background',
     title: '聊天背景',
-    summary:
-      '给聊天页面换一张背景图，可以从相册选择，也可以开启轻微的动态视差。',
+    summary: '给聊天页面换一张背景图，可以从相册选择，也可以开启轻微的动态视差。',
     steps: '设置 → 个性化 → 应用背景 → 聊天背景',
     page: 'chatBackground',
     keywords: ['聊天背景', '背景', '壁纸', '换背景', '视差', 'background'],
+  },
+  {
+    id: 'live-avatar',
+    title: 'Live形象',
+    summary:
+      '为实时通话自定义形象，每组可从相册选择待机、聆听、说话、思考 4 张状态图片，通话时平滑渐变切换。',
+    steps: '设置 → 个性化 → Live形象',
+    page: 'liveAvatar',
+    keywords: ['live形象', '通话形象', '形象', '立绘', '头像', '实时通话', 'live avatar', 'avatar'],
   },
   {
     id: 'personal-center',
@@ -332,8 +403,7 @@ const ENTRIES: AppGuideEntry[] = [
   {
     id: 'import-export',
     title: '导入与导出',
-    summary:
-      '把旧聊天记录导入进来，或把全部会话导出成文件备份；换机时再导入即可恢复。',
+    summary: '把旧聊天记录导入进来，或把全部会话导出成文件备份；换机时再导入即可恢复。',
     steps: '设置 → 数据管理 → 导入会话 / 导出信息',
     page: 'data',
     keywords: ['导入', '导出', '备份', '换机', '聊天记录', 'import', 'export', 'backup'],
@@ -341,8 +411,7 @@ const ENTRIES: AppGuideEntry[] = [
   {
     id: 'api-key',
     title: 'API Key',
-    summary:
-      '填好 DeepSeek API Key 才能开始对话；Key 只保存在本机，可以随时更换或清除。',
+    summary: '填好 DeepSeek API Key 才能开始对话；Key 只保存在本机，可以随时更换或清除。',
     steps: '设置 → 数据管理 → API Key',
     page: 'apiKey',
     keywords: ['api key', 'key', '密钥', '配置', '充值', '余额不足', 'apikey'],
@@ -350,9 +419,8 @@ const ENTRIES: AppGuideEntry[] = [
   {
     id: 'balance',
     title: '余额查询',
-    summary:
-      '直接问 AI「我还有多少余额」，它会查询当前 API Key 的账户余额；需要先配置 API Key，并在快速模式下同时开启深度思考和智能搜索。',
-    steps: '快速模式 + 深度思考 + 智能搜索',
+    summary: '快速模式和专家模式都能直查当前 API Key 的账户余额，需先配置 API Key。',
+    steps: '在对话框单独发送「查询 API 余额」',
     keywords: ['余额', '额度', '欠费', '还能用多久', '充值', 'balance', 'credit'],
   },
   {
@@ -445,7 +513,10 @@ export const searchAppGuide = (rawQuery: string, limit = 4): AppGuideEntry[] => 
   }
   const queryBigrams = bigrams(query)
   return ENTRIES.map((entry) => ({ entry, score: scoreEntry(entry, query, queryBigrams) }))
-    .filter(({ score }) => score >= 50)
+    .filter(
+      ({ entry, score }) =>
+        score >= 50 && (entry.id !== 'overview' || isAppGuideOverviewQuery(rawQuery))
+    )
     .sort((a, b) => b.score - a.score || a.entry.title.length - b.entry.title.length)
     .slice(0, limit)
     .map(({ entry }) => entry)
@@ -460,7 +531,11 @@ export const toAppGuideMatch = (entry: AppGuideEntry): AppGuideMatch => ({
 })
 
 const OVERVIEW_PATTERN =
-  /(有什么功能|功能总览|功能列表|功能树|全部功能|所有功能|能做什么|会做什么|支持哪些|支持什么|功能介绍|介绍一下|有什么用处|whatcan|features|overview|capabilities)/
+  /有什么功能|功能总览|功能列表|功能树|全部功能|所有功能|能做什么|会做什么|支持哪些|支持什么|功能介绍|介绍一下|有什么用处|whatcan|features|overview|capabilities/
+const APP_REFERENCE_PATTERN =
+  /(?:本|这个|这款|你们的)(?:应用|软件|客户端|app)|\b(?:api\s*demo|this\s+(?:app|application))\b/i
+const DIRECT_OVERVIEW_PATTERN =
+  /^(?:请问|请)?(?:你(?:们)?|你的)?(?:有(?:哪些|什么)功能|支持(?:哪些|什么)(?:功能)?|能做什么|会做什么|功能(?:总览|列表|树|介绍)?|全部功能|所有功能|帮助|介绍|使用说明)(?:呢|吗|呀|啊)?$|^(?:features|overview|capabilities|help|whatareyour(?:features|capabilities)|whatcanyoudo)$/
 
 /** 泛问“有什么功能”时返回功能树，而不是命中某一条具体文档 */
 export const isAppGuideOverviewQuery = (query: string) => {
@@ -470,10 +545,8 @@ export const isAppGuideOverviewQuery = (query: string) => {
   }
   if (
     !(
-      OVERVIEW_PATTERN.test(normalized) ||
-      normalized === '功能' ||
-      normalized === '介绍' ||
-      normalized === '帮助'
+      DIRECT_OVERVIEW_PATTERN.test(normalized) ||
+      (APP_REFERENCE_PATTERN.test(query) && OVERVIEW_PATTERN.test(normalized))
     )
   ) {
     return false
@@ -507,10 +580,9 @@ export const buildAppGuideOverviewContext = () =>
 
 /** 只有明确的“怎么用/在哪设置”类提问才自动注入，避免天气、闲聊等误触 */
 const FEATURE_QUESTION_PATTERN =
-  /(怎么(?!样)|如何|怎样|在哪|哪里|设置|功能|开关|有什么用|干什么|支持|能不能|可不可以|介绍|帮助|余额|额度|欠费|充值|导入|导出|备份|换机|朗读|聊天背景|换(?:个|一张)?背景|记忆|昵称|头像|提示词|定位|通话|麦克风|拍照|重新生成|分支|主题|语言|howto|where|setting|feature|support|balance|import|export|backup|memory|theme|language)/
-
-const isFeatureQuestion = (query: string) =>
-  FEATURE_QUESTION_PATTERN.test(normalize(query))
+  /怎么(?!样)|如何|怎样|在哪|哪里|设置|功能|开关|有什么用|支持|能不能|可不可以|介绍|帮助|打开|开启|关闭|暂停|切换|howto|where|setting|feature|support|turnon|turnoff|enable|disable/
+const APP_FEATURE_PATTERN =
+  /全局记忆|会话记忆|(?:开启|关闭|暂停).{0,8}记忆|智能搜索|深度思考|语音播报|实时通话|聊天背景|系统提示词|(?:快速|专家|rp)模式|导[入出](?:会话|聊天记录)|阅读链接|像素画|余额查询|globalmemory|chatmemory|memorysettings|smartsearch|deepthinking|chatbackground|systemprompt|expertmode|rpmode/
 
 /** 本地注入用：把命中的文档拼成可直接放进 system 提示词的摘录。 */
 export const buildAppGuideContext = (query: string, limit = 3): string => {
@@ -518,20 +590,24 @@ export const buildAppGuideContext = (query: string, limit = 3): string => {
     return buildAppGuideOverviewContext()
   }
   const normalizedQuery = normalize(query)
-  const entries = searchAppGuide(query, limit)
-  if (entries.length === 0) {
+  if (!normalizedQuery) {
     return ''
   }
-  if (!isFeatureQuestion(normalizedQuery)) {
-    const matchedByTitle = entries.some((entry) => {
+  const appFeature =
+    APP_REFERENCE_PATTERN.test(query) ||
+    APP_FEATURE_PATTERN.test(normalizedQuery) ||
+    ENTRIES.some((entry) => {
       const title = normalize(entry.title)
-      return normalizedQuery.includes(title) || title.includes(normalizedQuery)
+      return title.length >= 4 && entry.id !== 'overview' && normalizedQuery.includes(title)
     })
-    if (!matchedByTitle) {
-      return ''
-    }
+  const setting = /^(?:(?:怎么|如何|在哪)(?:打开|进入|找)?)?设置(?:入口|在哪(?:里)?)?$/.test(
+    normalizedQuery
+  )
+  const exactTitle = ENTRIES.some((entry) => normalize(entry.title) === normalizedQuery)
+  if (!setting && !exactTitle && !(appFeature && FEATURE_QUESTION_PATTERN.test(normalizedQuery))) {
+    return ''
   }
-  return entries
+  return searchAppGuide(query, limit)
     .map((entry) =>
       [
         `### ${entry.title}`,

@@ -4,6 +4,12 @@ import { getImeMotionState, hasNativeImeMotion, subscribeImeMotion } from '../..
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import { useActiveChatBackgroundUrl } from '../../services/chatBackground.js'
+import {
+  LIVE_AVATAR_STATES,
+  initLiveAvatars,
+  useActiveLiveAvatarSet,
+  type LiveAvatarState,
+} from '../../services/liveAvatar.js'
 import { useChatStore, type LiveToolActivity } from '../../services/chat/store.js'
 import { getAudioLevel } from '../../services/speech/voiceActivity.js'
 import { IconButton } from '../base/IconButton.js'
@@ -44,6 +50,7 @@ const TOOL_LABELS = {
   location: 'liveToolLocation',
   balance: 'liveToolBalance',
   guide: 'liveToolGuide',
+  image: 'liveToolImage',
 } as const satisfies Record<LiveToolActivity, TranslationKey>
 
 const LIVE_TITLE = 'DeepSeek Live'
@@ -52,6 +59,7 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
   const t = useTranslate()
   const isMobile = useIsMobile()
   const activeChatBgUrl = useActiveChatBackgroundUrl()
+  const activeAvatar = useActiveLiveAvatarSet()
   const [text, setText] = useState('')
   const [transcriptOpen, setTranscriptOpen] = useState(false)
   const panelId = useId()
@@ -78,6 +86,7 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
 
   useEffect(() => {
     rootRef.current?.focus({ preventScroll: true })
+    void initLiveAvatars()
   }, [])
 
   // Android 原生键盘动效：通话页底部输入框与主舞台纯 GPU 上移，不触发 WebView Resize
@@ -236,9 +245,27 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
     return () => document.removeEventListener('keydown', onEscape)
   }, [hangUp, transcriptOpen])
 
+  const thinking = phase === 'answering'
+  const playing = phase === 'speaking'
+  const hasCustomAvatar = activeAvatar !== null
+  const avatarState: LiveAvatarState =
+    phase === 'speaking'
+      ? 'speaking'
+      : phase === 'answering' || phase === 'transcribing'
+        ? 'thinking'
+        : hearing
+          ? 'listening'
+          : 'idle'
+
   useEffect(() => {
     const orb = orbRef.current
-    if (!analyser || !orb || !hearing || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    if (
+      hasCustomAvatar ||
+      !analyser ||
+      !orb ||
+      !hearing ||
+      matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
       return
     }
     const samples = new Float32Array(analyser.fftSize)
@@ -258,7 +285,7 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
       cancelAnimationFrame(frame)
       orb.style.removeProperty('--mic-scale')
     }
-  }, [analyser, hearing])
+  }, [analyser, hasCustomAvatar, hearing])
 
   const canSend = Boolean(text.trim())
   const send = () => {
@@ -272,8 +299,6 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
     }
   }
 
-  const thinking = phase === 'answering'
-  const playing = phase === 'speaking'
   const micEnabled = mic === 'on' || mic === 'opening'
   const micLabel = t(micEnabled ? 'liveMute' : 'liveUnmute')
   const status =
@@ -337,7 +362,8 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
             className={clsx(
               styles.visualizer,
               thinking && styles.thinking,
-              playing && styles.playing
+              playing && styles.playing,
+              hasCustomAvatar && styles.hasCustomAvatar
             )}
             aria-label={t('liveTapToInterrupt')}
             title={phase !== 'idle' ? t('liveTapToInterrupt') : undefined}
@@ -345,10 +371,29 @@ export const LiveCallView = ({ call, onHangUp }: { call: LiveCall; onHangUp: () 
             onClick={interrupt}
           >
             <span ref={orbRef} className={styles.orbMotion} aria-hidden="true">
-              <span className={styles.orb} />
+              {activeAvatar ? (
+                <span className={styles.avatarFrame}>
+                  {LIVE_AVATAR_STATES.map((state) => (
+                    <img
+                      key={state}
+                      src={activeAvatar.images[state]}
+                      alt=""
+                      draggable={false}
+                      className={clsx(
+                        styles.avatarImage,
+                        avatarState === state && styles.avatarImageActive
+                      )}
+                    />
+                  ))}
+                </span>
+              ) : (
+                <span className={styles.orb} />
+              )}
             </span>
-            {thinking ? <span className={styles.loadingRing} aria-hidden="true" /> : null}
-            {playing ? (
+            {!hasCustomAvatar && thinking ? (
+              <span className={styles.loadingRing} aria-hidden="true" />
+            ) : null}
+            {!hasCustomAvatar && playing ? (
               <Spectrum
                 className={styles.wave}
                 getAnalyser={getOutputAnalyser}

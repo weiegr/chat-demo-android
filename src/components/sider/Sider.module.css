@@ -425,8 +425,8 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
 }
 
-/* 抽屉外框留在下层且尺寸稳定，内部 .drawerMotion 仅做纯 GPU 单轴水平微视差，
-   杜绝非 1:1 缩放与整层透明度重栅格化，确保高刷屏满帧跟手。 */
+/* 抽屉外框几何位置保持稳定（供搜索胶囊测量起点），内部 .drawerMotion 从 -100% 完整推入，
+   与对话界面 1:1 同步右移，形成严丝合缝的平推效果。 */
 .drawer {
   position: absolute;
   top: 0;
@@ -443,7 +443,7 @@
 .drawerMotion {
   width: 100%;
   height: 100%;
-  transform: translate3d(-24px, 0, 0);
+  transform: translate3d(-100%, 0, 0);
   will-change: transform;
   transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -457,7 +457,7 @@
   max-width: none;
   height: 100%;
   padding: calc(10px + var(--safe-top)) 12px var(--safe-bottom);
-  border-right: none;
+  border-right: 1px solid var(--dsw-alias-border-l1);
 
   .top {
     margin-bottom: 4px;
@@ -559,6 +559,8 @@
 
 /* 移动端进入全屏搜索态时，侧边栏列表与底部设置原地柔和淡出，不改宽度、不触发布局重排 */
 .searchOpen {
+  border-right-color: transparent;
+
   .listWrap,
   .bottom,
   .accountEntryAvatarOnly {
@@ -587,10 +589,12 @@
     transition: none;
   }
 
-  .drawerMotion,
+  .drawerMotion {
+    transition: none;
+  }
+
   .drawer[data-open='true'] .drawerMotion {
-    transform: none;
-    opacity: 1;
+    transform: translate3d(0, 0, 0);
     transition: none;
   }
 

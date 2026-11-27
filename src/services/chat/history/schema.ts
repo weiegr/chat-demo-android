@@ -1,5 +1,6 @@
 import { getAudioMimeType, MAX_AUDIO_SECONDS } from '../../audio/format.js'
 import { readRpSummary } from '../rpContext.js'
+import { readWritingLengthTarget } from '../writingLength.js'
 import { BackupError, fail } from './errors.js'
 import {
   EXPORT_FORMAT_VERSION,
@@ -220,6 +221,9 @@ const readFragment: Read<Fragment> = (value) => {
             signature: string(entry.signature),
             ...('url' in entry ? { url: string(entry.url) } : {}),
             ...('title' in entry ? { title: nullable(string)(entry.title) } : {}),
+            ...(typeof entry.api_demo_excerpt === 'string' && {
+              api_demo_excerpt: entry.api_demo_excerpt.slice(0, 1000),
+            }),
           }
         })(item.results),
       }
@@ -264,7 +268,28 @@ const message: Read<ChatMessage> = (value) => {
   const role = oneOf('USER', 'ASSISTANT')(item.role)
   const rpSummary =
     __BETA__ && role === 'ASSISTANT' ? readRpSummary(item.api_demo_rp_summary) : undefined
+  const writingLength =
+    role === 'USER' && item.api_demo_writing_length === null
+      ? null
+      : readWritingLengthTarget(item.api_demo_writing_length)
   const video = role === 'USER' && item.video !== undefined ? record(item.video) : null
+  const images =
+    role === 'ASSISTANT' && item.api_demo_generated_images !== undefined
+      ? list((value) => {
+          const image = record(value)
+          const dataUrl = string(image.data_url)
+          if (
+            dataUrl.length > 32 * 1024 ||
+            !/^data:image\/png;base64,iVBORw0KGgo[A-Za-z0-9+/]*={0,2}$/.test(dataUrl)
+          ) {
+            return invalid()
+          }
+          return {
+            data_url: dataUrl,
+            ...(typeof image.title === 'string' && { title: image.title.slice(0, 40) }),
+          }
+        })(item.api_demo_generated_images)
+      : undefined
   return {
     id: count(item.id),
     parent_id: nullable(count)(item.parent_id),
@@ -284,6 +309,8 @@ const message: Read<ChatMessage> = (value) => {
     inserted_at: time(item.inserted_at),
     fragments: list(fragment)(item.fragments).filter((item): item is Fragment => item !== null),
     ...(rpSummary && { api_demo_rp_summary: rpSummary }),
+    ...(writingLength !== undefined && { api_demo_writing_length: writingLength }),
+    ...(images?.length && { api_demo_generated_images: images }),
     ...(video && {
       video: {
         id: string(video.id),
@@ -330,6 +357,10 @@ export const readSessionIndex: Read<SessionIndexEntry[]> = list((value) => {
 export const readSessionFile: Read<SessionFile> = (value) => {
   const item = record(value)
   const memory = item.api_demo_memory === undefined ? undefined : record(item.api_demo_memory)
+  const liveMemory =
+    item.origin === 'live' && item.api_demo_live_memory !== undefined
+      ? record(item.api_demo_live_memory)
+      : undefined
   return {
     id: sessionId(item.id),
     title: nullable(string)(item.title),
@@ -338,6 +369,12 @@ export const readSessionFile: Read<SessionFile> = (value) => {
       ? { mode: item.mode }
       : {}),
     ...(item.origin === 'chat' || item.origin === 'live' ? { origin: item.origin } : {}),
+    ...(liveMemory && {
+      api_demo_live_memory: {
+        enabled: boolean(liveMemory.enabled),
+        ...(liveMemory.source_id !== undefined && { source_id: sessionId(liveMemory.source_id) }),
+      },
+    }),
     ...(memory && {
       api_demo_memory: {
         enabled: boolean(memory.enabled),

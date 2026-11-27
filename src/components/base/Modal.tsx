@@ -34,7 +34,10 @@ export const Modal = ({
   dialogRef,
   overlayClassName,
   className,
+  headerClassName,
+  closeClassName,
   mainClassName,
+  footerClassName,
   onClose,
 }: {
   title: ReactNode
@@ -51,8 +54,14 @@ export const Modal = ({
   /** 遮罩层的额外 class */
   overlayClassName?: string
   className?: string
+  /** 标题栏的额外 class */
+  headerClassName?: string
+  /** 关闭按钮的额外 class */
+  closeClassName?: string
   /** 内容区的 class */
   mainClassName?: string
+  /** 底部操作栏的额外 class */
+  footerClassName?: string
   onClose: () => void
 }) => {
   const t = useTranslate()
@@ -222,13 +231,13 @@ export const Modal = ({
         aria-modal={active ? 'true' : undefined}
         aria-labelledby={titleId}
       >
-        <div className={styles.header}>
+        <div className={clsx(styles.header, headerClassName)}>
           <div id={titleId} className={styles.title}>
             {title}
           </div>
           {closable ? (
             <IconButton
-              className={styles.close}
+              className={clsx(styles.close, closeClassName)}
               tone="primary"
               icon={<IconCloseOutline16 />}
               aria-label={t('close')}
@@ -237,7 +246,7 @@ export const Modal = ({
           ) : null}
         </div>
         {children ? <div className={clsx(styles.main, mainClassName)}>{children}</div> : null}
-        {footer ? <div className={styles.footer}>{footer}</div> : null}
+        {footer ? <div className={clsx(styles.footer, footerClassName)}>{footer}</div> : null}
       </div>
     </div>,
     document.body

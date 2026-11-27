@@ -21,7 +21,6 @@ declare const styles: {
   readonly memoryDesktopDelete: string
   readonly memoryDocCard: string
   readonly memoryEmptyState: string
-  readonly memoryEmptyIcon: string
   readonly memoryDocument: string
   readonly mobileSubHeader: string
   readonly mobileTitleStack: string

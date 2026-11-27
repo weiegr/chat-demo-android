@@ -998,6 +998,29 @@ export const IconDocumentOutline16 = () => (
   </svg>
 )
 
+/** 绘图工具：线性图片图标，与工具时间线的线宽一致 */
+export const IconImageOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect
+      x="2.1"
+      y="3.1"
+      width="11.8"
+      height="9.8"
+      rx="2"
+      stroke="currentColor"
+      strokeWidth={1.35}
+    />
+    <circle cx="5.9" cy="6.5" r="1.1" stroke="currentColor" strokeWidth={1.2} />
+    <path
+      d="M2.7 11.2L6.35 8.15L9.25 10.5L11.05 8.95L13.35 10.95"
+      stroke="currentColor"
+      strokeWidth={1.35}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
 /** 返回：搜索页左上角，20px 框内的左向箭头 */
 export const IconBackOutline20 = () => (
   <svg width={20} height={20} viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">

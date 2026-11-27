@@ -2,6 +2,8 @@ declare const styles: {
   readonly message: string
   readonly actions: string
   readonly waiting: string
+  readonly writingStatus: string
+  readonly writingBody: string
   readonly waitingDot: string
   readonly fading: string
   readonly notice: string

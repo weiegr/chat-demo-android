@@ -1,13 +1,24 @@
 declare const styles: {
   readonly container: string
+  readonly containerRpDocked: string
   readonly welcome: string
+  readonly welcomeRpDocked: string
   readonly inputSlot: string
   readonly inputParallax: string
   readonly modeSwitchParallax: string
+  readonly modeSwitchShell: string
+  readonly modeSwitchDocked: string
   readonly hero: string
+  readonly heroRpDocked: string
+  readonly heroTextHidden: string
   readonly heroInner: string
   readonly heroEntering: string
   readonly heroAnimating: string
+  readonly rpDockedPillAnchor: string
+  readonly rpDockedPillAnchorVisible: string
+  readonly rpDockedPill: string
+  readonly rpDockedPillVisible: string
+  readonly rpDockedPillOnBlue: string
   readonly greeting: string
   readonly greetingText: string
   readonly modeSwitch: string

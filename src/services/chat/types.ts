@@ -10,6 +10,7 @@ import type {
 } from '../api/types.js'
 import type { ChatMode } from '../settings.js'
 import type { AudioAttachmentData } from '../audio/metadata.js'
+import type { WritingLengthProgress, WritingLengthTarget } from './writingLength.js'
 
 /**
  * 消息附件。id 是本地标识（IndexedDB files 表的主键，原件按它存储，所有引用同一 id 的消息共用一份），
@@ -57,6 +58,8 @@ export type UserMessage = MessageBranch & {
   content: string
   files: FileAttachment[]
   video?: VideoAttachment
+  /** 兼容此前保存的手动长度；null 表示该轮关闭了自动识别。 */
+  writingLength?: WritingLengthTarget | null
   createdAt: number
   /** 允许重新生成或续写当前的新提问时，沿用当轮的记忆授权。本地字段。 */
   memoryConsent?: { epoch: number; sourceRevision: number }
@@ -91,9 +94,21 @@ export type ClientToolUseBlock = {
   name: string
   input: Record<string, unknown>
   partialJson?: string
+  invalidInput?: boolean
 }
 
 /** 客户端工具本地执行结果：用于回传 API 的 tool_result 与展示时间线状态 */
+/** 本地生成的像素画：只用于展示与保存，不随 tool_result 回传模型 */
+export type GeneratedImage = {
+  id: string
+  stage: 'blockout' | 'refine'
+  /** 64×64 PNG 的 data URL，体积在 1KB 内 */
+  dataUrl: string
+  width: number
+  height: number
+  title?: string
+}
+
 export type ClientToolResultBlock = {
   type: 'client_tool_result'
   tool_use_id: string
@@ -104,6 +119,7 @@ export type ClientToolResultBlock = {
   summary?: string
   errorCode?: string
   matchCount?: number
+  image?: GeneratedImage
 }
 
 /** 本地时间线只保存历史工具的动作和状态。 */
@@ -162,6 +178,7 @@ export type AssistantMessage = MessageBranch & {
   stopDetails?: StopDetails
   /** 最近一次请求的用量，续写后更新 */
   usage?: MessageUsage
+  writingLength?: WritingLengthProgress
   /** 剧情摘要覆盖当前回答及其相同分支上的所有较早轮次。 */
   rpSummary?: string
   rpContext?: RpContextSample
@@ -193,6 +210,8 @@ export type Session = {
   mode?: ChatMode
   /** 会话来源。旧归档可能缺失。 */
   origin?: 'chat' | 'live'
+  /** 通话发起时的记忆选择，以及需要核对授权和去重的来源会话。 */
+  liveMemory?: { enabled: boolean; sourceId?: string }
   /** 导入暂存附带的状态，提交时转入独立的记忆存储。 */
   memoryRestore?: SessionMemoryState
   /** 包含所有分支的消息，按创建顺序存储。 */

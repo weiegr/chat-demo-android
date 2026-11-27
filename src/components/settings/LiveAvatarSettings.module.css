@@ -1,0 +1,652 @@
+.section {
+  display: flex;
+  flex-direction: column;
+}
+
+.sectionTitle {
+  margin: 6px 0 10px 4px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.defaultHeaderButton {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 15px 10px 4px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+
+  .sectionTitle {
+    margin: 0;
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+}
+
+.defaultHeaderButtonActive {
+  cursor: default;
+}
+
+/* 默认形象与自定义形象共用的无卡片滑动舞台 */
+.defaultShowcase {
+  --preview-orb-size: 120px;
+  --ocean-accent: #397bad;
+  --ocean-track: rgb(57 123 173 / 23%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  padding: 12px 0 18px;
+  user-select: none;
+
+  [data-ds-dark-theme] & {
+    --ocean-accent: #75b4dc;
+    --ocean-track: rgb(117 180 220 / 25%);
+  }
+}
+
+.defaultCarousel {
+  display: flex;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.defaultSlide {
+  flex: 0 0 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 140px;
+  scroll-snap-align: center;
+  scroll-snap-stop: always;
+}
+
+.liveOrbBox {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--preview-orb-size);
+  height: var(--preview-orb-size);
+}
+
+/* 与 LiveCallView.module.css 中 .orb 完全一致 */
+.liveOrb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background-color: #68bdf2;
+}
+
+/* 与 LiveCallView.module.css 中 .loadingRing 完全一致 */
+.liveLoadingRing {
+  display: block;
+  width: 76%;
+  height: 76%;
+  box-sizing: border-box;
+  border: 4px solid var(--ocean-track);
+  border-top-color: var(--ocean-accent);
+  border-right-color: var(--ocean-accent);
+  border-radius: 50%;
+  animation: liveOrbSpin 940ms linear infinite;
+}
+
+@keyframes liveOrbSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 与 LiveCallView.module.css 中 .visualizer .wave 比例与配色完全一致 */
+.liveWave {
+  --bar-width: calc(var(--preview-orb-size) * 0.125);
+  --bar-travel: calc(var(--preview-orb-size) * 0.315);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--preview-orb-size) * 0.055);
+  width: 100%;
+  height: calc(var(--bar-width) + var(--bar-travel));
+}
+
+.liveWaveBar {
+  flex-shrink: 0;
+  width: var(--bar-width);
+  height: var(--bar-width);
+  border-radius: 999px;
+  background-color: var(--ocean-accent);
+  animation-duration: 1.05s;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+
+  &:nth-child(1) {
+    height: calc(var(--bar-width) + var(--bar-travel) * 0.34);
+    animation-name: liveWaveLow;
+    animation-delay: -0.15s;
+  }
+
+  &:nth-child(2) {
+    height: calc(var(--bar-width) + var(--bar-travel) * 0.72);
+    animation-name: liveWaveMid;
+    animation-delay: -0.45s;
+  }
+
+  &:nth-child(3) {
+    height: calc(var(--bar-width) + var(--bar-travel) * 0.94);
+    animation-name: liveWaveHigh;
+    animation-delay: -0.25s;
+  }
+
+  &:nth-child(4) {
+    height: calc(var(--bar-width) + var(--bar-travel) * 0.66);
+    animation-name: liveWaveMid;
+    animation-delay: -0.68s;
+  }
+
+  &:nth-child(5) {
+    height: calc(var(--bar-width) + var(--bar-travel) * 0.3);
+    animation-name: liveWaveLow;
+    animation-delay: -0.35s;
+  }
+}
+
+@keyframes liveWaveLow {
+  0%,
+  100% {
+    height: calc(var(--bar-width) + var(--bar-travel) * 0.14);
+  }
+
+  50% {
+    height: calc(var(--bar-width) + var(--bar-travel) * 0.56);
+  }
+}
+
+@keyframes liveWaveMid {
+  0%,
+  100% {
+    height: calc(var(--bar-width) + var(--bar-travel) * 0.28);
+  }
+
+  45% {
+    height: calc(var(--bar-width) + var(--bar-travel) * 0.86);
+  }
+
+  75% {
+    height: calc(var(--bar-width) + var(--bar-travel) * 0.44);
+  }
+}
+
+@keyframes liveWaveHigh {
+  0%,
+  100% {
+    height: calc(var(--bar-width) + var(--bar-travel) * 0.36);
+  }
+
+  40% {
+    height: calc(var(--bar-width) + var(--bar-travel) * 0.98);
+  }
+
+  70% {
+    height: calc(var(--bar-width) + var(--bar-travel) * 0.52);
+  }
+}
+
+.customOrbCircle {
+  position: relative;
+  display: block;
+  width: var(--preview-orb-size);
+  height: var(--preview-orb-size);
+  border-radius: 50%;
+  overflow: hidden;
+  background-color: var(--dsw-alias-bg-layer-3);
+  box-shadow:
+    0 6px 20px rgba(15, 23, 42, 0.12),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.42);
+
+  [data-ds-dark-theme] & {
+    box-shadow:
+      0 8px 24px rgba(0, 0, 0, 0.36),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  }
+}
+
+.previewOrbImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.defaultStatusLabel {
+  margin-top: 12px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* 与切换朗读音色（.ttsDots / .ttsDot）一致的圆点指示器 */
+.defaultDots {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.defaultDot {
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background-color: var(--dsw-alias-border-l2);
+  cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.2s ease;
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+}
+
+.defaultDotActive {
+  background-color: var(--dsw-alias-button-primary-fill);
+}
+
+/* 自定义形象下方的分组列表行 */
+.desktopGroupList {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  overflow: hidden;
+  background-color: var(--dsw-alias-bg-base);
+}
+
+.groupRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 46px;
+  padding: 11px 4px;
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 15px;
+  line-height: 22px;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background-color 140ms ease,
+    opacity 140ms ease;
+
+  & + & {
+    border-top: 1px solid var(--dsw-alias-border-l1);
+  }
+
+  @media (hover: hover) {
+    &:hover {
+      background-color: var(--dsw-alias-interactive-bg-hover);
+    }
+  }
+
+  &:focus-visible {
+    box-shadow: inset 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+}
+
+.desktopGroupList .groupRow {
+  padding: 11px 14px;
+  font-size: 14px;
+}
+
+.groupRowPressing {
+  opacity: 0.65;
+}
+
+.groupRowTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.groupCheckIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--dsw-alias-brand-primary);
+
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.desktopPage {
+  gap: 14px;
+  padding-top: 12px;
+  padding-bottom: 18px;
+
+  .sectionTitle {
+    margin: 2px 0 8px;
+  }
+
+  .defaultHeaderButton {
+    padding: 2px 15px 8px 0;
+
+    .sectionTitle {
+      margin: 0;
+    }
+  }
+}
+
+.desktopEntryRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 46px;
+  margin-top: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  background-color: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  transition: background-color var(--ds-transition-duration) var(--ds-ease-in-out);
+
+  @media (hover: hover) {
+    &:hover:not(:disabled) {
+      background-color: var(--dsw-alias-interactive-bg-hover);
+    }
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+}
+
+.desktopEntryArrow {
+  display: inline-flex;
+  align-items: center;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 创建 / 编辑四态形象组弹窗：紧凑尺寸与统一基线，标题、输入框、关闭与底栏按钮严丝合缝对齐 */
+.editorModal {
+  width: 340px;
+  max-width: calc(100vw - 40px);
+  max-height: 82vh;
+  max-height: 82dvh;
+  padding: 20px;
+  border-radius: 16px;
+}
+
+.editorHeader.editorHeader {
+  min-height: 28px;
+  margin-bottom: 14px;
+}
+
+/* 补偿 28px IconButton 与 14px SVG 内置留白，使关闭叉号视觉右缘对齐下方输入框及按钮右缘 */
+.editorClose.editorClose {
+  margin-right: -8px;
+}
+
+.editorMain {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: -2px;
+  padding: 2px;
+  overflow-y: auto;
+}
+
+.groupNameInput {
+  box-sizing: border-box;
+  width: 100%;
+  height: 40px;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background-color: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  outline: none;
+  caret-color: var(--dsw-alias-brand-text);
+  transition: border-color var(--ds-transition-duration) var(--ds-ease-in-out);
+
+  &::placeholder {
+    color: var(--dsw-alias-label-caption);
+  }
+
+  &:focus {
+    border-color: var(--dsw-alias-brand-primary);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+  }
+}
+
+.editorShowcase {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  padding: 0;
+  user-select: none;
+}
+
+.editorSlide {
+  flex: 0 0 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 116px;
+  scroll-snap-align: center;
+  scroll-snap-stop: always;
+}
+
+.editorOrbWrap {
+  position: relative;
+  width: 108px;
+  height: 108px;
+}
+
+.editorOrbCircle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 1.5px dashed var(--dsw-alias-border-l2);
+  border-radius: 50%;
+  overflow: hidden;
+  background-color: var(--dsw-alias-interactive-bg-hover);
+  font: inherit;
+  cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    transform 140ms ease;
+
+  &:active:not(:disabled) {
+    transform: scale(0.96);
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+}
+
+.editorOrbCircleFilled {
+  border-style: solid;
+  border-color: var(--dsw-alias-border-l1);
+  background-color: var(--dsw-alias-bg-layer-3);
+}
+
+.editorOrbText {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.editorStatusLabel {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.editorDots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.editorFooter.editorFooter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.editorFooter .editorFooterButton {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 40px;
+  padding: 0 14px;
+}
+
+/* 与对话输入区图片附件（ChatInput.module.css .remove）一致的右上角圆形删除叉号 */
+.uploadRemoveButton {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  color: var(--dsw-alias-label-primary-inverted);
+  background-color: var(--dsw-alias-button-contrast-fill);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.24);
+  cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform var(--ds-transition-duration) var(--ds-ease-in-out);
+
+  svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.92);
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+@media not all and (min-width: 768px) {
+  .sectionTitle {
+    margin: 4px 0 8px 12px;
+  }
+
+  .defaultHeaderButton {
+    padding: 4px 20px 8px 12px;
+
+    .sectionTitle {
+      margin: 0;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .defaultDot,
+  .groupRow,
+  .groupNameInput,
+  .editorOrbCircle,
+  .uploadRemoveButton {
+    transition: none;
+  }
+
+  .liveLoadingRing,
+  .liveWaveBar {
+    animation: none;
+  }
+}

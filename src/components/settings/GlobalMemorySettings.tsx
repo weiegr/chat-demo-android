@@ -16,7 +16,7 @@ import {
 import { textBytes } from '../../services/chat/memoryModel.js'
 import { useSettings } from '../../services/settings.js'
 import { Button } from '../base/Button.js'
-import { IconChevronRightOutline14, IconNotebookOutline20 } from '../base/icons.js'
+import { IconChevronRightOutline14 } from '../base/icons.js'
 import { Modal } from '../base/Modal.js'
 import { Switch } from '../base/Switch.js'
 import { usePresence } from '../base/usePresence.js'
@@ -262,12 +262,7 @@ export const MemoryFilePage = ({ disabled }: { disabled: boolean }) => {
           className={styles.memoryDocument}
         />
       ) : (
-        <div className={styles.memoryEmptyState}>
-          <span className={styles.memoryEmptyIcon} aria-hidden="true">
-            <IconNotebookOutline20 />
-          </span>
-          <span>{t('memoryFileEmpty')}</span>
-        </div>
+        <div className={styles.memoryEmptyState}>{t('memoryFileEmpty')}</div>
       )}
     </div>
   )

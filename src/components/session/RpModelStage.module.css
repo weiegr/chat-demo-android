@@ -1,0 +1,225 @@
+.stage {
+  --rp-split: 46%;
+  --rp-blue: var(--dsw-alias-brand-primary);
+  --rp-blank: var(--dsw-alias-bg-base);
+  --rp-seam-gap: 12px;
+  --rp-word-size: 76px;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    opacity 0.26s cubic-bezier(0.4, 0, 1, 1),
+    visibility 0s linear 0.26s;
+}
+
+.stageActive {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    opacity 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 0s;
+}
+
+.baseLayer,
+.fillLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.baseLayer {
+  background: var(--rp-blank);
+}
+
+/* 蓝色填充幕布：未展开时收束到分割线处，展开后向选中侧铺满，切换时沿纵轴滑移实现光学反色 */
+.fillLayer {
+  background: var(--rp-blue);
+  clip-path: inset(46% 0% 54% 0%);
+  will-change: clip-path;
+  transition: clip-path 0.44s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.stageActive.selectedFlash .fillLayer {
+  clip-path: inset(0% 0% 54% 0%);
+}
+
+.stageActive.selectedPro .fillLayer {
+  clip-path: inset(46% 0% 0% 0%);
+}
+
+.divider {
+  position: absolute;
+  top: var(--rp-split);
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: rgba(57, 100, 254, 0.24);
+  transform: scaleX(0.32);
+  opacity: 0;
+  transition:
+    transform 0.42s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.28s ease;
+
+  [data-ds-dark-theme] & {
+    background: rgba(103, 158, 254, 0.3);
+  }
+}
+
+.stageActive .divider {
+  transform: scaleX(1);
+  opacity: 1;
+}
+
+.topSlot,
+.bottomSlot {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: flex;
+  justify-content: center;
+  box-sizing: border-box;
+  padding-inline: 24px;
+}
+
+.topSlot {
+  top: 0;
+  height: var(--rp-split);
+  align-items: flex-end;
+  padding-bottom: var(--rp-seam-gap);
+}
+
+.bottomSlot {
+  top: var(--rp-split);
+  bottom: 0;
+  align-items: flex-start;
+  padding-top: var(--rp-seam-gap);
+}
+
+.modelWord {
+  display: block;
+  font-size: var(--rp-word-size);
+  line-height: 0.9;
+  font-weight: 800;
+  letter-spacing: -0.045em;
+  white-space: nowrap;
+  transition: transform 0.38s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.wordTop {
+  transform-origin: center bottom;
+  transform: translate3d(0, 14px, 0) scale(0.94);
+}
+
+.wordBottom {
+  transform-origin: center top;
+  transform: translate3d(0, -14px, 0) scale(0.94);
+}
+
+.stageActive .wordTop,
+.stageActive .wordBottom {
+  transform: translate3d(0, 0, 0) scale(1);
+}
+
+.stageDragging .hitZone {
+  cursor: grabbing;
+}
+
+.wordBlue {
+  color: var(--rp-blue);
+}
+
+.wordBlank {
+  color: var(--rp-blank);
+}
+
+.hitLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  touch-action: pan-x;
+}
+
+.hitZone {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  touch-action: pan-x;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+
+  &:focus-visible::after {
+    content: '';
+    position: absolute;
+    inset: 8px;
+    border-radius: 18px;
+    box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.78);
+    pointer-events: none;
+  }
+}
+
+.hitTop {
+  top: 0;
+  height: var(--rp-split);
+}
+
+.hitBottom {
+  top: var(--rp-split);
+  bottom: 0;
+}
+
+@media (max-width: 374px) {
+  .stage {
+    --rp-word-size: 64px;
+    --rp-seam-gap: 10px;
+  }
+}
+
+@media (min-width: 768px) {
+  .stage {
+    --rp-word-size: 112px;
+    --rp-seam-gap: 16px;
+  }
+}
+
+@media (min-width: 1120px) {
+  .stage {
+    --rp-word-size: 132px;
+    --rp-seam-gap: 18px;
+  }
+}
+
+@media (max-height: 560px) {
+  .stage {
+    --rp-word-size: 54px;
+    --rp-seam-gap: 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage,
+  .stageActive,
+  .fillLayer,
+  .divider,
+  .modelWord {
+    transition: none;
+  }
+
+  .wordTop,
+  .wordBottom {
+    transform: none;
+  }
+}

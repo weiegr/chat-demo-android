@@ -24,10 +24,26 @@
 
 .track {
   stroke: var(--dsw-alias-border-l2);
+  transition: stroke 0.28s ease;
 }
 
 .progress {
   stroke: var(--dsw-alias-brand-primary);
+  transition: stroke 0.28s ease;
+}
+
+.lightTone {
+  &:focus-visible {
+    outline-color: rgba(255, 255, 255, 0.85);
+  }
+
+  .track {
+    stroke: rgba(255, 255, 255, 0.36);
+  }
+
+  .progress {
+    stroke: var(--dsw-static-neutral-bluish-00);
+  }
 }
 
 .popover {

@@ -12,6 +12,7 @@ import {
   IconCloseFill14,
   IconDocumentOutline16,
   IconFileOutline16,
+  IconImageOutline16,
   IconLinkOutline16,
   IconLocationOutline16,
   IconLocationWarningOutline16,
@@ -30,6 +31,7 @@ import {
   type BalanceStep,
   type FindStep,
   type GuideStep,
+  type ImageStep,
   type LocationStep,
   type OpenStep,
   type PageItem,
@@ -40,6 +42,7 @@ import {
   type Step,
 } from '../../services/chat/view.js'
 import { Tooltip } from '../base/Tooltip.js'
+import { GeneratedImageCard } from './GeneratedImageCard.js'
 import {
   openSettingsPage,
   readSettingsPageFromUrl,
@@ -248,9 +251,11 @@ const stepKey = (step: Step, index: number) =>
         ? `balance-${step.id}`
         : step.type === 'guide'
           ? `guide-${step.id}`
-          : step.type === 'memory_tool_step'
-            ? `memory-${step.id}`
-            : `${step.type}-${index}`
+          : step.type === 'image'
+            ? `image-${step.id}`
+            : step.type === 'memory_tool_step'
+              ? `memory-${step.id}`
+              : `${step.type}-${index}`
 
 const StepItem = ({
   step,
@@ -307,6 +312,8 @@ const StepItem = ({
       return <BalanceRow step={step} message={message} streaming={streaming} isLast={isLast} />
     case 'guide':
       return <GuideRow step={step} message={message} streaming={streaming} isLast={isLast} />
+    case 'image':
+      return <ImageRow step={step} message={message} streaming={streaming} isLast={isLast} />
     case 'memory_tool_step':
       return <HistoryToolRow step={step} isLast={isLast} />
     default:
@@ -813,6 +820,95 @@ const GuideRow = ({
           </span>
         )
       })}
+    </ToolRow>
+  )
+}
+
+const imageErrorKey = (code?: string) => {
+  switch (code) {
+    case 'missing_blockout':
+      return 'toolImageMissingBlockout'
+    case 'empty_canvas':
+      return 'toolImageEmptyCanvas'
+    case 'too_many_instructions':
+      return 'toolImageTooComplex'
+    case 'unknown_instruction':
+    case 'unknown_palette_index':
+    case 'invalid_stage':
+    case 'invalid_color':
+    case 'invalid_palette':
+    case 'invalid_argument':
+    case 'invalid_point':
+    case 'missing_argument':
+    case 'missing_color':
+    case 'missing_ops':
+    case 'missing_point':
+    case 'missing_palette':
+    case 'palette_too_large':
+      return 'toolImageInvalid'
+    default:
+      return 'toolImageFail'
+  }
+}
+
+/**
+ * 本地绘制的像素画：草图留在时间线里展示两轮过程，成品改到回复正文展示，时间线只留一条状态。
+ */
+const ImageRow = ({
+  step,
+  message,
+  streaming,
+  isLast,
+}: {
+  step: ImageStep
+  message: AssistantMessage
+  streaming: boolean
+  isLast: boolean
+}) => {
+  const t = useTranslate()
+  const wip = step.status === 'wip'
+  const failed = step.status === 'failed'
+  const interrupted = failed && !streaming && message.status === 'stopped'
+  const title = step.title?.trim() || t('toolImageAlt')
+
+  if (wip) {
+    return (
+      <ToolRow icon={<IconImageOutline16 />} isLast={isLast}>
+        <span className={clsx(styles.intro, styles.shimmer)}>
+          {t(step.stage === 'blockout' ? 'toolImageBlockoutPending' : 'toolImagePending')}
+        </span>
+      </ToolRow>
+    )
+  }
+  if (interrupted) {
+    return (
+      <ToolRow icon={<IconImageOutline16 />} isLast={isLast}>
+        <span className={styles.intro}>{t('toolImageStopped')}</span>
+      </ToolRow>
+    )
+  }
+  if (failed || !step.dataUrl) {
+    return (
+      <ToolRow icon={<IconWarningOutline16 />} isLast={isLast}>
+        <span className={styles.intro}>
+          {t('toolImageFail')} · {t(imageErrorKey(step.errorCode))}
+        </span>
+      </ToolRow>
+    )
+  }
+  if (step.stage === 'refine') {
+    return (
+      <ToolRow icon={<IconImageOutline16 />} isLast={isLast}>
+        <span className={styles.intro}>{t('toolImageDone')}</span>
+        <span className={styles.chip}>
+          <span className={styles.chipText}>{title}</span>
+        </span>
+      </ToolRow>
+    )
+  }
+  return (
+    <ToolRow icon={<IconImageOutline16 />} isLast={isLast}>
+      <GeneratedImageCard dataUrl={step.dataUrl} title={title} />
     </ToolRow>
   )
 }

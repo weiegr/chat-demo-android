@@ -9,6 +9,7 @@ import type {
   SessionMemoryState,
   UserMessage,
 } from '../types.js'
+import { readWritingLengthTarget } from '../writingLength.js'
 import { fail } from './errors.js'
 import type {
   ChatMessage,
@@ -90,7 +91,7 @@ const toolFragment = (tool: ServerToolUseBlock, result: ReplyBlock | undefined):
     return result?.type === 'web_fetch_tool_result' &&
       result.kind === 'read_link' &&
       result.content.type === 'web_fetch_result' &&
-      result.signature?.trim()
+      (result.signature?.trim() || result.content.content.source?.data)
       ? [
           {
             type: 'READ_LINK',
@@ -100,7 +101,10 @@ const toolFragment = (tool: ServerToolUseBlock, result: ReplyBlock | undefined):
                   ? { url: result.content.url || input.url }
                   : {}),
                 title: result.content.content.title,
-                signature: result.signature,
+                signature: result.signature ?? '',
+                ...(result.content.content.source?.data && {
+                  api_demo_excerpt: result.content.content.source.data.slice(0, 1000),
+                }),
               },
             ],
           },
@@ -149,7 +153,8 @@ const assistantFragments = (message: AssistantMessage): Fragment[] => {
         response = { type, content: '' }
         fragments.push(response)
       }
-      response.content += usedWeb ? block.text.replace(/\[citation:\d+\]/g, '') : block.text
+      response.content +=
+        usedWeb && !message.writingLength ? block.text.replace(/\[citation:\d+\]/g, '') : block.text
       continue
     }
     const converted: Fragment[] =
@@ -257,6 +262,30 @@ export const toSessionFile = (
       parent_id: message.parentId ? (ids.get(message.parentId) ?? null) : null,
     }
     const reply = message.role === 'assistant' ? message : firstReply.get(message.id)
+    const writingLength =
+      message.role === 'user'
+        ? message.writingLength
+        : message.status === 'done' &&
+            message.stopReason !== 'refusal' &&
+            message.writingLength &&
+            message.writingLength.actual === message.writingLength.target
+          ? readWritingLengthTarget(message.writingLength)
+          : undefined
+    const generatedImages =
+      message.role === 'assistant'
+        ? message.blocks.flatMap((block) =>
+            block.type === 'client_tool_result' &&
+            block.status === 'done' &&
+            block.image?.stage === 'refine'
+              ? [
+                  {
+                    data_url: block.image.dataUrl,
+                    ...(block.image.title && { title: block.image.title }),
+                  },
+                ]
+              : []
+          )
+        : []
     return {
       ...tree,
       role: message.role === 'user' ? 'USER' : 'ASSISTANT',
@@ -269,9 +298,13 @@ export const toSessionFile = (
         message.role === 'user'
           ? userFragments(message, exportOriginal)
           : assistantFragments(message),
-      ...(__BETA__ && message.role === 'assistant' && message.rpSummary && {
-        api_demo_rp_summary: message.rpSummary,
-      }),
+      ...(__BETA__ &&
+        message.role === 'assistant' &&
+        message.rpSummary && {
+          api_demo_rp_summary: message.rpSummary,
+        }),
+      ...(generatedImages.length > 0 && { api_demo_generated_images: generatedImages }),
+      ...(writingLength !== undefined && { api_demo_writing_length: writingLength }),
       ...(message.role === 'user' &&
         message.video && {
           video: { ...message.video, export_path: exportOriginal(message.video) },
@@ -289,6 +322,13 @@ export const toSessionFile = (
     pinned: false,
     ...(session.mode ? { mode: session.mode } : {}),
     ...(session.origin ? { origin: session.origin } : {}),
+    ...(session.origin === 'live' &&
+      session.liveMemory && {
+        api_demo_live_memory: {
+          enabled: session.liveMemory.enabled,
+          ...(session.liveMemory.sourceId && { source_id: session.liveMemory.sourceId }),
+        },
+      }),
     ...(memory && {
       api_demo_memory: {
         enabled: memory.enabled,

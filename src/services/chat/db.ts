@@ -465,8 +465,19 @@ export const clearStaging = async (): Promise<void> => {
   ])
 }
 
-export const addStagingSession = async (session: Session): Promise<void> => {
-  await (await getDB()).add('sessionsStaging', session)
+export const addStagingSessions = async (sessions: readonly Session[]): Promise<void> => {
+  const tx = (await getDB()).transaction('sessionsStaging', 'readwrite')
+  const writes: Promise<unknown>[] = [tx.done]
+  try {
+    for (const session of sessions) {
+      writes.push(tx.store.add(session))
+    }
+    await Promise.all(writes)
+  } catch (error) {
+    abortTransaction(tx)
+    await Promise.allSettled(writes)
+    throw error
+  }
 }
 
 export const saveStagingFiles = (files: StoredFile[]): Promise<void> =>

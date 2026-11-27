@@ -1,5 +1,5 @@
 import { formatDate } from '../../utils/format.js'
-import type { WebSearchToolResultBlock } from '../api/types.js'
+import type { WebSearchResult, WebSearchToolResultBlock } from '../api/types.js'
 import type { AssistantMessage, ReplyBlock } from './types.js'
 
 const MAX_SOURCES = 6
@@ -11,11 +11,29 @@ const isTextSearchResult = (block: ReplyBlock): block is WebSearchToolResultBloc
   block.type === 'web_search_tool_result' &&
   (block.kind === 'search' || block.kind === 'deep_search')
 
-export const hasWebSearchRecord = (reply: AssistantMessage) => reply.blocks.some(isTextSearchResult)
+const usableUrl = (url: string) => url.length <= 384 && /^https?:\/\/[^\s]+$/i.test(url)
+
+const isSource = (item: WebSearchToolResultBlock['content'][number]): item is WebSearchResult =>
+  item.type === 'web_search_result' && usableUrl(item.url)
+
+const openedPage = (block: ReplyBlock) =>
+  block.type === 'web_fetch_tool_result' &&
+  block.content.type === 'web_fetch_result' &&
+  usableUrl(block.content.url) &&
+  (block.kind === 'deep_search' || block.content.content.source?.data)
+    ? block.content
+    : undefined
+
+export const hasWebSearchRecord = (reply: AssistantMessage) =>
+  reply.blocks.some(
+    (block) => (isTextSearchResult(block) && block.content.some(isSource)) || openedPage(block)
+  )
 
 /** 回传历史搜索工具块也无法让模型看到其结果，用本地保存的摘录恢复依据。 */
 export const buildWebSearchRecord = (reply: AssistantMessage): string => {
-  const results = reply.blocks.filter(isTextSearchResult)
+  const results = reply.blocks
+    .filter(isTextSearchResult)
+    .filter((block) => block.content.some(isSource))
   const resultIds = new Set(results.map((block) => block.tool_use_id))
   const queries = new Set<string>()
   const sources = new Map<
@@ -29,9 +47,6 @@ export const buildWebSearchRecord = (reply: AssistantMessage): string => {
     snippet: string | null,
     opened: boolean
   ) => {
-    if (url.length > 384 || !/^https?:\/\/[^\s]+$/i.test(url)) {
-      return
-    }
     const existing = sources.get(url)
     if ((!existing && sources.size >= MAX_SOURCES) || existing?.snippet) {
       return
@@ -46,10 +61,9 @@ export const buildWebSearchRecord = (reply: AssistantMessage): string => {
 
   // 优先纳入工具实际打开的网页，再补充检索摘录和其他结果。
   for (const block of reply.blocks) {
-    if (block.type === 'web_fetch_tool_result' && block.kind === 'deep_search') {
-      if (block.content.type === 'web_fetch_result') {
-        addSource(block.content.url, block.content.content.title, null, true)
-      }
+    const page = openedPage(block)
+    if (page) {
+      addSource(page.url, page.content.title, page.content.source?.data ?? null, true)
     } else if (
       block.type === 'server_tool_use' &&
       block.input.action === 'search' &&
@@ -67,11 +81,9 @@ export const buildWebSearchRecord = (reply: AssistantMessage): string => {
     }
   }
 
-  let returnedResults = false
   for (const result of results) {
     for (const item of result.content) {
-      if (item.type === 'web_search_result') {
-        returnedResults = true
+      if (isSource(item)) {
         addSource(item.url, item.title, item.snippet, false)
       }
     }
@@ -80,7 +92,7 @@ export const buildWebSearchRecord = (reply: AssistantMessage): string => {
   const record = {
     date: formatDate(reply.createdAt),
     queries: [...queries],
-    returnedResults,
+    returnedResults: sources.size > 0,
     sources: [...sources.values()],
   }
   return `【该轮网页检索记录（客户端附加）】\n${JSON.stringify(record)}`

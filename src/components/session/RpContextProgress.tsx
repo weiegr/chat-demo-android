@@ -9,16 +9,17 @@ import {
 } from 'react'
 import { DEFAULT_MODEL_LIMITS, getModelLimits } from '../../services/api/modelLimits.js'
 import { getVisibleMessages } from '../../services/chat/branches.js'
-import { loadInlineTexts } from '../../services/chat/inlineFiles.js'
+import { isTextAttachment, loadInlineTexts } from '../../services/chat/inlineFiles.js'
 import { getReplyText } from '../../services/chat/reply.js'
 import {
   buildRpPrompt,
+  buildRpSystem,
   currentRpContext,
   estimateRpText,
   getRpHistoryForFiles,
   measureRpInput,
 } from '../../services/chat/rpContext.js'
-import { useChatStore } from '../../services/chat/store.js'
+import { getPendingSessionBlobs, useChatStore } from '../../services/chat/store.js'
 import { useSettings } from '../../services/settings.js'
 
 const Progress = createContext<number | undefined>(undefined)
@@ -26,6 +27,18 @@ export const useRpContextPercent = () => useContext(Progress)
 
 export const RpContextProgress = ({ children }: { children: ReactNode }) =>
   __BETA__ ? <ActiveRpContextProgress>{children}</ActiveRpContextProgress> : <>{children}</>
+
+type LoadedTextsState = {
+  sessionId: string | null
+  texts: Map<string, string>
+  settled: Set<string>
+}
+
+const EMPTY_LOADED_TEXTS: LoadedTextsState = {
+  sessionId: null,
+  texts: new Map(),
+  settled: new Set(),
+}
 
 const ActiveRpContextProgress = ({ children }: { children: ReactNode }) => {
   const activeId = useChatStore((state) => state.activeId)
@@ -74,39 +87,97 @@ const ActiveRpContextProgress = ({ children }: { children: ReactNode }) => {
       ? { history: path.slice(0, -2), question: pending }
       : { history: path, question: undefined }
   }, [enabled, session, streaming])
-  const [loaded, setLoaded] = useState<{ history: typeof history; texts: Map<string, string> }>()
-  const texts = loaded?.history === history ? loaded.texts : undefined
-  useEffect(() => {
+
+  const sessionId = session?.id ?? null
+  const { candidates, textFileIds, textFileKey } = useMemo(() => {
     if (!enabled) {
-      return
+      return { candidates: [], textFileIds: [] as string[], textFileKey: '' }
     }
-    const candidates = getRpHistoryForFiles(history)
+    const list = getRpHistoryForFiles(history)
     if (question) {
-      candidates.push(question)
+      list.push(question)
     }
-    if (!candidates.some((message) => message.role === 'user' && message.files.length > 0)) {
+    const seen = new Set<string>()
+    const ids: string[] = []
+    for (const message of list) {
+      if (message.role !== 'user') {
+        continue
+      }
+      for (const file of message.files) {
+        if (isTextAttachment(file) && !seen.has(file.id)) {
+          seen.add(file.id)
+          ids.push(file.id)
+        }
+      }
+    }
+    return { candidates: list, textFileIds: ids, textFileKey: ids.join(',') }
+  }, [enabled, history, question])
+
+  const [loaded, setLoaded] = useState<LoadedTextsState>(EMPTY_LOADED_TEXTS)
+  const currentLoaded = loaded.sessionId === sessionId ? loaded : EMPTY_LOADED_TEXTS
+  const texts = currentLoaded.texts
+  const pendingTextIds = useMemo(() => {
+    const pending = new Set<string>()
+    for (const id of textFileIds) {
+      if (!currentLoaded.settled.has(id)) {
+        pending.add(id)
+      }
+    }
+    return pending
+  }, [currentLoaded.settled, textFileIds])
+
+  const candidatesRef = useRef(candidates)
+  candidatesRef.current = candidates
+
+  useEffect(() => {
+    if (!enabled || !textFileKey) {
       return
     }
+    const ids = textFileKey.split(',')
     let disposed = false
-    void loadInlineTexts(candidates).then((texts) => {
-      if (!disposed) {
-        setLoaded({ history, texts })
+    const pendingBlobs = sessionId ? getPendingSessionBlobs(sessionId) : undefined
+    void loadInlineTexts(candidatesRef.current, pendingBlobs).then((fetched) => {
+      if (disposed) {
+        return
       }
+      setLoaded((previous) => {
+        const baseTexts =
+          previous.sessionId === sessionId ? previous.texts : new Map<string, string>()
+        const baseSettled = previous.sessionId === sessionId ? previous.settled : new Set<string>()
+        const nextTexts = new Map(baseTexts)
+        for (const [id, content] of fetched) {
+          nextTexts.set(id, content)
+        }
+        const nextSettled = new Set(baseSettled)
+        for (const id of ids) {
+          nextSettled.add(id)
+        }
+        return { sessionId, texts: nextTexts, settled: nextSettled }
+      })
     })
     return () => {
       disposed = true
     }
-  }, [enabled, history, question])
+  }, [enabled, sessionId, textFileKey])
 
   const preview = useMemo(() => {
     if (!enabled) {
       return 0
     }
-    const prompt = buildRpPrompt({ history, question, model, thinking: false, texts })
-    const context = currentRpContext(prompt, system.trim())
+    const prompt = buildRpPrompt({
+      history,
+      question,
+      model,
+      thinking: false,
+      texts,
+      preview: true,
+      pendingTextIds,
+    })
+    const context = currentRpContext(prompt, buildRpSystem(system))
     return measureRpInput(context.system, context.messages, prompt.files, model, prompt.rounds)
       .projected
-  }, [enabled, history, model, question, system, texts])
+  }, [enabled, history, model, pendingTextIds, question, system, texts])
+
   const sample = streaming ? draft?.rpContext : undefined
   const streamed = useRef<{ id: string; prefill: number; length: number; tokens: number }>()
   let used = preview
@@ -125,6 +196,8 @@ const ActiveRpContextProgress = ({ children }: { children: ReactNode }) => {
   } else {
     streamed.current = undefined
   }
-  const ratio = Math.min(100, Math.floor((1000 * used) / (sample?.window ?? window)) / 10)
+  const limit = Math.max(1, sample?.window ?? window)
+  const safeUsed = Number.isFinite(used) ? Math.max(0, used) : 0
+  const ratio = Math.min(100, Math.floor((1000 * safeUsed) / limit) / 10)
   return <Progress.Provider value={enabled ? ratio : undefined}>{children}</Progress.Provider>
 }

@@ -3,6 +3,7 @@ import clsx from 'clsx'
 import { useTranslate } from '../i18n/index.js'
 import { initApiKey, useSettings } from '../services/settings.js'
 import { initChatBackgrounds, useActiveChatBackgroundUrl } from '../services/chatBackground.js'
+import { initLiveAvatars } from '../services/liveAvatar.js'
 import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport.js'
 import {
   bindChatPersistence,
@@ -84,7 +85,7 @@ export const App = () => {
   const siderCardOpen = isMobile && (mobileSiderOpen || chatSearchOpen)
   const prevSiderCardOpenRef = useRef(false)
 
-  // 侧边栏/搜索收起后的 320ms 过渡期内保留圆角与合成层，合拢完毕后自动释放整屏离屏层
+  // 侧边栏/搜索收起后的 320ms 过渡期内保留合成层，合拢完毕后自动释放离屏层
   useEffect(() => {
     const wasOpen = prevSiderCardOpenRef.current
     prevSiderCardOpenRef.current = siderCardOpen
@@ -172,6 +173,7 @@ export const App = () => {
   useEffect(() => {
     void initChat()
     void initChatBackgrounds()
+    void initLiveAvatars()
     // 等待读取或迁移完成，只有需要输入 API Key 时才打开设置。
     void initApiKey().then(ensureApiKey)
   }, [])

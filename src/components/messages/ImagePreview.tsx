@@ -113,7 +113,11 @@ export const ImagePreview = () => {
         />
       ) : (
         <img
-          className={clsx(styles.image, status === 'loading' && styles.imageLoading)}
+          className={clsx(
+            styles.image,
+            preview.pixelated && styles.pixelated,
+            status === 'loading' && styles.imageLoading
+          )}
           src={preview.src}
           alt={preview.alt}
           referrerPolicy="no-referrer"

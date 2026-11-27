@@ -10,6 +10,7 @@ export type SettingsPage =
   | 'nickname'
   | 'appBackground'
   | 'chatBackground'
+  | 'liveAvatar'
   | 'voiceBroadcast'
   | 'videoUpload'
   | 'location'
@@ -27,6 +28,7 @@ const ALL_PAGES = new Set<string>([
   'nickname',
   'appBackground',
   'chatBackground',
+  'liveAvatar',
   'voiceBroadcast',
   'videoUpload',
   'location',
@@ -52,6 +54,7 @@ const DESKTOP_DATA_PAGES = new Set<SettingsPage>([
   'nickname',
   'appBackground',
   'chatBackground',
+  'liveAvatar',
   'apiKey',
   'globalMemory',
   'memoryFile',
@@ -84,9 +87,7 @@ export const mobileSettingsPath = (page: SettingsPage): SettingsPage[] => {
       // Beta 的全局记忆是一级页；稳定版仍从「数据管理」二级页进入
       return __BETA__ ? ['globalMemory'] : ['data', 'globalMemory']
     case 'memoryFile':
-      return __BETA__
-        ? ['globalMemory', 'memoryFile']
-        : ['data', 'globalMemory', 'memoryFile']
+      return __BETA__ ? ['globalMemory', 'memoryFile'] : ['data', 'globalMemory', 'memoryFile']
     case 'chatBackground':
       return ['appBackground', 'chatBackground']
     default:
@@ -100,6 +101,7 @@ export const desktopSettingsPage = (page: SettingsPage): SettingsPage | null => 
     case 'personalCenter':
     case 'appBackground':
     case 'chatBackground':
+    case 'liveAvatar':
     case 'globalMemory':
     case 'memoryFile':
       return page

@@ -48,6 +48,55 @@
     -webkit-backdrop-filter: blur(16px) saturate(1.45);
     backdrop-filter: blur(16px) saturate(1.45);
   }
+
+  /* RP 整界面模型选择：文本框呈现通透磨砂玻璃质感，并随下半区留白/品牌蓝平滑调整高光与投影 */
+  [data-rp-stage-open='true'] & {
+    border-color: transparent;
+    background: rgba(255, 255, 255, 0.58);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.88),
+      inset 0 0 0 1px rgba(57, 100, 254, 0.14),
+      0 8px 24px rgba(15, 23, 42, 0.08),
+      0 1px 3px rgba(15, 23, 42, 0.04);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+    transition:
+      background-color 0.28s ease,
+      box-shadow 0.28s ease;
+  }
+
+  [data-rp-stage-open='true'][data-rp-stage-bottom='blue'] & {
+    background: rgba(255, 255, 255, 0.52);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.84),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.56),
+      0 10px 30px rgba(16, 38, 126, 0.24),
+      0 2px 6px rgba(16, 38, 126, 0.12);
+    -webkit-backdrop-filter: blur(22px) saturate(1.7);
+    backdrop-filter: blur(22px) saturate(1.7);
+  }
+
+  [data-ds-dark-theme] [data-rp-stage-open='true'] & {
+    border-color: transparent;
+    background: rgba(24, 28, 40, 0.56);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.18),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+      0 8px 26px rgba(0, 0, 0, 0.36);
+    -webkit-backdrop-filter: blur(20px) saturate(1.5);
+    backdrop-filter: blur(20px) saturate(1.5);
+  }
+
+  [data-ds-dark-theme] [data-rp-stage-open='true'][data-rp-stage-bottom='blue'] & {
+    background: rgba(16, 20, 32, 0.54);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.26),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+      0 10px 30px rgba(0, 0, 0, 0.42),
+      0 2px 6px rgba(0, 0, 0, 0.24);
+    -webkit-backdrop-filter: blur(22px) saturate(1.55);
+    backdrop-filter: blur(22px) saturate(1.55);
+  }
 }
 
 .session {
@@ -410,6 +459,16 @@
     color: rgba(249, 250, 251, 0.68);
     opacity: 1;
   }
+
+  [data-rp-stage-open='true'] &::placeholder {
+    color: rgba(15, 23, 42, 0.56);
+    opacity: 1;
+  }
+
+  [data-ds-dark-theme] [data-rp-stage-open='true'] &::placeholder {
+    color: rgba(241, 245, 249, 0.66);
+    opacity: 1;
+  }
 }
 
 /* 录音中由频谱接管第一行，隐藏正文但保留高度 */
@@ -597,6 +656,16 @@
     --toggle-border: rgba(255, 255, 255, 0.18);
   }
 
+  [data-rp-stage-open='true'] & {
+    --toggle-border: rgba(15, 23, 42, 0.14);
+    background-color: rgba(255, 255, 255, 0.26);
+  }
+
+  [data-ds-dark-theme] [data-rp-stage-open='true'] & {
+    --toggle-border: rgba(255, 255, 255, 0.18);
+    background-color: rgba(255, 255, 255, 0.06);
+  }
+
   svg {
     display: block;
     flex-shrink: 0;
@@ -645,6 +714,16 @@
     [data-ds-dark-theme] [data-chat-bg='true'] & {
       --toggle-border: rgba(103, 158, 254, 0.56);
       background-color: rgba(86, 134, 254, 0.18);
+    }
+
+    [data-rp-stage-open='true'] & {
+      --toggle-border: rgba(57, 100, 254, 0.45);
+      background-color: rgba(57, 100, 254, 0.14);
+    }
+
+    [data-ds-dark-theme] [data-rp-stage-open='true'] & {
+      --toggle-border: rgba(103, 158, 254, 0.56);
+      background-color: rgba(86, 134, 254, 0.22);
     }
 
     @media (hover: hover) {
@@ -738,23 +817,19 @@
 .attachPanel {
   display: grid;
   grid-template-rows: 0fr;
-  margin-inline: -10px;
-  opacity: 0;
+  margin-inline: -12px;
   pointer-events: none;
   visibility: hidden;
   transition:
     grid-template-rows 0.24s cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 0.14s ease-out,
     visibility 0s linear 0.24s;
 
   &.attachPanelOpen {
     grid-template-rows: 1fr;
-    opacity: 1;
     pointer-events: auto;
     visibility: visible;
     transition:
       grid-template-rows 0.24s cubic-bezier(0.22, 1, 0.36, 1),
-      opacity 0.14s ease-out,
       visibility 0s linear 0s;
   }
 
@@ -763,7 +838,6 @@
     grid-template-rows: minmax(0, 1fr);
     height: var(--attach-start-h, 0px);
     overflow: hidden;
-    opacity: 1;
     pointer-events: none;
     visibility: visible;
     transition: none;
@@ -803,26 +877,17 @@
   height: 100%;
 }
 
+/* 外层不加 transform/opacity，避免创建 Backdrop Root 阻断内部磨砂卡片采样底层舞台而发灰 */
 .attachPanelInner {
-  padding: 10px 10px 0;
-  transform: translateY(18px);
-  opacity: 0;
-  transition:
-    transform 0.24s cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 0.14s ease-out;
+  padding: 10px 12px 0;
 
-  [data-chat-bg='true'] & {
-    padding-bottom: 10px;
+  [data-chat-bg='true'] &,
+  [data-rp-stage-open='true'] & {
+    padding-bottom: 12px;
   }
 }
 
-.attachPanelOpen .attachPanelInner {
-  transform: translateY(0);
-  opacity: 1;
-}
-
 .attachPanelToIme .attachPanelInner {
-  transform: translateY(0);
   opacity: 0;
   transition: opacity 0.14s ease-out;
   will-change: opacity;
@@ -838,6 +903,11 @@
   border-radius: 14px;
   border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
   background-color: var(--dsw-specific-input-major);
+  transition:
+    transform 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.14s ease-out,
+    background-color 0.28s ease,
+    box-shadow 0.28s ease;
 
   [data-chat-bg='true'] & {
     border-color: transparent;
@@ -864,6 +934,14 @@
   font-size: 12px;
   line-height: 17px;
   color: var(--dsw-alias-label-secondary);
+
+  [data-rp-stage-open='true'] & {
+    color: rgba(15, 23, 42, 0.78);
+  }
+
+  [data-ds-dark-theme] [data-rp-stage-open='true'] & {
+    color: rgba(241, 245, 249, 0.84);
+  }
 }
 
 .permissionButton {
@@ -885,6 +963,9 @@
 
 .recentSection {
   margin-bottom: 10px;
+  transition:
+    transform 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.14s ease-out;
 }
 
 .recentTitle {
@@ -892,9 +973,15 @@
   font-size: 12px;
   line-height: 16px;
   color: var(--dsw-alias-label-secondary);
+  transition: color 0.28s ease;
 
-  [data-chat-bg='true'] & {
+  [data-chat-bg='true'] &,
+  [data-rp-stage-open='true'] & {
     color: var(--dsw-alias-label-primary);
+  }
+
+  [data-rp-stage-open='true'][data-rp-stage-bottom='blue'] & {
+    color: var(--dsw-static-neutral-bluish-00);
   }
 }
 
@@ -924,7 +1011,28 @@
   cursor: pointer;
   transition:
     transform 0.14s ease,
-    border-color 0.14s ease;
+    border-color 0.28s ease,
+    box-shadow 0.28s ease;
+
+  [data-rp-stage-open='true'] & {
+    border-color: rgba(57, 100, 254, 0.16);
+    box-shadow: 0 3px 10px rgba(15, 23, 42, 0.08);
+  }
+
+  [data-rp-stage-open='true'][data-rp-stage-bottom='blue'] & {
+    border-color: rgba(255, 255, 255, 0.36);
+    box-shadow: 0 4px 12px rgba(16, 38, 126, 0.22);
+  }
+
+  [data-ds-dark-theme] [data-rp-stage-open='true'] & {
+    border-color: rgba(255, 255, 255, 0.16);
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.32);
+  }
+
+  [data-ds-dark-theme] [data-rp-stage-open='true'][data-rp-stage-bottom='blue'] & {
+    border-color: rgba(255, 255, 255, 0.26);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.38);
+  }
 
   img {
     display: block;
@@ -943,6 +1051,10 @@
 
   &.recentPhotoSelected {
     border: 2px solid var(--dsw-alias-brand-primary);
+
+    [data-rp-stage-open='true'][data-rp-stage-bottom='blue'] & {
+      border-color: var(--dsw-static-neutral-bluish-00);
+    }
   }
 }
 
@@ -1001,8 +1113,10 @@
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
   transition:
-    transform 0.14s ease,
-    background-color 0.14s ease;
+    transform 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.14s ease-out,
+    background-color 0.24s ease,
+    box-shadow 0.28s ease;
 
   [data-chat-bg='true'] & {
     border-color: transparent;
@@ -1026,6 +1140,7 @@
 
   &:active:not(:disabled) {
     transform: scale(0.97);
+    transition-duration: 0.14s;
     background-color: var(--dsw-alias-interactive-bg-hover);
 
     [data-chat-bg='true'] & {
@@ -1035,12 +1150,85 @@
     [data-ds-dark-theme] [data-chat-bg='true'] & {
       background-color: rgba(38, 42, 54, 0.54);
     }
+
+    [data-rp-stage-open='true'] & {
+      background-color: rgba(255, 255, 255, 0.82);
+    }
+
+    [data-rp-stage-open='true'][data-rp-stage-bottom='blue'] & {
+      background-color: rgba(255, 255, 255, 0.66);
+    }
+
+    [data-ds-dark-theme] [data-rp-stage-open='true'] & {
+      background-color: rgba(38, 44, 60, 0.68);
+    }
+
+    [data-ds-dark-theme] [data-rp-stage-open='true'][data-rp-stage-bottom='blue'] & {
+      background-color: rgba(28, 34, 50, 0.68);
+    }
   }
 
   &:disabled {
     opacity: 0.45;
     cursor: not-allowed;
   }
+}
+
+/* 由子项自身承担入场位移与淡入，避免外层创建 Backdrop Root 影响透采 */
+.attachPanel:not(.attachPanelOpen):not(.attachPanelToIme) .permissionBanner,
+.attachPanel:not(.attachPanelOpen):not(.attachPanelToIme) .recentSection,
+.attachPanel:not(.attachPanelOpen):not(.attachPanelToIme) .attachCard {
+  opacity: 0;
+  transform: translateY(14px);
+}
+
+/* RP 整界面模型选择：授权提示条与附件卡片共享通透磨砂玻璃质感，并将外阴影控制在裁切留白内避免形成灰块 */
+[data-rp-stage-open='true'] .permissionBanner,
+[data-rp-stage-open='true'] .attachCard {
+  border-color: transparent;
+  background-color: rgba(255, 255, 255, 0.68);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    inset 0 0 0 1px rgba(57, 100, 254, 0.12),
+    0 3px 10px rgba(15, 23, 42, 0.045),
+    0 1px 2px rgba(15, 23, 42, 0.03);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+}
+
+[data-rp-stage-open='true'][data-rp-stage-bottom='blue'] .permissionBanner,
+[data-rp-stage-open='true'][data-rp-stage-bottom='blue'] .attachCard {
+  background-color: rgba(255, 255, 255, 0.48);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.86),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.54),
+    0 4px 11px rgba(16, 38, 126, 0.16),
+    0 1px 2px rgba(16, 38, 126, 0.08);
+  -webkit-backdrop-filter: blur(22px) saturate(1.7);
+  backdrop-filter: blur(22px) saturate(1.7);
+}
+
+[data-ds-dark-theme] [data-rp-stage-open='true'] .permissionBanner,
+[data-ds-dark-theme] [data-rp-stage-open='true'] .attachCard {
+  border-color: transparent;
+  background-color: rgba(24, 28, 40, 0.56);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 4px 11px rgba(0, 0, 0, 0.26);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  backdrop-filter: blur(20px) saturate(1.5);
+}
+
+[data-ds-dark-theme] [data-rp-stage-open='true'][data-rp-stage-bottom='blue'] .permissionBanner,
+[data-ds-dark-theme] [data-rp-stage-open='true'][data-rp-stage-bottom='blue'] .attachCard {
+  background-color: rgba(16, 20, 32, 0.48);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.26),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+    0 4px 11px rgba(0, 0, 0, 0.3);
+  -webkit-backdrop-filter: blur(22px) saturate(1.55);
+  backdrop-filter: blur(22px) saturate(1.55);
 }
 
 .attachCardIcon {

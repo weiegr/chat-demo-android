@@ -36,7 +36,6 @@ import {
 } from './mobileSiderState.js'
 import { SessionList } from './SessionList.js'
 import { RpContextRing } from '../session/RpContextRing.js'
-import { RpModelCapsule } from '../session/RpModelCapsule.js'
 import styles from './Sider.module.css'
 
 /** 展开的侧边栏：名称与收起按钮、开启新对话、按时间分组的会话列表、底部设置；移动端放在抽屉里，收起按钮关闭抽屉 */
@@ -152,12 +151,7 @@ export const Sider = memo(function Sider({
               Ctrl+J
             </span>
           </button>
-          {showRpContext ? (
-            <>
-              <RpContextRing />
-              <RpModelCapsule />
-            </>
-          ) : null}
+          {showRpContext ? <RpContextRing /> : null}
         </div>
       )}
       <SessionList mobile={mobile} floatingBottom={floatingAvatarOnly} onDelete={requestDelete} />
@@ -263,9 +257,8 @@ const canScrollHorizontally = (target: EventTarget | null, dx: number) => {
 }
 
 /**
- * 移动端抽屉：不再浮在对话界面之上，而是把对话界面整体右移、抽屉在下层从左下方往右上方浮起迎合，
- * 对话界面左缘的阴影投向抽屉，形成「内容在上、侧栏在下且跟手浮现」的层次。
- * 支持按键与左右滑动手势开合。
+ * 移动端推开式抽屉：从屏幕左侧滑入，紧贴着把对话界面整体往右推，
+ * 两者 1:1 同步位移，支持按键与左右滑动手势跟手开合。
  */
 export const MobileSider = () => {
   const open = useMobileSider((state) => state.open)
@@ -378,20 +371,19 @@ export const MobileSider = () => {
         const offset = wasOpen
           ? Math.max(0, Math.min(width, width + dx))
           : Math.max(0, Math.min(width, dx))
-        const progress = offset / width
         const main = getSiderMain()
         const drawerMotion = drawerMotionRef.current
-        // 对话界面右移的同时，下层抽屉跟手水平微视差迎合
+        // 侧边栏从左侧滑入，右边缘紧贴对话界面左边缘，同步将其往右推
         if (main) {
           main.dataset.siderDragging = 'true'
           main.style.transition = 'none'
-          main.style.transform = `translate3d(${offset}px, 0, 0)`
-          main.style.boxShadow = offset > 0 ? '-6px 0 16px rgba(0, 0, 0, 0.14)' : ''
+          main.style.transform = `translate3d(${offset.toFixed(2)}px, 0, 0)`
+          main.style.setProperty('--sider-shadow-opacity', (offset / width).toFixed(3))
         }
         if (drawerMotion) {
           drawerMotion.dataset.siderDragging = 'true'
           drawerMotion.style.transition = 'none'
-          applySiderDrawerProgress(drawerMotion, progress)
+          applySiderDrawerProgress(drawerMotion, offset, width)
         }
       }
     }
@@ -410,12 +402,15 @@ export const MobileSider = () => {
       const main = getSiderMain()
       const drawerMotion = drawerMotionRef.current
       if (main) {
+        delete main.dataset.siderDragging
         main.style.removeProperty('transition')
         main.style.transform = `translate3d(${shouldOpen ? drawerWidth : 0}px, 0, 0)`
+        main.style.setProperty('--sider-shadow-opacity', shouldOpen ? '1' : '0')
       }
       if (drawerMotion) {
+        delete drawerMotion.dataset.siderDragging
         drawerMotion.style.removeProperty('transition')
-        applySiderDrawerProgress(drawerMotion, shouldOpen ? 1 : 0)
+        applySiderDrawerProgress(drawerMotion, shouldOpen ? drawerWidth : 0, drawerWidth)
       }
       scheduleClearSiderMainInline(350)
       if (shouldOpen) {

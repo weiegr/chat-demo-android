@@ -1,7 +1,12 @@
 import { useTranslate } from '../../i18n/index.js'
 import clsx from 'clsx'
 import { memo } from 'react'
-import { IconRefreshOutline16, IconWarningOutline16 } from '../base/icons.js'
+import {
+  IconCheckOutline16,
+  IconEditOutline16,
+  IconRefreshOutline16,
+  IconWarningOutline16,
+} from '../base/icons.js'
 import { describeReply } from '../../services/chat/describe.js'
 import { canContinueReply } from '../../services/chat/reply.js'
 import {
@@ -13,6 +18,7 @@ import {
 import { setChatMode } from '../../services/settings.js'
 import { stopReadAloud } from '../../services/speech/readAloud.js'
 import type { AssistantMessage as AssistantMessageType } from '../../services/chat/types.js'
+import { WRITING_LENGTH_ATTEMPTS, writingLengthUnitKey } from '../../services/chat/writingLength.js'
 import { openSettings } from '../settings/settingsDialogState.js'
 import { IconButton } from '../base/IconButton.js'
 import { Button } from '../base/Button.js'
@@ -21,6 +27,7 @@ import { SiteThumbnails } from '../search/SiteLogo.js'
 import { toggleSearchPanel, useSearchPanel } from '../search/searchPanelState.js'
 import { ReadAloudButton } from './ReadAloudButton.js'
 import { CopyButton } from './CopyButton.js'
+import { GeneratedImageCard } from './GeneratedImageCard.js'
 import { ReplyArea } from './ReplyArea.js'
 import { useReplyView } from './useReplyView.js'
 import {
@@ -62,11 +69,37 @@ export const AssistantMessage = memo(function AssistantMessage({
   // 安全拒绝：已下发的思考与正文按协议丢弃，只显示模板答复。
   const refused = message.stopReason === 'refusal'
   const answer = refused ? null : view.answer
+  const length = message.writingLength
+  const verifiedWriting =
+    length && message.status === 'done' && length.actual === length.target && !refused
+  let writingStatus: string | undefined
+  if (length) {
+    const amount = t('writingLengthAmount', {
+      target: length.target,
+      unit: t(writingLengthUnitKey[length.unit]),
+    })
+    if (streaming) {
+      writingStatus =
+        length.actual === undefined
+          ? t('writingLengthGenerating', { amount })
+          : t('writingLengthRevising', {
+              amount,
+              actual: length.actual,
+              attempt: length.attempt - 1,
+              limit: WRITING_LENGTH_ATTEMPTS - 1,
+            })
+    } else if (verifiedWriting) {
+      writingStatus = t('writingLengthVerified', { amount })
+    } else if (message.status === 'stopped') {
+      writingStatus = t('writingLengthStopped')
+    }
+  }
   const responseText = [answer?.text, notice?.presentation === 'response' ? notice.text : null]
     .filter(Boolean)
     .join('\n\n')
   const copyText = responseText || notice?.text
-  const waiting = streaming && view.steps.length === 0 && !view.answer && !message.thinking
+  const waiting =
+    streaming && !length && view.steps.length === 0 && !view.answer && !message.thinking
   const summaryEntry = `${message.id}-summary`
   return (
     <div className={styles.message} data-message-id={message.id}>
@@ -82,7 +115,17 @@ export const AssistantMessage = memo(function AssistantMessage({
           hasResponse={!!responseText}
         />
       )}
-      {answer ? (
+      {writingStatus ? (
+        <div className={styles.writingStatus} role="status">
+          {verifiedWriting ? <IconCheckOutline16 /> : <IconEditOutline16 />}
+          {writingStatus}
+        </div>
+      ) : null}
+      {answer && verifiedWriting ? (
+        <div className={clsx('ds-assistant-message-main-content ds-markdown', styles.writingBody)}>
+          {answer.text}
+        </div>
+      ) : answer ? (
         <Markdown
           className="ds-assistant-message-main-content"
           content={answer.markdown}
@@ -92,6 +135,16 @@ export const AssistantMessage = memo(function AssistantMessage({
           sources={view.sources}
         />
       ) : null}
+      {!refused && view.finalImages.length > 0
+        ? view.finalImages.map((image) => (
+            <GeneratedImageCard
+              key={image.id}
+              dataUrl={image.dataUrl}
+              title={image.title}
+              large
+            />
+          ))
+        : null}
       {waiting && !compacting ? (
         <div className={styles.waiting}>
           {[0, 1, 2].map((index) => (

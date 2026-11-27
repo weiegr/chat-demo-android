@@ -8,6 +8,7 @@
   min-height: calc(52px + var(--safe-top));
   padding: calc(4px + var(--safe-top)) 8px 4px;
   background: var(--dsw-alias-bg-base);
+  transition: background-color 0.28s ease;
 
   [data-chat-bg='true'] & {
     background: transparent;
@@ -15,6 +16,44 @@
 
   [data-ds-dark-theme] [data-chat-bg='true'] & {
     background: transparent;
+  }
+}
+
+/* RP 整界面模型选择展开时，顶栏透明并允许中间空白区域点击穿透到上方模型选区 */
+.transparent {
+  background: transparent;
+  pointer-events: none;
+
+  button {
+    pointer-events: auto;
+  }
+}
+
+.lightTone {
+  .title,
+  .modeLabel {
+    color: var(--dsw-static-neutral-bluish-00);
+  }
+}
+
+.lightAction {
+  color: var(--dsw-static-neutral-bluish-00);
+  transition:
+    color 0.28s ease,
+    background-color var(--ds-transition-duration) var(--ds-ease-in-out);
+
+  &:active:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.18);
+  }
+
+  @media (hover: hover) {
+    &:hover:not(:disabled) {
+      background-color: rgba(255, 255, 255, 0.16);
+    }
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
   }
 }
 
